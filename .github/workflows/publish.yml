@@ -229,6 +229,12 @@ jobs:
           repository: nexuslbs/omni-dashboard
           path: omni-dashboard
 
+      - name: Checkout omni-plugins
+        uses: actions/checkout@v4
+        with:
+          repository: nexuslbs/omni-plugins
+          path: omni-plugins
+
       - name: Download omniagent image
         uses: actions/download-artifact@v4
         with:
