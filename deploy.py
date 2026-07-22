@@ -86,12 +86,12 @@ def generate_env(mode):
         f.write("POSTGRES_PASSWORD=%s\n" % p1)
         f.write("MM_POSTGRES_PASSWORD=%s\n" % p2)
 
-    if mode == "ci":
-        for var in ["OMNIAGENT_IMAGE", "DASHBOARD_IMAGE", "TOOLBOX_IMAGE"]:
-            val = os.environ.get(var)
-            if not val:
-                raise RuntimeError(f"CI mode requires {var} env var")
-            f.write(f"{var}={val}\n")
+        if mode == "ci":
+            for var in ["OMNIAGENT_IMAGE", "DASHBOARD_IMAGE", "TOOLBOX_IMAGE"]:
+                val = os.environ.get(var)
+                if not val:
+                    raise RuntimeError(f"CI mode requires {var} env var")
+                f.write(f"{var}={val}\n")
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
