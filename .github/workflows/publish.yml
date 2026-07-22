@@ -15,7 +15,7 @@ jobs:
       contents: read
 
     outputs:
-      tags: ${{ steps.meta.outputs.tags }}
+      tag: ${{ steps.image-tag.outputs.tag }}
       labels: ${{ steps.meta.outputs.labels }}
 
     steps:
@@ -35,6 +35,12 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
+
+      - name: Get single image tag
+        id: image-tag
+        run: |
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
         run: |
@@ -86,7 +92,7 @@ jobs:
       contents: read
 
     outputs:
-      tags: ${{ steps.meta.outputs.tags }}
+      tag: ${{ steps.image-tag.outputs.tag }}
       labels: ${{ steps.meta.outputs.labels }}
 
     steps:
@@ -106,6 +112,12 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
+
+      - name: Get single image tag
+        id: image-tag
+        run: |
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Lint and build
         run: |
@@ -140,7 +152,7 @@ jobs:
       contents: read
 
     outputs:
-      tags: ${{ steps.meta.outputs.tags }}
+      tag: ${{ steps.image-tag.outputs.tag }}
       labels: ${{ steps.meta.outputs.labels }}
 
     steps:
@@ -160,6 +172,12 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
+
+      - name: Get single image tag
+        id: image-tag
+        run: |
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         uses: docker/build-push-action@v6
@@ -238,9 +256,9 @@ jobs:
       - name: Run integration tests
         env:
           WORKSPACE_DIR: ${{ github.workspace }}
-          OMNIAGENT_IMAGE: ghcr.io/nexuslbs/omniagent:${{ needs.build-omniagent.outputs.tags }}
-          DASHBOARD_IMAGE: ghcr.io/nexuslbs/omni-dashboard:${{ needs.build-omni-dashboard.outputs.tags }}
-          TOOLBOX_IMAGE: ghcr.io/nexuslbs/omni-stack-toolbox:${{ needs.build-toolbox.outputs.tags }}
+          OMNIAGENT_IMAGE: ghcr.io/nexuslbs/omniagent:${{ needs.build-omniagent.outputs.tag }}
+          DASHBOARD_IMAGE: ghcr.io/nexuslbs/omni-dashboard:${{ needs.build-omni-dashboard.outputs.tag }}
+          TOOLBOX_IMAGE: ghcr.io/nexuslbs/omni-stack-toolbox:${{ needs.build-toolbox.outputs.tag }}
         run: |
           cd omni-deployer
           python3 deploy.py ci
