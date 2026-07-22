@@ -2426,15 +2426,18 @@ MM_BINARY = f"{MM_PLATFORM_DIR}/target/release/mattermost-platform"
 
 def _ensure_mm_platform_binary():
     """Compile mattermost platform binary from omniagent workspace if missing."""
-    binary = "/app/target/release/mattermost-platform"
-    if not os.path.exists(binary):
-        print("[compiling mattermost platform from omniagent workspace...]")
-        rc = sh("cd /app && cargo build -p mattermost-platform --release 2>&1")
-        if rc.returncode != 0:
-            print(f"  ⚠ compilation output (last 20 lines):\n" + "\n".join(rc.stdout.split("\n")[-20:]))
-            raise RuntimeError(f"mattermost platform build failed (exit {rc.returncode})")
-        assert os.path.exists(binary), "Binary still missing after build"
-        print(f"[mattermost platform binary compiled: {binary}]")
+    # Check both possible target dirs (dev overlay uses CARGO_TARGET_DIR=/target)
+    for candidate in ["/app/target/release/mattermost-platform", "/target/release/mattermost-platform"]:
+        if os.path.exists(candidate):
+            return  # already exists
+    binary = "/target/release/mattermost-platform"
+    print("[compiling mattermost platform from omniagent workspace...]")
+    rc = sh("cd /app && cargo build -p mattermost-platform --release 2>&1")
+    if rc.returncode != 0:
+        print(f"  ⚠ compilation output (last 20 lines):\n" + "\n".join(rc.stdout.split("\n")[-20:]))
+        raise RuntimeError(f"mattermost platform build failed (exit {rc.returncode})")
+    assert os.path.exists(binary), "Binary still missing after build"
+    print(f"[mattermost platform binary compiled: {binary}]")
 
 
 def _ensure_secret_exists(name, value=None):
@@ -2458,8 +2461,12 @@ def _ensure_secret_exists(name, value=None):
 
 
 def _check_mm_container():
-    rc = sh("curl -s --unix-socket /var/run/docker.sock http://localhost/containers/omni-mattermost-1/json 2>/dev/null | grep -q '\"Running\":true'")
-    assert rc.returncode == 0, "Mattermost container (omni-mattermost-1) is not running"
+    # Try both omni- and omnidev- prefixes
+    for name in ["omni-mattermost-1", "omnidev-mattermost-1"]:
+        rc = sh(f"curl -s --unix-socket /var/run/docker.sock http://localhost/containers/{name}/json 2>/dev/null | grep -q '\\\"Running\\\":true'")
+        if rc.returncode == 0:
+            return
+    assert False, "Mattermost container (omni-mattermost-1 or omnidev-mattermost-1) is not running"
 
 def _mm_login(base_url, username, password):
     import urllib.request

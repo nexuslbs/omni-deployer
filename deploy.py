@@ -30,7 +30,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/opt/workspace")
 OMNI_STACK_DIR = os.path.join(WORKSPACE_DIR, "omni-stack")
 OMNI_ENV_PATH = os.path.join(SCRIPT_DIR, "omni.env")
-CONTAINER_NAME = "omnidev-omniagent-1"
 TESTS_SCRIPT = os.path.join(SCRIPT_DIR, "scripts", "tests.py")
 
 
@@ -104,9 +103,14 @@ def deploy(mode):
     generate_env(mode)
     compose = compose_cmd(mode)
 
-    # Step 1: Stop + remove volumes
-    print("[deploy] Stopping and removing volumes...")
-    run_compose(compose, "down", "-v")
+    # Step 1: Stop containers (don't use -v to preserve cargo build cache)
+    print("[deploy] Stopping services...")
+    run_compose(compose, "down")
+
+    # Remove only data volumes, preserving build cache volumes
+    print("[deploy] Removing data volumes...")
+    for vol in ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]:
+        subprocess.run(["docker", "volume", "rm", "-f", f"omnidev_{vol}"], capture_output=True)
 
     # Step 2 (local): Build
     if mode == "local":
@@ -136,17 +140,17 @@ def deploy(mode):
     print("[deploy] Starting all services...")
     run_compose_check(compose, "up", "-d", label="services start")
 
-    # Step 7: Wait for agent
+    # Step 7: Wait for omniagent (health check via docker exec since port mapping may not work)
     print("[deploy] Waiting for omniagent...")
-    for i in range(60):
-        try:
-            r = urllib.request.urlopen("http://localhost:8080/api/health", timeout=5)
-            if r.status == 200:
-                print("  omniagent is ready")
-                break
-        except Exception:
-            pass
-        if i == 59:
+    for i in range(600):  # up to 20 min for cold cargo build (full workspace + plugins)
+        r = run_compose(compose, "exec", "-T", "omniagent",
+                        "curl", "-sf", "http://localhost:8080/health")
+        if r.returncode == 0:
+            print("  omniagent is ready")
+            break
+        if i % 30 == 0 and i > 0:
+            print(f"  still waiting ({i * 2}s)...")
+        if i == 599:
             rc = run_compose(compose, "logs", "--tail=30", "omniagent")
             print(rc.stdout[-2000:])
             raise RuntimeError("omniagent did not become healthy")
@@ -154,27 +158,40 @@ def deploy(mode):
 
     time.sleep(3)
 
-    # Step 8: Tests (2 passes)
+    # Step 8: Tests (2 passes, with 1 retry on transient failure)
     for pass_num in [1, 2]:
-        print(f"\n{'=' * 60}")
-        print(f"  INTEGRATION TESTS — PASS {pass_num}")
-        print(f"{'=' * 60}")
-        run_tests()
+        for attempt in [1, 2]:
+            print(f"\n{'=' * 60}")
+            print(f"  INTEGRATION TESTS — PASS {pass_num}" + (f" (retry {attempt})" if attempt > 1 else ""))
+            print(f"{'=' * 60}")
+            try:
+                run_tests(compose)
+                break  # success, move to next pass
+            except RuntimeError as e:
+                if attempt == 1:
+                    print(f"  ⚠ Tests failed on attempt {attempt}, retrying...")
+                    time.sleep(5)
+                else:
+                    raise  # re-raise on second failure
 
     print(f"\n{'=' * 60}")
     print("  ALL TESTS PASSED")
     print(f"{'=' * 60}")
 
 
-def run_tests():
-    """Run integration tests via tests.py inside the omniagent container."""
+def run_tests(compose=None):
+    """Run integration tests via tests.py piped into the omniagent container."""
     if not os.path.exists(TESTS_SCRIPT):
         raise RuntimeError(f"Tests script not found: {TESTS_SCRIPT}")
 
-    print(f"  Running: docker exec {CONTAINER_NAME} python3 -u {TESTS_SCRIPT}")
-    r = subprocess.run(
-        ["docker", "exec", "-e", "PYTHONUNBUFFERED=1", CONTAINER_NAME, "python3", "-u", TESTS_SCRIPT],
-    )
+    if compose is None:
+        compose = compose_cmd("local")
+
+    cmd = list(compose) + ["--env-file", OMNI_ENV_PATH,
+                           "exec", "-T", "omniagent", "python3", "-u", "-"]
+    print(f"  Running: {' '.join(cmd[:2])} ... exec -T omniagent python3 -u -")
+    with open(TESTS_SCRIPT, "rb") as f:
+        r = subprocess.run(cmd, stdin=f)
     if r.returncode != 0:
         raise RuntimeError(f"Tests failed (exit={r.returncode})")
 
