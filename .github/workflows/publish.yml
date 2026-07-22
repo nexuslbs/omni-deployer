@@ -47,7 +47,7 @@ jobs:
           # Build api_tests and plugin_tests without running (server needed)
           for test_file in api_tests plugin_tests; do
             cargo test --release --test "$test_file" --no-run 2>&1
-            BIN=$(find target/release -maxdepth 1 -name "$test_file-*" -type f ! -name '*.d' | head -1)
+            BIN=$(find target/release -name "$test_file-*" -type f ! -name '*.d' 2>/dev/null | head -1)
             cp "$BIN" "/tmp/$test_file"
           done
 
