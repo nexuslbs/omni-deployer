@@ -39,7 +39,7 @@ jobs:
       - name: Get single image tag
         id: image-tag
         run: |
-          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep ':sha-' | head -1)
           echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
@@ -116,7 +116,7 @@ jobs:
       - name: Get single image tag
         id: image-tag
         run: |
-          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep ':sha-' | head -1)
           echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Lint and build
@@ -176,7 +176,7 @@ jobs:
       - name: Get single image tag
         id: image-tag
         run: |
-          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep ':sha-' | head -1)
           echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build image
@@ -256,9 +256,9 @@ jobs:
       - name: Run integration tests
         env:
           WORKSPACE_DIR: ${{ github.workspace }}
-          OMNIAGENT_IMAGE: ghcr.io/nexuslbs/omniagent:${{ needs.build-omniagent.outputs.tag }}
-          DASHBOARD_IMAGE: ghcr.io/nexuslbs/omni-dashboard:${{ needs.build-omni-dashboard.outputs.tag }}
-          TOOLBOX_IMAGE: ghcr.io/nexuslbs/omni-stack-toolbox:${{ needs.build-toolbox.outputs.tag }}
+          OMNIAGENT_IMAGE: ${{ needs.build-omniagent.outputs.tag }}
+          DASHBOARD_IMAGE: ${{ needs.build-omni-dashboard.outputs.tag }}
+          TOOLBOX_IMAGE: ${{ needs.build-toolbox.outputs.tag }}
         run: |
           cd omni-deployer
           python3 deploy.py ci
