@@ -41,6 +41,20 @@ jobs:
           cd omniagent
           cargo test --release
 
+      - name: Build api_tests binary (for integration test phase)
+        run: |
+          cd omniagent
+          cargo test --release --test api_tests --no-run 2>&1
+          TEST_BIN=$(find target/release -maxdepth 1 -name 'api_tests-*' -type f ! -name '*.d' | head -1)
+          cp "$TEST_BIN" /tmp/api_tests
+
+      - name: Upload api_tests artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-tests-binary
+          path: /tmp/api_tests
+          retention-days: 1
+
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -225,6 +239,24 @@ jobs:
         run: |
           cd omni-deployer
           python3 deploy.py ci
+
+      - name: Download api_tests binary
+        uses: actions/download-artifact@v4
+        with:
+          name: api-tests-binary
+          path: /tmp/api-tests
+
+      - name: Run Rust API tests inside container
+        run: |
+          chmod +x /tmp/api-tests/api_tests
+          CONTAINER_NAME="omnidev-omniagent-1"
+          docker cp /tmp/api-tests/api_tests "$CONTAINER_NAME":/tmp/api_tests
+          # Run from omni-deployer dir so docker compose can find the files
+          cd omni-deployer
+          docker compose \
+            -f "${{ github.workspace }}/omni-stack/docker-compose.yml" \
+            --env-file omni.env \
+            exec -T omniagent /tmp/api_tests --ignored
 
   publish:
     name: Publish stable + images
