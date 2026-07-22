@@ -130,11 +130,21 @@ def deploy(mode):
 
     # Step 5: Migrate
     print("[deploy] Running migrations...")
-    r = run_compose(compose, "run", "--rm", "omniagent", "test", "-f", "/app/target/release/db-migrations")
-    if r.returncode == 0:
-        run_compose_check(compose, "run", "--rm", "omniagent", "/app/target/release/db-migrations", label="migrations")
+    if mode == "ci":
+        # CI: production image has db-migrations at /usr/local/bin/
+        run_compose_check(compose, "run", "--rm", "omniagent",
+                          "db-migrations", label="migrations")
     else:
-        run_compose_check(compose, "run", "--rm", "omniagent", "cargo", "run", "--release", "-p", "db-migrations", label="migrations (cargo)")
+        # Local: binary at /app/target/release/ (from workspace cargo build)
+        r = run_compose(compose, "run", "--rm", "omniagent",
+                        "test", "-f", "/app/target/release/db-migrations")
+        if r.returncode == 0:
+            run_compose_check(compose, "run", "--rm", "omniagent",
+                              "/app/target/release/db-migrations", label="migrations")
+        else:
+            run_compose_check(compose, "run", "--rm", "omniagent",
+                              "cargo", "run", "--release", "-p", "db-migrations",
+                              label="migrations (cargo)")
 
     # Step 6: Start all
     print("[deploy] Starting all services...")
