@@ -227,7 +227,7 @@ jobs:
           python3 deploy.py ci
 
   publish:
-    name: Tag repos and publish images
+    name: Publish stable + images
     runs-on: ubuntu-latest
     needs: [integration-test]
     if: success()
@@ -236,58 +236,89 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout repos for tagging
+      # ── Determine version info ─────────────────────────────
+      - name: Checkout omni-deployer (for ref info)
         uses: actions/checkout@v4
         with:
           repository: nexuslbs/omni-deployer
           path: omni-deployer
 
-      - name: Determine version tag
+      - name: Determine version
         id: version
         run: |
+          IS_TAG=false
+          VERSION=""
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             VERSION="${{ github.ref_name }}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "IS_TAG=true" >> $GITHUB_OUTPUT
-          else
-            echo "IS_TAG=false" >> $GITHUB_OUTPUT
+            IS_TAG=true
           fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "IS_TAG=$IS_TAG" >> $GITHUB_OUTPUT
 
-      - name: Tag omni-stack
-        if: steps.version.outputs.IS_TAG == 'true'
+      # ── Update omni-stack ───────────────────────────────────
+      - name: Checkout omni-stack
         uses: actions/checkout@v4
         with:
           repository: nexuslbs/omni-stack
           path: omni-stack
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
-      - name: Tag omniagent
+      - name: Push omni-stack stable branch
+        run: |
+          cd omni-stack
+          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omni-stack.git
+          git push origin HEAD:stable --force
+
+      - name: Tag omni-stack
         if: steps.version.outputs.IS_TAG == 'true'
+        run: |
+          cd omni-stack
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
+      # ── Update omniagent ────────────────────────────────────
+      - name: Checkout omniagent
         uses: actions/checkout@v4
         with:
           repository: nexuslbs/omniagent
           path: omniagent
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
-      - name: Tag omni-dashboard
+      - name: Push omniagent stable branch
+        run: |
+          cd omniagent
+          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omniagent.git
+          git push origin HEAD:stable --force
+
+      - name: Tag omniagent
         if: steps.version.outputs.IS_TAG == 'true'
+        run: |
+          cd omniagent
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
+      # ── Update omni-dashboard ───────────────────────────────
+      - name: Checkout omni-dashboard
         uses: actions/checkout@v4
         with:
           repository: nexuslbs/omni-dashboard
           path: omni-dashboard
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
-      - name: Push tags to repos
+      - name: Push omni-dashboard stable branch
+        run: |
+          cd omni-dashboard
+          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omni-dashboard.git
+          git push origin HEAD:stable --force
+
+      - name: Tag omni-dashboard
         if: steps.version.outputs.IS_TAG == 'true'
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          for repo in omni-stack omniagent omni-dashboard; do
-            cd "$repo"
-            git tag "$VERSION"
-            git push origin "$VERSION"
-            cd ..
-          done
+          cd omni-dashboard
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
 
+      # ── Publish Docker images ──────────────────────────────
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
