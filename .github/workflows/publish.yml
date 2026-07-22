@@ -41,18 +41,23 @@ jobs:
           cd omniagent
           cargo test --release
 
-      - name: Build api_tests binary (for integration test phase)
+      - name: Build integration test binaries
         run: |
           cd omniagent
-          cargo test --release --test api_tests --no-run 2>&1
-          TEST_BIN=$(find target/release -maxdepth 1 -name 'api_tests-*' -type f ! -name '*.d' | head -1)
-          cp "$TEST_BIN" /tmp/api_tests
+          # Build api_tests and plugin_tests without running (server needed)
+          for test_file in api_tests plugin_tests; do
+            cargo test --release --test "$test_file" --no-run 2>&1
+            BIN=$(find target/release -maxdepth 1 -name "$test_file-*" -type f ! -name '*.d' | head -1)
+            cp "$BIN" "/tmp/$test_file"
+          done
 
-      - name: Upload api_tests artifact
+      - name: Upload integration test binaries
         uses: actions/upload-artifact@v4
         with:
-          name: api-tests-binary
-          path: /tmp/api_tests
+          name: integration-test-binaries
+          path: |
+            /tmp/api_tests
+            /tmp/plugin_tests
           retention-days: 1
 
       - name: Build image
@@ -240,23 +245,24 @@ jobs:
           cd omni-deployer
           python3 deploy.py ci
 
-      - name: Download api_tests binary
+      - name: Download integration test binaries
         uses: actions/download-artifact@v4
         with:
-          name: api-tests-binary
-          path: /tmp/api-tests
+          name: integration-test-binaries
+          path: /tmp/integration-tests
 
-      - name: Run Rust API tests inside container
+      - name: Run Rust integration tests inside container
         run: |
-          chmod +x /tmp/api-tests/api_tests
+          chmod +x /tmp/integration-tests/*
           CONTAINER_NAME="omnidev-omniagent-1"
-          docker cp /tmp/api-tests/api_tests "$CONTAINER_NAME":/tmp/api_tests
-          # Run from omni-deployer dir so docker compose can find the files
           cd omni-deployer
-          docker compose \
-            -f "${{ github.workspace }}/omni-stack/docker-compose.yml" \
-            --env-file omni.env \
-            exec -T omniagent /tmp/api_tests --ignored
+          COMPOSE_CMD="docker compose -f ${{ github.workspace }}/omni-stack/docker-compose.yml --env-file omni.env"
+          for test_bin in api_tests plugin_tests; do
+            echo "=== Copying $test_bin ==="
+            docker cp "/tmp/integration-tests/$test_bin" "$CONTAINER_NAME:/tmp/$test_bin"
+            echo "=== Running $test_bin (--ignored) ==="
+            $COMPOSE_CMD exec -T omniagent "/tmp/$test_bin" --ignored
+          done
 
   publish:
     name: Publish stable + images
