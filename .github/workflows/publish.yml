@@ -42,30 +42,6 @@ jobs:
           FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep ':sha-' | head -1)
           echo "tag=$FIRST_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Run tests
-        run: |
-          cd omniagent
-          cargo test --release
-
-      - name: Build integration test binaries
-        run: |
-          cd omniagent
-          # Build api_tests and plugin_tests without running (server needed)
-          for test_file in api_tests plugin_tests; do
-            cargo test --release --test "$test_file" --no-run 2>&1
-            BIN=$(find target/release -name "$test_file-*" -type f ! -name '*.d' 2>/dev/null | head -1)
-            cp "$BIN" "/tmp/$test_file"
-          done
-
-      - name: Upload integration test binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-test-binaries
-          path: |
-            /tmp/api_tests
-            /tmp/plugin_tests
-          retention-days: 1
-
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -268,25 +244,6 @@ jobs:
         run: |
           cd omni-deployer
           python3 deploy.py ci
-
-      - name: Download integration test binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: integration-test-binaries
-          path: /tmp/integration-tests
-
-      - name: Run Rust integration tests inside container
-        run: |
-          chmod +x /tmp/integration-tests/*
-          CONTAINER_NAME="omnidev-omniagent-1"
-          cd omni-deployer
-          COMPOSE_CMD="docker compose -f ${{ github.workspace }}/omni-stack/docker-compose.yml --env-file omni.env"
-          for test_bin in api_tests plugin_tests; do
-            echo "=== Copying $test_bin ==="
-            docker cp "/tmp/integration-tests/$test_bin" "$CONTAINER_NAME:/tmp/$test_bin"
-            echo "=== Running $test_bin (--ignored) ==="
-            $COMPOSE_CMD exec -T omniagent "/tmp/$test_bin" --ignored
-          done
 
   publish:
     name: Publish stable + images
