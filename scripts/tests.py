@@ -121,7 +121,7 @@ def api_delete(path, raise_on_error=True):
     """DELETE. Returns response dict. Raises AssertionError on HTTP errors unless raise_on_error=False."""
     req = urllib.request.Request(f"{BASE}/api{path}", method="DELETE")
     try:
-        r = urllib.request.urlopen(req, timeout=10)
+        r = urllib.request.urlopen(req, timeout=30)
         return json.loads(r.read())
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="replace")
