@@ -178,19 +178,32 @@ def run_rust_integration_tests(compose):
     # We search for the binaries with the hash suffix
     for test_file in ["api_tests", "plugin_tests"]:
         print(f"\n  Finding {test_file} binary in container...")
-        # cargo test --no-run puts binaries in release/deps/ with a hash suffix
-        for base_dir in ["/target/release", "/app/target/release"]:
-            for sub in ["deps", "."]:
+        # cargo test --no-run puts binaries in release/deps/ with a hash suffix.
+        # hybrid/CI mode also checks /usr/local/bin/ (copied via docker cp).
+        for base_dir in ["/usr/local/bin", "/target/release", "/app/target/release"]:
+            # For /usr/local/bin, we copy with a clean name (no hash suffix)
+            if base_dir == "/usr/local/bin":
+                spec = f"{base_dir}/{test_file}"
+            else:
+                spec = f"{base_dir}/deps/{test_file}-*"
+            find_r = run_compose(
+                compose, "exec", "-T", "omniagent",
+                "bash", "-c",
+                f"ls {spec} 2>/dev/null | head -1",
+            )
+            binary_path = find_r.stdout.strip()
+            if binary_path:
+                break
+            # Also check the flat dir for hash-suffixed binaries
+            if base_dir != "/usr/local/bin":
                 find_r = run_compose(
                     compose, "exec", "-T", "omniagent",
                     "bash", "-c",
-                    f"ls {base_dir}/{sub}/{test_file}-* 2>/dev/null | head -1",
+                    f"ls {base_dir}/{test_file}-* 2>/dev/null | head -1",
                 )
                 binary_path = find_r.stdout.strip()
                 if binary_path:
                     break
-            if binary_path:
-                break
 
         if not binary_path:
             print(f"  ✗ {test_file} binary not found — skipping")
@@ -365,6 +378,30 @@ def deploy(mode):
         time.sleep(2)
 
     time.sleep(3)
+
+    # Step 8b: Copy test binaries into container (hybrid/CI: production image doesn't have them)
+    if mode in ("hybrid", "ci"):
+        print("[deploy] Copying test binaries into container...")
+        host_deps = os.path.join(OMNIAGENT_DIR, "target", "release", "deps")
+        for test_file in ["api_tests", "plugin_tests"]:
+            import glob
+            matches = glob.glob(os.path.join(host_deps, f"{test_file}-*"))
+            # Filter out .d files (dependency files)
+            matches = [m for m in matches if not m.endswith(".d")]
+            if matches:
+                # Pick the first match (strip .d variants already filtered)
+                src = matches[0]
+                dst = f"omnidev-omniagent-1:/usr/local/bin/{test_file}"
+                r = subprocess.run(
+                    ["sudo", "docker", "cp", src, dst],
+                    capture_output=True, text=True,
+                )
+                if r.returncode != 0:
+                    print(f"  ⚠ Failed to copy {test_file} binary: {r.stderr.strip()}")
+                else:
+                    print(f"  ✓ Copied {test_file} binary")
+            else:
+                print(f"  ⚠ {test_file} binary not found on host")
 
     # Step 9: Rust integration tests (api_tests, plugin_tests)
     run_rust_integration_tests(compose)
