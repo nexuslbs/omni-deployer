@@ -250,7 +250,7 @@ def deploy(mode):
     if mode == "hybrid":
         print("\n[deploy] Building omniagent image (production Dockerfile)...")
         r = subprocess.run(
-            ["docker", "build", "-t", "local/omniagent:latest",
+            ["sudo", "docker", "build", "-t", "local/omniagent:latest",
              "-f", os.path.join(OMNIAGENT_DIR, "Dockerfile"),
              OMNIAGENT_DIR],
             capture_output=True, text=True,
