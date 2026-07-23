@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import glob
 import os
 import subprocess
 import sys
@@ -384,7 +385,6 @@ def deploy(mode):
         print("[deploy] Copying test binaries into container...")
         host_deps = os.path.join(OMNIAGENT_DIR, "target", "release", "deps")
         for test_file in ["api_tests", "plugin_tests"]:
-            import glob
             matches = glob.glob(os.path.join(host_deps, f"{test_file}-*"))
             # Filter out .d files (dependency files)
             matches = [m for m in matches if not m.endswith(".d")]
