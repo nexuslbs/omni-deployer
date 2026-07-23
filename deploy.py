@@ -46,6 +46,7 @@ def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
     if mode == "local":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
+    # hybrid and ci use no dev overlay — just base compose
     return cmd
 
 
@@ -112,7 +113,7 @@ def run_pretests(mode):
 
         cargo_cwd = None
     else:
-        # CI mode: cargo runs directly on the host
+        # CI / hybrid mode: cargo runs directly on the host
         def run_cargo(args, label="", extra_env=None):
             env = os.environ.copy()
             env["SQLX_OFFLINE"] = "true"
@@ -177,20 +178,19 @@ def run_rust_integration_tests(compose):
     # We search for the binaries with the hash suffix
     for test_file in ["api_tests", "plugin_tests"]:
         print(f"\n  Finding {test_file} binary in container...")
-        find_r = run_compose(
-            compose, "exec", "-T", "omniagent",
-            "bash", "-c",
-            f"ls /target/release/{test_file}-* 2>/dev/null | head -1",
-        )
-        binary_path = find_r.stdout.strip()
-        if not binary_path:
-            print(f"  ⚠ {test_file} binary not found, trying /app/target/release...")
-            find_r = run_compose(
-                compose, "exec", "-T", "omniagent",
-                "bash", "-c",
-                f"ls /app/target/release/{test_file}-* 2>/dev/null | head -1",
-            )
-            binary_path = find_r.stdout.strip()
+        # cargo test --no-run puts binaries in release/deps/ with a hash suffix
+        for base_dir in ["/target/release", "/app/target/release"]:
+            for sub in ["deps", "."]:
+                find_r = run_compose(
+                    compose, "exec", "-T", "omniagent",
+                    "bash", "-c",
+                    f"ls {base_dir}/{sub}/{test_file}-* 2>/dev/null | head -1",
+                )
+                binary_path = find_r.stdout.strip()
+                if binary_path:
+                    break
+            if binary_path:
+                break
 
         if not binary_path:
             print(f"  ✗ {test_file} binary not found — skipping")
@@ -225,6 +225,10 @@ def generate_env(mode):
                 if not val:
                     raise RuntimeError(f"CI mode requires {var} env var")
                 f.write(f"{var}={val}\n")
+        elif mode == "hybrid":
+            f.write("OMNIAGENT_IMAGE=local/omniagent:latest\n")
+            f.write("DASHBOARD_IMAGE=local/omni-dashboard:latest\n")
+            f.write("TOOLBOX_IMAGE=local/omni-toolbox:latest\n")
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
@@ -239,8 +243,44 @@ def deploy(mode):
     # ── Step 0: Pretests ───────────────────────────────────────────
     # Run fmt, clippy, unit tests, build test binaries BEFORE deploy.
     # In local mode, runs inside the dev container.
-    # In CI mode, runs directly on the host runner.
+    # In CI / hybrid mode, runs directly on the host runner.
     run_pretests(mode)
+
+    # Step 0b (hybrid): Build images like CI would
+    if mode == "hybrid":
+        print("\n[deploy] Building omniagent image (production Dockerfile)...")
+        r = subprocess.run(
+            ["docker", "build", "-t", "local/omniagent:latest",
+             "-f", os.path.join(OMNIAGENT_DIR, "Dockerfile"),
+             OMNIAGENT_DIR],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(r.stdout[-1000:] if r.stdout else "")
+            print(r.stderr[-1000:] if r.stderr else "")
+            raise RuntimeError("omniagent image build failed")
+
+        print("[deploy] Building dashboard image...")
+        dashboard_dir = os.path.join(WORKSPACE_DIR, "omni-dashboard")
+        r = subprocess.run(
+            ["docker", "build", "-t", "local/omni-dashboard:latest", dashboard_dir],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(r.stdout[-1000:] if r.stdout else "")
+            print(r.stderr[-1000:] if r.stderr else "")
+            raise RuntimeError("dashboard image build failed")
+
+        print("[deploy] Building toolbox image...")
+        toolbox_dir = os.path.join(OMNI_STACK_DIR, "services", "toolbox")
+        r = subprocess.run(
+            ["docker", "build", "-t", "local/omni-toolbox:latest", toolbox_dir],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(r.stdout[-1000:] if r.stdout else "")
+            print(r.stderr[-1000:] if r.stderr else "")
+            raise RuntimeError("toolbox image build failed")
 
     # Step 1: Stop containers (don't use -v to preserve cargo build cache)
     print("\n[deploy] Stopping services...")
@@ -288,8 +328,8 @@ def deploy(mode):
 
     # Step 6: Run migrations
     print("\n[deploy] Running migrations...")
-    if mode == "ci":
-        # CI: production image has db-migrations at /usr/local/bin/
+    if mode in ("ci", "hybrid"):
+        # CI/hybrid: production image has db-migrations at /usr/local/bin/
         run_compose_check(compose, "run", "--rm", "omniagent",
                           "db-migrations", label="migrations")
     else:
@@ -375,8 +415,8 @@ def main():
     parser = argparse.ArgumentParser(description="OmniAgent deployer")
     parser.add_argument(
         "mode",
-        choices=["local", "ci", "test"],
-        help="local=build from source, ci=use pre-built images, test=run tests only",
+        choices=["local", "ci", "hybrid", "test"],
+        help="local=build from source, ci=use pre-built images, hybrid=build images+run like CI, test=run tests only",
     )
     args = parser.parse_args()
 
