@@ -13,7 +13,6 @@ Usage:
 """
 
 import argparse
-import glob
 import os
 import subprocess
 import sys
@@ -228,7 +227,7 @@ def generate_env(mode):
     p2 = os.urandom(24).hex()
 
     with open(OMNI_ENV_PATH, "w") as f:
-        f.write("COMPOSE_PROJECT_NAME=omnidev\n")
+        f.write("COMPOSE_PROJECT_NAME=omnideploy\n")
         f.write("COMPOSE_PROFILES=mattermost,noop\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
@@ -245,6 +244,24 @@ def generate_env(mode):
             f.write("TOOLBOX_IMAGE=local/omni-toolbox:latest\n")
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
+
+    # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
+    remote_yml_path = os.path.join(OMNI_STACK_DIR, "remote.yml")
+    remote_yml_content = """tools:
+  test-rust-tool:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: tools/test-rust-tool
+"""
+    existing = ""
+    if os.path.exists(remote_yml_path):
+        with open(remote_yml_path) as f:
+            existing = f.read()
+    if existing.strip() != remote_yml_content.strip():
+        with open(remote_yml_path, "w") as f:
+            f.write(remote_yml_content)
+        print(f"[deploy] Seeded {remote_yml_path}")
+    else:
+        print(f"[deploy] {remote_yml_path} unchanged")
 
 
 def deploy(mode):
@@ -303,7 +320,7 @@ def deploy(mode):
     # Remove only data volumes, preserving build cache volumes
     print("[deploy] Removing data volumes...")
     for vol in ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]:
-        subprocess.run(["docker", "volume", "rm", "-f", f"omnidev_{vol}"], capture_output=True)
+        subprocess.run(["docker", "volume", "rm", "-f", f"omnideploy_{vol}"], capture_output=True)
 
     # Step 2 (local): Build images
     if mode == "local":
@@ -379,29 +396,6 @@ def deploy(mode):
         time.sleep(2)
 
     time.sleep(3)
-
-    # Step 8b: Copy test binaries into container (hybrid/CI: production image doesn't have them)
-    if mode in ("hybrid", "ci"):
-        print("[deploy] Copying test binaries into container...")
-        host_deps = os.path.join(OMNIAGENT_DIR, "target", "release", "deps")
-        for test_file in ["api_tests", "plugin_tests"]:
-            matches = glob.glob(os.path.join(host_deps, f"{test_file}-*"))
-            # Filter out .d files (dependency files)
-            matches = [m for m in matches if not m.endswith(".d")]
-            if matches:
-                # Pick the first match (strip .d variants already filtered)
-                src = matches[0]
-                dst = f"omnidev-omniagent-1:/usr/local/bin/{test_file}"
-                r = subprocess.run(
-                    ["sudo", "docker", "cp", src, dst],
-                    capture_output=True, text=True,
-                )
-                if r.returncode != 0:
-                    print(f"  ⚠ Failed to copy {test_file} binary: {r.stderr.strip()}")
-                else:
-                    print(f"  ✓ Copied {test_file} binary")
-            else:
-                print(f"  ⚠ {test_file} binary not found on host")
 
     # Step 9: Rust integration tests (api_tests, plugin_tests)
     run_rust_integration_tests(compose)
