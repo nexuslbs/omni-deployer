@@ -3621,7 +3621,10 @@ def test_fn_16_tool_message_formats():
 
 # ── GROUP 17: Parallel tool execution ──────────────────────────────
 def test_fn_17_parallel_wait():
-    """Call test-python-tool_wait 50 times in parallel with 30s parameter, waiting for all with 1-minute timeout."""
+    """Call test-python-tool_wait 50 times in parallel with 1s parameter, waiting for all with 90s timeout.
+    With the multiplexed client, all 50 calls are dispatched immediately via mpsc to the
+    single subprocess, which processes them serially (~1s each). Total time must be >= 30s
+    (proving serialization through the subprocess) and < 60s (within the test window)."""
     import urllib.request, urllib.error, time, json, concurrent.futures
 
     # Ensure test-python is enabled as bundled plugin
@@ -3649,7 +3652,7 @@ def test_fn_17_parallel_wait():
     def do_call(seq):
         """Execute one tool_wait call and return result."""
         t0 = time.time()
-        data = json.dumps({"name": "test-python_wait", "arguments": {"duration_secs": 30}}).encode()
+        data = json.dumps({"name": "test-python_wait", "arguments": {"duration_secs": 1}}).encode()
         req = urllib.request.Request(
             f"{MCP_BASE}/mcp/execute",
             data=data,
@@ -3672,12 +3675,12 @@ def test_fn_17_parallel_wait():
     total_start = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
         futures = {executor.submit(do_call, i): i for i in range(50)}
-        done, not_done = concurrent.futures.wait(futures, timeout=60)
+        done, not_done = concurrent.futures.wait(futures, timeout=90)
 
     total_elapsed = time.time() - total_start
 
     if not_done:
-        raise AssertionError(f"Timeout: {len(not_done)} of 50 tool_wait calls did not complete within 60s")
+        raise AssertionError(f"Timeout: {len(not_done)} of 50 tool_wait calls did not complete within 90s")
 
     # Collect results
     succeeded = 0
@@ -3692,6 +3695,10 @@ def test_fn_17_parallel_wait():
 
     print(f"[Parallel wait: {succeeded} succeeded, {failed} failed, total duration {total_elapsed:.1f}s]")
     assert failed == 0, f"{failed} of 50 parallel tool_wait calls failed"
+    assert 30 <= total_elapsed < 60, (
+        f"Parallel wait duration {total_elapsed:.1f}s should be >= 30s "
+        f"and < 60s (50 x 1s = ~50s serial time with multiplexed client)"
+    )
 
     # Cleanup: disable test-python
     api_post_body("/plugins/tools/bundled/test-python/disable", {})
