@@ -3621,12 +3621,12 @@ def test_fn_16_tool_message_formats():
 
 # ── GROUP 17: Parallel tool execution ──────────────────────────────
 def test_fn_17_parallel_wait():
-    """Call test-python_wait, test-js-tool_wait, and test-rust-tool_wait each 25 times
-    in parallel (75 total) with 1s parameter. With the multiplexed client, all 75
+    """Call test-python_wait, test-js-tool_wait, and test-rust-tool_wait each 50 times
+    in parallel (150 total) with 0.6s parameter. With the multiplexed client, all 150
     calls are dispatched immediately via mpsc to the MCP subprocesses. The JS tool
-    (event-emitter stdin + async wait) handles all 25 calls concurrently in ~1s.
-    The Python and Rust tools process calls serially (~25s for 25×1s). Total time
-    must be >= 30s (proving serialization through sync subprocesses) and < 40s
+    (event-emitter stdin + async wait) handles all 50 calls concurrently in ~0.6s.
+    The Python and Rust tools process calls serially (~30s for 50×0.6s). Total time
+    must be >= 30s (proving serialization through sync subprocesses) and < 32s
     (proving the JS concurrent handling and multiplexed dispatch are working)."""
     import urllib.request, urllib.error, time, json, concurrent.futures
 
@@ -3684,13 +3684,13 @@ def test_fn_17_parallel_wait():
             f"Timed out waiting for tools. Had: {registered}, Needed: {required_tools}"
         )
 
-    CALLS_PER_TOOL = 25
+    CALLS_PER_TOOL = 50
 
-    # ── Execute calls: CALLS_PER_TOOL per tool ──
+    # ── Execute calls: 50 per tool, 0.6s each ──
     def do_call(seq, tool_name):
         """Execute one tool_wait call and return result."""
         t0 = time.time()
-        data = json.dumps({"name": tool_name, "arguments": {"duration_secs": 1}}).encode()
+        data = json.dumps({"name": tool_name, "arguments": {"duration_secs": 0.6}}).encode()
         req = urllib.request.Request(
             f"{MCP_BASE}/mcp/execute",
             data=data,
@@ -3752,10 +3752,9 @@ def test_fn_17_parallel_wait():
 
     print(f"[Total: {total_succeeded} succeeded, {total_failed} failed, duration {total_elapsed:.1f}s]")
     assert total_failed == 0, f"{total_failed} of {CALLS_PER_TOOL * 3} parallel tool_wait calls failed"
-    assert 30 <= total_elapsed < 40, (
+    assert 30 <= total_elapsed < 32, (
         f"Parallel wait duration {total_elapsed:.1f}s should be >= 30s "
-        f"and < 40s ({CALLS_PER_TOOL} x 1s = ~{CALLS_PER_TOOL}s serial time, "
-        f"JS handles all {CALLS_PER_TOOL} concurrently)"
+        f"and < 32s ({CALLS_PER_TOOL} calls x 0.6s per tool through serial subprocesses)"
     )
 
     # Cleanup: disable all tools
