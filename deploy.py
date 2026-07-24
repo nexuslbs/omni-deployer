@@ -257,7 +257,7 @@ def deploy(mode):
     # container writes (remote.yml, plugins.yml, etc.) persist on the
     # host. This catches unintended state leaks before they accumulate.
     # Auto-revert known transient test artifacts.
-    sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; sudo rm -rf /opt/workspace/omni-stack/plugins/tools/.remote/ 2>/dev/null; true")
+    sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; sudo rm -rf /opt/workspace/omni-stack/plugins/tools/ 2>/dev/null; true")
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     if r.stdout.strip():
         raise RuntimeError(
