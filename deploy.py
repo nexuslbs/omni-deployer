@@ -254,11 +254,17 @@ def generate_env(mode):
 """
     existing = ""
     if os.path.exists(remote_yml_path):
-        with open(remote_yml_path) as f:
-            existing = f.read()
+        r = subprocess.run(["sudo", "cat", remote_yml_path], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            existing = r.stdout
     if existing.strip() != remote_yml_content.strip():
-        with open(remote_yml_path, "w") as f:
-            f.write(remote_yml_content)
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yml")
+        tmp.write(remote_yml_content)
+        tmp_path = tmp.name
+        tmp.close()
+        subprocess.run(["sudo", "cp", tmp_path, remote_yml_path], check=True)
+        os.unlink(tmp_path)
         print(f"[deploy] Seeded {remote_yml_path}")
     else:
         print(f"[deploy] {remote_yml_path} unchanged")
