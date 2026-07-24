@@ -218,12 +218,15 @@ def generate_env(mode):
 
     # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "remote.yml")
-    repo_url = f"file://{REMOTE_REPO}" if mode == "local" else "https://github.com/nexuslbs/omni-plugins.git"
-    remote_yml_content = f"""tools:
+    remote_yml_content = """tools:
   test-rust-tool:
-    url: {repo_url}
+    url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/test-rust-tool
 """
+    # Ensure .remote/ directory is clean before seeding (prevents stale git state)
+    remote_tools = os.path.join(OMNI_STACK_DIR, "plugins", "tools", ".remote")
+    if os.path.isdir(remote_tools):
+        subprocess.run(["sudo", "rm", "-rf", remote_tools], capture_output=True)
     existing = ""
     if os.path.exists(remote_yml_path):
         r = subprocess.run(["sudo", "cat", remote_yml_path], capture_output=True, text=True, timeout=10)

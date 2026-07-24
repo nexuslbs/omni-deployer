@@ -3689,11 +3689,12 @@ def test_fn_17_parallel_wait():
         try:
             resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
             # /mcp/execute returns {"success": true, "content": "Waited for N seconds", "is_error": false}
+            elapsed = time.time() - t0
             content_text = resp.get("content", "")
             waited = "Waited for" in content_text
-            return (seq, tool_name, waited, time.time()-t0)
+            return (seq, tool_name, elapsed, waited)
         except Exception as e:
-            return (seq, tool_name, False, time.time()-t0)
+            return (seq, tool_name, time.time()-t0, False)
 
     calls = []
     for i in range(N):
@@ -3710,17 +3711,21 @@ def test_fn_17_parallel_wait():
     if not_done:
         raise AssertionError(f"Timeout: {len(not_done)} of {N*3} tool_wait calls did not complete")
 
-    results_by_tool = {t: {"succeeded": 0, "failed": 0} for t in required_tools}
+    results_by_tool = {t: {"succeeded": 0, "failed": 0, "min_time": 999, "max_time": 0} for t in required_tools}
     for future in done:
-        seq, tool_name, waited, call_elapsed = future.result()
-        if waited:
+        seq, tool_name, elapsed, waited = future.result()
+        if waited and elapsed >= 30:
             results_by_tool[tool_name]["succeeded"] += 1
+            results_by_tool[tool_name]["min_time"] = min(results_by_tool[tool_name]["min_time"], elapsed)
+            results_by_tool[tool_name]["max_time"] = max(results_by_tool[tool_name]["max_time"], elapsed)
         else:
             results_by_tool[tool_name]["failed"] += 1
-            print(f"  [call {seq} ({tool_name}) failed to wait, elapsed={call_elapsed:.1f}s]")
+            print(f"  [call {seq} ({tool_name}) {'no wait content' if not waited else f'only {elapsed:.1f}s'}]")
 
     for tool, counts in results_by_tool.items():
-        print(f"[{tool}: {counts['succeeded']} succeeded, {counts['failed']} failed]")
+        min_t = counts["min_time"] if counts["min_time"] != 999 else 0
+        print(f"[{tool}: {counts['succeeded']} succeeded, {counts['failed']} failed, "
+              f"min={min_t:.1f}s, max={counts['max_time']:.1f}s]")
 
     total_succeeded = sum(c["succeeded"] for c in results_by_tool.values())
     total_failed = sum(c["failed"] for c in results_by_tool.values())
