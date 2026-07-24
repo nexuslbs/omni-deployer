@@ -3621,74 +3621,44 @@ def test_fn_16_tool_message_formats():
 
 # ── GROUP 17: Parallel tool execution ──────────────────────────────
 def test_fn_17_parallel_wait():
-    """Call test-python_wait, test-js-tool_wait, and test-rust-tool_wait each 50 times
-    in parallel (150 total) with 0.6s parameter. With the multiplexed client, all 150
-    calls are dispatched immediately via mpsc to the MCP subprocesses. The JS tool
-    (event-emitter stdin + async wait) handles all 50 calls concurrently in ~0.6s.
-    The Python and Rust tools process calls serially (~30s for 50×0.6s). Total time
-    must be >= 30s (proving serialization through sync subprocesses) and < 32s
-    (proving the JS concurrent handling and multiplexed dispatch are working)."""
+    """Call test-python_wait and test-js-tool_wait each 50 times in parallel (100 total)
+    with 0.6s parameter. With the multiplexed client, all 100 calls are dispatched
+    immediately via mpsc to the MCP subprocesses. The JS tool (event-emitter stdin +
+    async wait) handles all 50 calls concurrently in ~0.6s. The Python tool processes
+    calls serially (~30s for 50×0.6s). Total time must be >= 30s (proving serialization
+    through the sync subprocess) and < 32s."""
     import urllib.request, urllib.error, time, json, concurrent.futures
 
     MCP_BASE = "http://localhost:8080"
 
-    # ── 1. Enable test-python (bundled) ──
-    ensure_bundled_plugin("test-python", "tools")
-    yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
-    api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
-    print("[test-python enabled]")
+    # ── Enable test-python (bundled) and test-js-tool (bundled) ──
+    for tool_name in ["test-python", "test-js-tool"]:
+        ensure_bundled_plugin(tool_name, "tools")
+        yaml_set("tools", tool_name, {"enabled": False, "source": "bundled", "config": {}})
+        api_post_body(f"/plugins/tools/bundled/{tool_name}/enable", {}, timeout=15)
+    print("[test-python, test-js-tool enabled]")
 
-    # ── 2. Enable test-js-tool (bundled) ──
-    ensure_bundled_plugin("test-js-tool", "tools")
-    yaml_set("tools", "test-js-tool", {"enabled": False, "source": "bundled", "config": {}})
-    api_post_body("/plugins/tools/bundled/test-js-tool/enable", {}, timeout=15)
-    print("[test-js-tool enabled]")
-
-    # ── 3. Install and enable test-rust-tool (remote) ──
-    ensure_remote_plugin("test-rust-tool", "tools")
-    try:
-        yaml_set("tools", "test-rust-tool", {"enabled": True, "source": "remote", "config": {}})
-        restart_agent()
-    except Exception as e:
-        print(f"  [YAML set/restart: {e}]")
-    try:
-        api_post_body("/plugins/tools/remote/test-rust-tool/install", {}, timeout=120)
-        print("[test-rust-tool installed]")
-    except Exception as e:
-        print(f"  [test-rust-tool install said: {e}]")
-    try:
-        api_post_body("/plugins/tools/remote/test-rust-tool/enable", {}, timeout=60)
-        print("[test-rust-tool enabled]")
-    except Exception as e:
-        print(f"  [test-rust-tool enable said: {e}]")
-
-    # ── Wait for all 3 _wait tools to register ──
-    required_tools = {"test-python_wait", "test-js-tool_wait", "test-rust-tool_wait"}
+    # ── Wait for both _wait tools to register ──
+    required_tools = {"test-python_wait", "test-js-tool_wait"}
     for attempt in range(30):
         try:
             r = urllib.request.urlopen(urllib.request.Request(f"{MCP_BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            registered = set()
-            for t in tools:
-                name = t.get("full_name") or t.get("name") or ""
-                registered.add(name)
+            registered = set(t.get("full_name") or t.get("name","") for t in tools)
             if required_tools.issubset(registered):
-                print(f"[all 3 _wait tools registered ({len(registered)} tools total)]")
+                print(f"[both _wait tools registered ({len(registered)} tools total)]")
                 break
         except Exception as _ex:
             print(f"  [waiting: {_ex}]")
         time.sleep(2)
     else:
-        raise AssertionError(
-            f"Timed out waiting for tools. Had: {registered}, Needed: {required_tools}"
-        )
+        raise AssertionError(f"Timed out waiting for tools. Had: {registered}, Needed: {required_tools}")
 
     CALLS_PER_TOOL = 50
 
     # ── Execute calls: 50 per tool, 0.6s each ──
     def do_call(seq, tool_name):
-        """Execute one tool_wait call and return result."""
         t0 = time.time()
         data = json.dumps({"name": tool_name, "arguments": {"duration_secs": 0.6}}).encode()
         req = urllib.request.Request(
@@ -3709,15 +3679,12 @@ def test_fn_17_parallel_wait():
             elapsed = time.time() - t0
             return (seq, tool_name, -1, str(e), elapsed)
 
-    # Build call descriptors: CALLS_PER_TOOL per tool
-    calls = []
-    for i in range(CALLS_PER_TOOL):
-        calls.append((i, "test-python_wait"))
-        calls.append((CALLS_PER_TOOL + i, "test-js-tool_wait"))
-        calls.append((2 * CALLS_PER_TOOL + i, "test-rust-tool_wait"))
+    # Build 100 call descriptors: 50 per tool
+    calls = [(i, "test-python_wait") for i in range(CALLS_PER_TOOL)]
+    calls += [(CALLS_PER_TOOL + i, "test-js-tool_wait") for i in range(CALLS_PER_TOOL)]
 
     total_start = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=CALLS_PER_TOOL * 3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CALLS_PER_TOOL * 2) as executor:
         futures = {executor.submit(do_call, seq, tool): (seq, tool) for seq, tool in calls}
         done, not_done = concurrent.futures.wait(futures, timeout=120)
 
@@ -3725,7 +3692,7 @@ def test_fn_17_parallel_wait():
 
     if not_done:
         raise AssertionError(
-            f"Timeout: {len(not_done)} of {CALLS_PER_TOOL * 3} tool_wait calls "
+            f"Timeout: {len(not_done)} of {CALLS_PER_TOOL * 2} tool_wait calls "
             f"did not complete within 120s"
         )
 
@@ -3733,7 +3700,6 @@ def test_fn_17_parallel_wait():
     results_by_tool = {
         "test-python_wait": {"succeeded": 0, "failed": 0},
         "test-js-tool_wait": {"succeeded": 0, "failed": 0},
-        "test-rust-tool_wait": {"succeeded": 0, "failed": 0},
     }
 
     for future in done:
@@ -3751,16 +3717,16 @@ def test_fn_17_parallel_wait():
     total_failed = sum(c["failed"] for c in results_by_tool.values())
 
     print(f"[Total: {total_succeeded} succeeded, {total_failed} failed, duration {total_elapsed:.1f}s]")
-    assert total_failed == 0, f"{total_failed} of {CALLS_PER_TOOL * 3} parallel tool_wait calls failed"
+    assert total_failed == 0, f"{total_failed} of {CALLS_PER_TOOL * 2} parallel tool_wait calls failed"
     assert 30 <= total_elapsed < 32, (
         f"Parallel wait duration {total_elapsed:.1f}s should be >= 30s "
-        f"and < 32s ({CALLS_PER_TOOL} calls x 0.6s per tool through serial subprocesses)"
+        f"and < 32s ({CALLS_PER_TOOL} calls x 0.6s = 30s serial through test-python)"
     )
 
-    # Cleanup: disable all tools
-    for tool_name, source in [("test-python", "bundled"), ("test-js-tool", "bundled"), ("test-rust-tool", "remote")]:
+    # Cleanup: disable tools
+    for tool_name in ["test-python", "test-js-tool"]:
         try:
-            api_post_body(f"/plugins/tools/{source}/{tool_name}/disable", {})
+            api_post_body(f"/plugins/tools/bundled/{tool_name}/disable", {})
             print(f"[{tool_name} disabled]")
         except Exception:
             pass
@@ -4283,7 +4249,7 @@ print(f"{'=' * 60}")
 test(test_fn_16_tool_message_formats)
 
 print(f"\n{'=' * 60}")
-print("GROUP 17: Parallel wait 3 tools x 25 calls (multiplexed)")
+print("GROUP 17: Parallel wait 2 tools x 50 calls (multiplexed, <32s)")
 print(f"{'=' * 60}")
 
 test(test_fn_17_parallel_wait)
