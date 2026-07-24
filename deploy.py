@@ -170,18 +170,43 @@ def run_pretests(mode):
     print("  ✓ Test binaries built")
 
 
-def run_rust_integration_tests(compose):
+def run_rust_integration_tests(compose, mode="local"):
     """Run api_tests --ignored and plugin_tests --ignored inside the container."""
     print("\n[integration] Running Rust integration tests (api_tests, plugin_tests)...")
 
-    # Find the built test binaries in the cargo target volume
-    # We search for the binaries with the hash suffix
+    # In hybrid/CI mode, test binaries are built on the host (not in the Docker
+    # image). Copy them into the container before searching.
+    if mode in ("hybrid", "ci"):
+        import glob
+        print("  Hybrid mode: copying test binaries from host into container...")
+        for test_file in ["api_tests", "plugin_tests"]:
+            # Search target/release/deps/ for hash-suffixed binaries
+            host_bins = glob.glob(
+                os.path.join(OMNIAGENT_DIR, "target/release/deps", f"{test_file}-*")
+            )
+            if not host_bins:
+                # Also check target/release/ for non-hash names (unlikely but be safe)
+                host_bins = glob.glob(
+                    os.path.join(OMNIAGENT_DIR, "target/release", f"{test_file}-*")
+                )
+            if host_bins:
+                host_bin = max(host_bins, key=os.path.getmtime)
+                r = subprocess.run(
+                    ["docker", "cp", host_bin,
+                     "omnideploy-omniagent-1:/usr/local/bin/"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if r.returncode == 0:
+                    print(f"    Copied {test_file} to container")
+                else:
+                    print(f"    Failed to copy {test_file}: {r.stderr.strip()}")
+            else:
+                print(f"    {test_file} binary not found on host — will search container")
+
     for test_file in ["api_tests", "plugin_tests"]:
         print(f"\n  Finding {test_file} binary in container...")
-        # cargo test --no-run puts binaries in release/deps/ with a hash suffix.
-        # hybrid/CI mode also checks /usr/local/bin/ (copied via docker cp).
         for base_dir in ["/usr/local/bin", "/target/release", "/app/target/release"]:
-            # For /usr/local/bin, we copy with a clean name (no hash suffix)
+            # For /usr/local/bin, we look for a clean name (no hash suffix)
             if base_dir == "/usr/local/bin":
                 spec = f"{base_dir}/{test_file}"
             else:
@@ -404,7 +429,7 @@ def deploy(mode):
     time.sleep(3)
 
     # Step 9: Rust integration tests (api_tests, plugin_tests)
-    run_rust_integration_tests(compose)
+    run_rust_integration_tests(compose, mode)
 
     # Step 10: Python integration tests (2 passes, with 1 retry on transient failure)
     for pass_num in [1, 2]:
