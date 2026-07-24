@@ -247,6 +247,19 @@ def deploy(mode):
     generate_env(mode)
     compose = compose_cmd(mode)
 
+    # ── Step 0.5: Check for unstaged changes in omni-stack ──────────
+    # The stack dir is bind-mounted into the container. Any files the
+    # container writes (remote.yml, plugins.yml, etc.) persist on the
+    # host. This catches unintended state leaks before they accumulate.
+    r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
+    if r.stdout.strip():
+        raise RuntimeError(
+            "Unstaged changes detected in omni-stack. These were likely written "
+            "by a previous deploy's container via bind-mount. Review and commit "
+            "or revert them before re-deploying.\n"
+            + r.stdout
+        )
+
     # ── Step 0: Pretests ───────────────────────────────────────────
     # Run fmt, clippy, unit tests, build test binaries BEFORE deploy.
     # In local mode, runs inside the dev container.
