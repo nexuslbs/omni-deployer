@@ -3671,11 +3671,9 @@ def test_fn_17_parallel_wait():
                 req = urllib.request.Request(f"{MCP_BASE}/mcp/execute", data=d, method="POST",
                                              headers={"Content-Type": "application/json"})
                 resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
-                content = ""
-                if resp.get("success") and isinstance(resp.get("result"), dict):
-                    c = resp["result"].get("content", [])
-                    if c: content = c[0].get("text","")
-                if "Waited for" not in content:
+                # /mcp/execute returns {"success": true, "content": "Waited for N seconds", "is_error": false}
+                content_text = resp.get("content", "")
+                if "Waited for" not in content_text:
                     print(f"  [warmup {tool} no wait content: {str(resp)[:80]}]")
             except Exception as e:
                 print(f"  [warmup {tool} error: {e}]")
@@ -3690,11 +3688,9 @@ def test_fn_17_parallel_wait():
                                      headers={"Content-Type": "application/json"})
         try:
             resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
-            content = ""
-            if resp.get("success") and isinstance(resp.get("result"), dict):
-                c = resp["result"].get("content", [])
-                if c: content = c[0].get("text","")
-            waited = "Waited for" in content
+            # /mcp/execute returns {"success": true, "content": "Waited for N seconds", "is_error": false}
+            content_text = resp.get("content", "")
+            waited = "Waited for" in content_text
             return (seq, tool_name, waited, time.time()-t0)
         except Exception as e:
             return (seq, tool_name, False, time.time()-t0)
