@@ -2479,12 +2479,18 @@ def _ensure_secret_exists(name, value=None):
 
 
 def _check_mm_container():
-    # Try omni-, omnidev-, and omnideploy- prefixes
-    for name in ["omni-mattermost-1", "omnidev-mattermost-1", "omnideploy-mattermost-1"]:
-        rc = sh(f"curl -s --unix-socket /var/run/docker.sock http://localhost/containers/{name}/json 2>/dev/null | grep -q '\\\"Running\\\":true'")
-        if rc.returncode == 0:
-            return
-    assert False, "Mattermost container (omni-mattermost-1 or omnidev-mattermost-1) is not running"
+    # Use Docker API label filtering instead of hardcoded container names
+    project = os.environ.get("COMPOSE_PROJECT_NAME", "omnideploy")
+    filters_encoded = "%7B%22label%22%3A%5B%22com.docker.compose.service%3Dmattermost%22%2C%22com.docker.compose.project%3D" + project + "%22%5D%7D"
+    rc = sh(f"curl -s --unix-socket /var/run/docker.sock 'http://localhost/containers/json?filters={filters_encoded}' 2>/dev/null")
+    try:
+        containers = json.loads(rc.stdout)
+    except (json.JSONDecodeError, Exception):
+        assert False, f"Mattermost container not found via Docker API label filtering (project={project})"
+    running = [c for c in containers if c.get("State", "").lower() == "running"]
+    if running:
+        return
+    assert False, f"Mattermost container not running (project={project}, found {len(containers)} container(s), 0 running)"
 
 def _mm_login(base_url, username, password):
     import urllib.request
@@ -3607,7 +3613,86 @@ def test_fn_16_tool_message_formats():
     yaml_del("tools", "test-python")
     remove_bundled_plugin("test-python", "tools")
     remove_remote_plugin("test-python", "tools")
-    assert False, f"Timed out waiting for tool call reply (120s) - last error: {last_error}"# ═══════════════════════════════════════════════════════════════════════
+    assert False, f"Timed out waiting for tool call reply (120s) - last error: {last_error}"
+
+# ── GROUP 17: Parallel tool execution ──────────────────────────────
+def test_fn_17_parallel_wait():
+    """Call test-python-tool_wait 50 times in parallel with 30s parameter, waiting for all with 1-minute timeout."""
+    import urllib.request, urllib.error, time, json, concurrent.futures
+
+    # Ensure test-python is enabled as bundled plugin
+    ensure_bundled_plugin("test-python", "tools")
+    yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
+    resp = api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+    print("[test-python enabled for parallel wait test]")
+
+    # Wait until test-python_wait appears in /mcp/tools listing
+    MCP_BASE = "http://localhost:8080"
+    for attempt in range(15):
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(f"{MCP_BASE}/mcp/tools"), timeout=5)
+            tools_data = json.loads(r.read())
+            tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
+            if any("test-python_wait" in (t.get("full_name") or t.get("name") or "") for t in tools):
+                print("[test-python_wait registered]")
+                break
+        except Exception as _ex:
+            print(f"  [waiting: {_ex}]")
+        time.sleep(2)
+    else:
+        raise AssertionError("Timed out waiting for test-python_wait to register")
+
+    def do_call(seq):
+        """Execute one tool_wait call and return result."""
+        t0 = time.time()
+        data = json.dumps({"name": "test-python_wait", "arguments": {"duration_secs": 30}}).encode()
+        req = urllib.request.Request(
+            f"{MCP_BASE}/mcp/execute",
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=50)
+            body = resp.read()
+            elapsed = time.time() - t0
+            return (seq, 200, json.loads(body) if body.strip() else {}, elapsed)
+        except urllib.error.HTTPError as e:
+            elapsed = time.time() - t0
+            return (seq, e.code, e.read().decode("utf-8", errors="replace"), elapsed)
+        except Exception as e:
+            elapsed = time.time() - t0
+            return (seq, -1, str(e), elapsed)
+
+    # Submit 50 parallel calls
+    total_start = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        futures = {executor.submit(do_call, i): i for i in range(50)}
+        done, not_done = concurrent.futures.wait(futures, timeout=60)
+
+    total_elapsed = time.time() - total_start
+
+    if not_done:
+        raise AssertionError(f"Timeout: {len(not_done)} of 50 tool_wait calls did not complete within 60s")
+
+    # Collect results
+    succeeded = 0
+    failed = 0
+    for future in done:
+        seq, status, result, call_elapsed = future.result()
+        if status == 200 and isinstance(result, dict) and result.get("success"):
+            succeeded += 1
+        else:
+            failed += 1
+            print(f"  [call {seq} failed: HTTP {status}, result={str(result)[:100]}]")
+
+    print(f"[Parallel wait: {succeeded} succeeded, {failed} failed, total duration {total_elapsed:.1f}s]")
+    assert failed == 0, f"{failed} of 50 parallel tool_wait calls failed"
+
+    # Cleanup: disable test-python
+    api_post_body("/plugins/tools/bundled/test-python/disable", {})
+    print("[test-python disabled after parallel wait test]")
+# ═══════════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -4124,6 +4209,12 @@ print("GROUP 16: Tool/multi-tool/tool-result message format verification")
 print(f"{'=' * 60}")
 
 test(test_fn_16_tool_message_formats)
+
+print(f"\n{'=' * 60}")
+print("GROUP 17: Parallel test-python-tool_wait 50x (30s)")
+print(f"{'=' * 60}")
+
+test(test_fn_17_parallel_wait)
 
 print(f"\n{'=' * 60}")
 print(f"\nTest Timing Summary:")
