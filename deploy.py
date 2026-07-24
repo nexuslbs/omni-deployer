@@ -32,6 +32,7 @@ OMNI_STACK_DIR = os.path.join(WORKSPACE_DIR, "omni-stack")
 OMNI_ENV_PATH = os.path.join(SCRIPT_DIR, "omni.env")
 TESTS_SCRIPT = os.path.join(SCRIPT_DIR, "scripts", "tests.py")
 OMNIAGENT_DIR = os.path.join(WORKSPACE_DIR, "omniagent")
+REMOTE_REPO = os.path.join(WORKSPACE_DIR, "omni-plugins")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -217,9 +218,10 @@ def generate_env(mode):
 
     # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "remote.yml")
-    remote_yml_content = """tools:
+    repo_url = f"file://{REMOTE_REPO}" if mode == "local" else "https://github.com/nexuslbs/omni-plugins.git"
+    remote_yml_content = f"""tools:
   test-rust-tool:
-    url: https://github.com/nexuslbs/omni-plugins.git
+    url: {repo_url}
     path: tools/test-rust-tool
 """
     existing = ""
