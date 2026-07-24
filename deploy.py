@@ -154,91 +154,36 @@ def run_pretests(mode):
     )
     print("  ✓ cargo clippy passed")
 
-    # 4. cargo test --release (unit tests)
+    # 4. cargo test --release (unit tests only; integration tests are #[ignore] and run later)
     print("\n[pretests] Running cargo test --release...")
     check_cargo(["cargo", "test", "--release"], label="cargo test --release")
     print("  ✓ Unit tests passed")
 
-    # 5. Build api_tests and plugin_tests test binaries
-    print("\n[pretests] Building integration test binaries...")
-    for test_file in ["api_tests", "plugin_tests"]:
-        print(f"  Building {test_file}...")
-        check_cargo(
-            ["cargo", "test", "--release", "--test", test_file, "--no-run"],
-            label=f"build {test_file}",
-        )
-    print("  ✓ Test binaries built")
 
+def run_rust_integration_tests(compose):
+    """Run api_tests and plugin_tests via cargo test inside the running container.
 
-def run_rust_integration_tests(compose, mode="local"):
-    """Run api_tests --ignored and plugin_tests --ignored inside the container."""
+    Integration tests are marked #[ignore] and run with --ignored.
+    Cargo handles build + run in one step — no separate binary management.
+    Tests run inside the container where localhost:8080 resolves to the
+    omniagent service and docker exec (for plugin tests) is available.
+    """
     print("\n[integration] Running Rust integration tests (api_tests, plugin_tests)...")
 
-    # In hybrid/CI mode, test binaries are built on the host (not in the Docker
-    # image). Copy them into the container before searching.
-    if mode in ("hybrid", "ci"):
-        import glob
-        print("  Hybrid mode: copying test binaries from host into container...")
-        for test_file in ["api_tests", "plugin_tests"]:
-            # Search target/release/deps/ for hash-suffixed binaries
-            host_bins = glob.glob(
-                os.path.join(OMNIAGENT_DIR, "target/release/deps", f"{test_file}-*")
-            )
-            if not host_bins:
-                # Also check target/release/ for non-hash names (unlikely but be safe)
-                host_bins = glob.glob(
-                    os.path.join(OMNIAGENT_DIR, "target/release", f"{test_file}-*")
-                )
-            if host_bins:
-                host_bin = max(host_bins, key=os.path.getmtime)
-                r = subprocess.run(
-                    ["docker", "cp", host_bin,
-                     "omnideploy-omniagent-1:/usr/local/bin/"],
-                    capture_output=True, text=True, timeout=30,
-                )
-                if r.returncode == 0:
-                    print(f"    Copied {test_file} to container")
-                else:
-                    print(f"    Failed to copy {test_file}: {r.stderr.strip()}")
-            else:
-                print(f"    {test_file} binary not found on host — will search container")
-
     for test_file in ["api_tests", "plugin_tests"]:
-        print(f"\n  Finding {test_file} binary in container...")
-        for base_dir in ["/usr/local/bin", "/target/release", "/app/target/release"]:
-            # For /usr/local/bin, we look for a clean name (no hash suffix)
-            if base_dir == "/usr/local/bin":
-                spec = f"{base_dir}/{test_file}"
-            else:
-                spec = f"{base_dir}/deps/{test_file}-*"
-            find_r = run_compose(
-                compose, "exec", "-T", "omniagent",
-                "bash", "-c",
-                f"ls {spec} 2>/dev/null | head -1",
-            )
-            binary_path = find_r.stdout.strip()
-            if binary_path:
-                break
-            # Also check the flat dir for hash-suffixed binaries
-            if base_dir != "/usr/local/bin":
-                find_r = run_compose(
-                    compose, "exec", "-T", "omniagent",
-                    "bash", "-c",
-                    f"ls {base_dir}/{test_file}-* 2>/dev/null | head -1",
-                )
-                binary_path = find_r.stdout.strip()
-                if binary_path:
-                    break
-
-        if not binary_path:
-            print(f"  ✗ {test_file} binary not found — skipping")
-            continue
-
-        print(f"  Running {binary_path} --ignored ...")
-        r = run_compose(compose, "exec", "-T", "omniagent", binary_path, "--ignored")
+        print(f"\n  Running {test_file}...")
+        r = run_compose(
+            compose, "exec", "-T", "omniagent",
+            "cargo", "test", "--release", "--test", test_file, "--", "--ignored",
+        )
+        # Print last 30 lines of output
+        if r.stdout:
+            lines = r.stdout.splitlines()
+            print("\n".join(lines[-30:]))
         if r.returncode != 0:
-            print(r.stdout[-2000:] if r.stdout else "")
-            print(r.stderr[-2000:] if r.stderr else "")
+            if r.stderr:
+                lines = r.stderr.splitlines()
+                print("\n".join(lines[-30:]), file=sys.stderr)
             raise RuntimeError(f"Rust integration test '{test_file}' failed (exit={r.returncode})")
         print(f"  ✓ {test_file} passed")
 
@@ -429,7 +374,7 @@ def deploy(mode):
     time.sleep(3)
 
     # Step 9: Rust integration tests (api_tests, plugin_tests)
-    run_rust_integration_tests(compose, mode)
+    run_rust_integration_tests(compose)
 
     # Step 10: Python integration tests (2 passes, with 1 retry on transient failure)
     for pass_num in [1, 2]:
