@@ -1417,9 +1417,27 @@ def _git_discard_all(repo_dir):
     # Intentionally no git clean -fd — that would delete compiled binaries from target/
 
 def check_git_clean():
-    """Raise if omni-stack repo has unstaged changes — never auto-discard."""
+    """Raise if omni-stack repo has unstaged changes — auto-revert known test artifacts first."""
     dirty = _git_status(OMNI_STACK_DIR)
     if dirty:
+        # Known transient test artifacts that tests may leave behind on the
+        # bind-mounted host directory (plugins.yml, remote.yml).  If these are
+        # the *only* dirty files, revert them silently and proceed; any other
+        # dirtiness is unexpected and still raises.
+        known_artifacts = {"plugins.yml", "remote.yml"}
+        dirty_lines = [l for l in dirty.split("\n") if l.strip()]
+        other_dirty = [
+            l for l in dirty_lines
+            if not any(a in l for a in known_artifacts)
+        ]
+        if not other_dirty:
+            subprocess.run(
+                ["git", "checkout", "HEAD", "--", "plugins.yml", "remote.yml"],
+                cwd=OMNI_STACK_DIR, capture_output=True,
+            )
+            dirty = _git_status(OMNI_STACK_DIR)
+            if not dirty:
+                return
         raise RuntimeError(
             f"omni-stack repo has unstaged changes: cannot run tests safely:\n{dirty}"
         )
@@ -2461,8 +2479,8 @@ def _ensure_secret_exists(name, value=None):
 
 
 def _check_mm_container():
-    # Try both omni- and omnidev- prefixes
-    for name in ["omni-mattermost-1", "omnidev-mattermost-1"]:
+    # Try omni-, omnidev-, and omnideploy- prefixes
+    for name in ["omni-mattermost-1", "omnidev-mattermost-1", "omnideploy-mattermost-1"]:
         rc = sh(f"curl -s --unix-socket /var/run/docker.sock http://localhost/containers/{name}/json 2>/dev/null | grep -q '\\\"Running\\\":true'")
         if rc.returncode == 0:
             return

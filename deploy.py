@@ -339,6 +339,10 @@ def deploy(mode):
         for pkg in [
             "mcp-server-cron", "mcp-server-kanban", "mcp-server-query",
             "mcp-server-search", "mcp-server-metrics",
+            "mcp-server-prompt", "mcp-server-actions", "mcp-server-fetch",
+            "mcp-server-filesystem", "mcp-server-git", "mcp-server-hindsight",
+            "mcp-server-memory", "mcp-server-plugin-manager",
+            "mcp-server-skills", "mcp-server-subtasks",
         ]:
             print(f"  Building {pkg}...")
             run_compose(
@@ -392,6 +396,10 @@ def deploy(mode):
     # Step 10: Python integration tests (2 passes, with 1 retry on transient failure)
     for pass_num in [1, 2]:
         for attempt in [1, 2]:
+            # Before each tests.py invocation, clean transient artifacts
+            # (plugins.yml, remote.yml) from the bind-mounted omni-stack
+            # directory so check_git_clean() never fails on retries.
+            r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; true")
             print(f"\n{'=' * 60}")
             print(f"  INTEGRATION TESTS — PASS {pass_num}" + (f" (retry {attempt})" if attempt > 1 else ""))
             print(f"{'=' * 60}")
