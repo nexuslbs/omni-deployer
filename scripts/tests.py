@@ -1421,10 +1421,10 @@ def check_git_clean():
     dirty = _git_status(OMNI_STACK_DIR)
     if dirty:
         # Known transient test artifacts that tests may leave behind on the
-        # bind-mounted host directory (plugins.yml, remote.yml).  If these are
-        # the *only* dirty files, revert them silently and proceed; any other
-        # dirtiness is unexpected and still raises.
-        known_artifacts = {"plugins.yml", "remote.yml"}
+        # bind-mounted host directory (plugins.yml, remote.yml, plugins/tools/).
+        # If these are the *only* dirty files, revert/remove them silently and
+        # proceed; any other dirtiness is unexpected and still raises.
+        known_artifacts = {"plugins.yml", "remote.yml", "plugins/tools/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
@@ -1435,6 +1435,10 @@ def check_git_clean():
                 ["git", "checkout", "HEAD", "--", "plugins.yml", "remote.yml"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
+            # Remove untracked transient test artifacts (plugins/tools/)
+            tools_dir = os.path.join(OMNI_STACK_DIR, "plugins", "tools")
+            if os.path.isdir(tools_dir):
+                subprocess.run(["rm", "-rf", tools_dir], capture_output=True)
             dirty = _git_status(OMNI_STACK_DIR)
             if not dirty:
                 return
