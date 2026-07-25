@@ -1,6 +1,6 @@
 # Generated env file (per-run passwords)
 omni.env
-omnidev.env
+omnistable.env
 
 # Python cache
 __pycache__/
