@@ -378,3 +378,15 @@ jobs:
             docker push "$tag"
           done
 
+      - name: Set packages public
+        run: |
+          for pkg in omni-deployer/omniagent omni-deployer/dashboard omni-deployer/toolbox; do
+            echo "[$pkg] setting visibility to public..."
+            curl -s -X PATCH \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{"visibility": "public"}' \
+              "https://api.github.com/orgs/nexuslbs/packages/container/$pkg/visibility" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  -> {d.get(\"visibility\",d.get(\"message\",\"?\"))}')"
+          done
+

@@ -1,27 +1,126 @@
 #!/usr/bin/env python3
 """
-Generate an omnidev.env file to run the stable/latest OmniAgent stack in production mode.
+OmniStack production launcher: generate env, start stack, configure omniagent.
 
 Usage:
-    python3 omnistable.py
+    python3 omnistable.py --deepseek-api-key <key>
 
-Generates omnidev.env in the script directory, then:
-    docker compose -f /path/to/omni-stack/docker-compose.yml --env-file omnidev.env up -d
-
-The env file sets COMPOSE_PROJECT_NAME=omnistable so services are isolated
-from other omni deployments, and pins all three main images to their GHCR
-stable/latest tags. Profiles are noop,mattermost by default.
+Steps:
+    1. Generate omnistable.env with random passwords and latest image tags
+    2. Start Docker Compose (project=omnistable, profiles=noop,mattermost)
+    3. Wait for omniagent health
+    4. Create secrets (DEEPSEEK_API_KEY, Mattermost credentials)
+    5. Enable Mattermost platform and configure setup (channel=stable-channel)
+    6. Run Mattermost setup (creates team, users, channel, bot)
+    7. Patch the channel to use deepseek/deepseek-v4-flash
 """
 
+import argparse
+import json
 import os
 import secrets
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.error
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(SCRIPT_DIR, "omnistable.env")
+WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/opt/workspace")
+OMNI_STACK_DIR = os.path.join(WORKSPACE_DIR, "omni-stack")
+BASE = "http://localhost:8080"
 
 
-def generate():
+# ═══════════════════════════════════════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+def sh(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+
+def wait_for_health(url, label="service", timeout=120):
+    for i in range(timeout // 2):
+        try:
+            r = urllib.request.urlopen(url, timeout=5)
+            if r.status == 200:
+                print(f"  {label} is healthy")
+                return
+        except Exception:
+            pass
+        time.sleep(2)
+    raise RuntimeError(f"{label} did not become healthy after {timeout}s")
+
+
+def api_post(path, body=None, timeout=15):
+    url = f"{BASE}/api{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        r = urllib.request.urlopen(req, timeout=timeout)
+        resp = r.read()
+        return json.loads(resp) if resp.strip() else {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"POST {path} failed (HTTP {e.code}): {body}")
+
+
+def api_patch(path, body=None, timeout=15):
+    url = f"{BASE}/api{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url, data=data, method="PATCH",
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        r = urllib.request.urlopen(req, timeout=timeout)
+        resp = r.read()
+        return json.loads(resp) if resp.strip() else {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"PATCH {path} failed (HTTP {e.code}): {body}")
+
+
+def ensure_secret(name, value):
+    """Create or update a secret via the omniagent API."""
+    url = f"{BASE}/secrets"
+    data = json.dumps({"name": name, "fieldType": "password", "value": value}).encode()
+    try:
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=10)
+        print(f"  Secret {name}: created")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        if e.code == 409:
+            # Already exists — update via PUT
+            try:
+                req = urllib.request.Request(
+                    f"{url}/{name}", data=data, method="PUT",
+                    headers={"Content-Type": "application/json"}
+                )
+                urllib.request.urlopen(req, timeout=10)
+                print(f"  Secret {name}: updated")
+            except urllib.error.HTTPError as e2:
+                body2 = e2.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"PUT /secrets/{name} failed (HTTP {e2.code}): {body2}")
+        else:
+            raise RuntimeError(f"POST /secrets failed (HTTP {e.code}): {body}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Steps
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_env():
+    """Write omnistable.env with random passwords."""
     p1 = secrets.token_hex(24)  # POSTGRES_PASSWORD
     p2 = secrets.token_hex(24)  # MM_POSTGRES_PASSWORD
 
@@ -40,22 +139,208 @@ def generate():
         f.write(f"# Database passwords (randomly generated)\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
+        f.write(f"\n")
+        f.write(f"# Optional vars (set to empty to suppress compose warnings)\n")
+        f.write(f"TUNNEL_TOKEN=\n")
+        f.write(f"BACKUP_CRON_SCHEDULE=\n")
+        f.write(f"CHECKOUT_CRON_SCHEDULE=\n")
 
-    print(f"Generated {ENV_PATH}")
-    print()
-    print("To start the stack:")
-    print(f"  docker compose -f /path/to/omni-stack/docker-compose.yml --env-file {ENV_PATH} up -d")
-    print()
-    print(f"Profiles: noop,mattermost")
-    print(f"Project:  omnistable (isolated from other deployments)")
-    print(f"Images:")
-    print(f"  omniagent:   ghcr.io/nexuslbs/omni-deployer/omniagent:latest")
-    print(f"  dashboard:   ghcr.io/nexuslbs/omni-deployer/dashboard:latest")
-    print(f"  toolbox:     ghcr.io/nexuslbs/omni-deployer/toolbox:latest")
-    print()
-    print("⚠️  The passwords in omnistable.env are generated fresh each run.")
-    print("   Existing data volumes won't be accessible with new passwords.")
+    print(f"\n=== Generated {ENV_PATH} ===")
+
+
+def start_stack():
+    """Start Docker Compose with the generated env file."""
+    compose_file = os.path.join(OMNI_STACK_DIR, "docker-compose.yml")
+    if not os.path.exists(compose_file):
+        raise RuntimeError(f"omni-stack docker-compose.yml not found at {compose_file}")
+
+    print(f"\n=== Starting stack (project=omnistable) ===")
+    # Tear down any existing omnistable stack first
+    sh(f"docker compose -f {compose_file} --env-file {ENV_PATH} -p omnistable down -v 2>&1 >/dev/null")
+    # Start fresh
+    r = sh(f"docker compose -f {compose_file} --env-file {ENV_PATH} -p omnistable up -d --pull missing 2>&1")
+    output = r.stdout or r.stderr or ""
+    # Filter out warnings from output for display
+    clean_lines = [l for l in output.split("\n") if "level=warning" not in l and l.strip()]
+    if r.returncode != 0 and "error" in output.lower():
+        raise RuntimeError(f"docker compose up failed:\n{output[-1000:]}")
+    for line in clean_lines:
+        print(f"  {line}")
+
+    # Wait for postgres health (via pg_isready through compose exec)
+    compose_file = os.path.join(OMNI_STACK_DIR, "docker-compose.yml")
+    for i in range(30):
+        r = sh(f"docker compose -f {compose_file} --env-file {ENV_PATH} -p omnistable exec -T postgres pg_isready -U omniagent -d omniagent 2>&1")
+        if r.returncode == 0:
+            print("  postgres is healthy")
+            break
+        if i % 5 == 0:
+            print(f"  Waiting for postgres... ({i*2}s)")
+        time.sleep(2)
+    else:
+        raise RuntimeError("postgres did not become healthy after 60s")
+
+    # Wait for omniagent health
+    print("  Waiting for omniagent...")
+    wait_for_health(f"{BASE}/health", "omniagent", timeout=120)
+
+
+def setup_omniagent(deepseek_api_key):
+    """Configure omniagent: secrets, mattermost, channel provider/model."""
+    print(f"\n=== Configuring omniagent ===")
+
+    # ── 1. Create secrets ──────────────────────────────────────────
+    print("\n[Creating secrets...]")
+    mm_admin_pass = "Mattermost_Fresh_Start_1"
+    mm_bot_pass = "Mattermost_Fresh_Start_1"
+    mm_test_pass = "Mattermost_Fresh_Start_1"
+
+    ensure_secret("DEEPSEEK_API_KEY", deepseek_api_key)
+    ensure_secret("MATTERMOST_ACCESS_TOKEN", "")   # filled by setup
+    ensure_secret("MATTERMOST_ADMIN_PASSWORD", mm_admin_pass)
+    ensure_secret("MATTERMOST_BOT_PASSWORD", mm_bot_pass)
+    ensure_secret("MATTERMOST_TEST_PASSWORD", mm_test_pass)
+
+    # ── 2. Enable mattermost platform ──────────────────────────────
+    print("\n[Enabling mattermost platform...]")
+    try:
+        api_post("/plugins/platforms/built-in/mattermost/enable", {})
+        print("  mattermost platform enabled")
+    except RuntimeError as e:
+        if "404" in str(e):
+            print("  mattermost platform not found — trying bundled path")
+            api_post("/plugins/platforms/bundled/mattermost/enable", {})
+        else:
+            raise
+
+    # ── 3. Configure mattermost ─────────────────────────────────────
+    print("\n[Configuring mattermost...]")
+    api_post("/plugins/platforms/built-in/mattermost/config", {
+        "config": {
+            "server_url": "http://mattermost:8065",
+            "access_token_name": "MATTERMOST_ACCESS_TOKEN",
+            "setup_team": "omni",
+            "setup_channel": "stable-channel",
+            "admin_user": "lucasbasquerotto",
+            "admin_password": "$secret:MATTERMOST_ADMIN_PASSWORD",
+            "test_user": "testuser",
+            "test_password": "$secret:MATTERMOST_TEST_PASSWORD",
+            "bot_user": "omnibot",
+            "bot_password": "$secret:MATTERMOST_BOT_PASSWORD",
+        }
+    })
+    print("  mattermost configured (channel=stable-channel)")
+
+    # ── 4. Run mattermost setup ─────────────────────────────────────
+    print("\n[Running mattermost setup...]")
+    req = urllib.request.Request(
+        f"{BASE}/api/plugins/platforms/built-in/mattermost/setup",
+        method="POST"
+    )
+    r = urllib.request.urlopen(req, timeout=120)
+    setup_resp = json.loads(r.read())
+    if not setup_resp.get("success"):
+        raise RuntimeError(f"Setup failed: {setup_resp.get('error', 'unknown')}")
+    setup_data = setup_resp.get("data", {})
+    mm_channel_id = setup_data.get("channel_id")
+    print(f"  Setup complete: channel_id={mm_channel_id}")
+
+    # ── 5. Enable prompt plugin ────────────────────────────────────
+    print("\n[Enabling prompt plugin...]")
+    api_post("/plugins/tools/built-in/prompt/enable", {})
+    print("  prompt plugin enabled")
+
+    # ── 6. Wait for prompt plugin readiness ─────────────────────────
+    print("\n[Waiting for prompt_generate tool...]")
+    for _ in range(10):
+        try:
+            r = urllib.request.urlopen(f"{BASE}/mcp/tools", timeout=5)
+            tools = json.loads(r.read())
+            td = tools if isinstance(tools, list) else (
+                tools.get("tools") or tools.get("data") or []
+            )
+            if any("prompt" in (t.get("full_name") or t.get("name") or "") for t in td):
+                print("  prompt_generate tool ready")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    else:
+        print("  WARNING: prompt_generate not confirmed — continuing anyway")
+
+    # ── 7. Find the omniagent channel ───────────────────────────────
+    print("\n[Finding omniagent channel...]")
+    channel_id = None
+    for _ in range(15):
+        try:
+            r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
+            channels = json.loads(r.read()).get("data", [])
+            ch = next((c for c in channels if c.get("platform") == "mattermost"
+                       and c.get("name") == "stable-channel"), None)
+            if not ch:
+                ch = next((c for c in channels if c.get("platform") == "mattermost"), None)
+            if ch:
+                channel_id = ch["id"]
+                ch_name = ch.get("name", "?")
+                print(f"  Found channel: id={channel_id} name={ch_name}")
+                break
+        except Exception:
+            pass
+        time.sleep(2)
+    if not channel_id:
+        # Fallback: try to get channel from mattermost setup response
+        channel_id = mm_channel_id or \
+                     input("  Could not find channel. Enter the omniagent channel ID: ").strip()
+
+    # ── 8. Patch channel with deepseek provider/model ───────────────
+    print("\n[Configuring channel provider/model...]")
+    patch_url = f"{BASE}/channels/{channel_id}"
+    patch_data = json.dumps({
+        "current_provider": "deepseek",
+        "current_model": "deepseek-v4-flash"
+    }).encode()
+    patch_req = urllib.request.Request(
+        patch_url, data=patch_data, method="PATCH",
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        r = urllib.request.urlopen(patch_req, timeout=10)
+        assert r.status == 200, f"channel PATCH returned {r.status}"
+        print("  Channel patched to deepseek/deepseek-v4-flash")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"PATCH /channels/{channel_id} failed (HTTP {e.code}): {body}")
+
+    print(f"\n{'=' * 50}")
+    print("  Setup complete!")
+    print(f"  Mattermost channel: stable-channel")
+    print(f"  Provider/model: deepseek / deepseek-v4-flash")
+    print(f"  Test user: testuser / {mm_test_pass}")
+    print(f"{'=' * 50}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════════════════
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate env, start stack, and configure omniagent for stable/latest images"
+    )
+    parser.add_argument(
+        "--deepseek-api-key",
+        required=True,
+        help="DeepSeek API key (stored as DEEPSEEK_API_KEY secret in omniagent)"
+    )
+    args = parser.parse_args()
+
+    generate_env()
+    start_stack()
+    setup_omniagent(args.deepseek_api_key)
+
+    print("\nDone. The omni-stable stack is running with deepseek/deepseek-v4-flash.")
+    print("Send a message to #stable-channel in Mattermost to test it.")
 
 
 if __name__ == "__main__":
-    generate()
+    main()
