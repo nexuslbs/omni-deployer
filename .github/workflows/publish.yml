@@ -277,6 +277,7 @@ jobs:
       - name: Push omni-stack stable branch
         run: |
           cd omni-stack
+          git config --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omni-stack.git
           git push origin HEAD:stable --force
 
@@ -285,6 +286,7 @@ jobs:
         run: |
           cd omni-stack
           git tag "${{ steps.version.outputs.version }}"
+          git config --unset-all http.https://github.com/.extraheader || true
           git push origin "${{ steps.version.outputs.version }}"
 
       # ── Update omniagent ────────────────────────────────────
@@ -297,6 +299,7 @@ jobs:
       - name: Push omniagent stable branch
         run: |
           cd omniagent
+          git config --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omniagent.git
           git push origin HEAD:stable --force
 
@@ -305,6 +308,7 @@ jobs:
         run: |
           cd omniagent
           git tag "${{ steps.version.outputs.version }}"
+          git config --unset-all http.https://github.com/.extraheader || true
           git push origin "${{ steps.version.outputs.version }}"
 
       # ── Update omni-dashboard ───────────────────────────────
@@ -317,6 +321,7 @@ jobs:
       - name: Push omni-dashboard stable branch
         run: |
           cd omni-dashboard
+          git config --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omni-dashboard.git
           git push origin HEAD:stable --force
 
@@ -325,6 +330,7 @@ jobs:
         run: |
           cd omni-dashboard
           git tag "${{ steps.version.outputs.version }}"
+          git config --unset-all http.https://github.com/.extraheader || true
           git push origin "${{ steps.version.outputs.version }}"
 
       # ── Publish Docker images ──────────────────────────────
