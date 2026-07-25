@@ -340,29 +340,17 @@ def deploy(mode):
     wait_for_db(compose, "postgres", "omniagent", "omniagent", "postgres")
     wait_for_db(compose, "mattermost-db", "mmuser", "mattermost", "mattermost-db")
 
-    # Step 5 (local): Build omniagent + MCP server binaries
+    # Step 5 (local): Build all binaries via build.py
+    # build.py auto-discovers all workspace members from Cargo.toml
+    # and builds everything — omniagent, db-migrations, and all plugin
+    # binaries (platforms + tools). No hardcoded package lists.
     if mode == "local":
-        print("\n[deploy] Building omniagent binary...")
+        print("\n[deploy] Building all binaries...")
         run_compose_check(
             compose, "run", "--rm", "-e", "SQLX_OFFLINE=true", "omniagent",
-            "cargo", "build", "--release", "-p", "omniagent",
-            label="omniagent binary build",
+            "python3", "/app/scripts/build.py",
+            label="build all binaries",
         )
-        # Build common MCP server binaries and platform binaries
-        for pkg in [
-            "mcp-server-cron", "mcp-server-kanban", "mcp-server-query",
-            "mcp-server-search", "mcp-server-metrics",
-            "mcp-server-prompt", "mcp-server-actions", "mcp-server-fetch",
-            "mcp-server-filesystem", "mcp-server-git", "mcp-server-hindsight",
-            "mcp-server-memory", "mcp-server-plugin-manager",
-            "mcp-server-skills", "mcp-server-subtasks",
-            "mattermost-platform",
-        ]:
-            print(f"  Building {pkg}...")
-            run_compose(
-                compose, "run", "--rm", "-e", "SQLX_OFFLINE=true", "omniagent",
-                "cargo", "build", "--release", "-p", pkg,
-            )
 
     # Step 6: Run migrations
     print("\n[deploy] Running migrations...")
