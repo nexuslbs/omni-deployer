@@ -161,14 +161,19 @@ def run_pretests(mode):
     print("  ✓ Unit tests passed")
 
 
-def run_rust_integration_tests(compose):
-    """Run api_tests and plugin_tests via cargo test inside the running container.
+def run_rust_integration_tests(compose, mode="local"):
+    """Run api_tests and plugin_tests via cargo test.
 
-    Integration tests are marked #[ignore] and run with --ignored.
-    Cargo handles build + run in one step — no separate binary management.
-    Tests run inside the container where localhost:8080 resolves to the
-    omniagent service and docker exec (for plugin tests) is available.
+    Only works in local mode where the dev image has the Rust toolchain
+    and all build dependencies. In CI/hybrid mode, the production image
+    is too minimal (no cargo, no libssl-dev, no pkg-config) to compile
+    Rust code — Python integration tests cover end-to-end flows instead.
     """
+    if mode != "local":
+        print("[integration] Skipping Rust integration tests (local mode only — "
+              "production image lacks build toolchain)")
+        return
+
     print("\n[integration] Running Rust integration tests (api_tests, plugin_tests)...")
 
     for test_file in ["api_tests", "plugin_tests"]:
@@ -183,6 +188,7 @@ def run_rust_integration_tests(compose):
             "cargo", "test", "--release", "--test", test_file, "--", "--ignored",
             *extra_args,
         )
+
         # Print last 30 lines of output
         if r.stdout:
             lines = r.stdout.splitlines()
@@ -393,7 +399,7 @@ def deploy(mode):
     time.sleep(3)
 
     # Step 9: Rust integration tests (api_tests, plugin_tests)
-    run_rust_integration_tests(compose)
+    run_rust_integration_tests(compose, mode)
 
     # Step 10: Python integration tests (2 passes, with 1 retry on transient failure)
     for pass_num in [1, 2]:
