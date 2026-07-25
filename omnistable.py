@@ -185,9 +185,34 @@ def start_stack():
     wait_for_health(f"{BASE}/health", "omniagent", timeout=120)
 
 
+def configure_deepseek_provider():
+    """Set the deepseek api_key reference in plugins.yml for secret resolution."""
+    yml_path = os.path.join(OMNI_STACK_DIR, "plugins.yml")
+    with open(yml_path) as f:
+        yml = f.read()
+
+    old_block = "  deepseek:\n    enabled: true\n    source: built-in\n    config: {}"
+    new_block = "  deepseek:\n    enabled: true\n    source: built-in\n    config:\n      api_key: \"$secret:DEEPSEEK_API_KEY\""
+
+    if old_block in yml:
+        yml = yml.replace(old_block, new_block)
+        with open(yml_path, "w") as f:
+            f.write(yml)
+        print("  Plugins.yml updated: deepseek api_key set to $secret:DEEPSEEK_API_KEY")
+    else:
+        if 'api_key: \"$secret:DEEPSEEK_API_KEY\"' in yml:
+            print("  Deepseek provider already configured in plugins.yml")
+        else:
+            print("  WARNING: Could not find expected deepseek block in plugins.yml")
+
+
 def setup_omniagent(deepseek_api_key):
-    """Configure omniagent: secrets, mattermost, channel provider/model."""
+    """Configure omniagent: secrets, deepseek provider, mattermost, channel."""
     print(f"\n=== Configuring omniagent ===")
+
+    # ── 0. Configure deepseek provider (plugin manifest + api_key ref) ──
+    print("\n[Configuring deepseek provider...]")
+    configure_deepseek_provider()
 
     # ── 1. Create secrets ──────────────────────────────────────────
     print("\n[Creating secrets...]")
