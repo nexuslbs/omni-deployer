@@ -29,7 +29,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/nexuslbs/omniagent
+          images: ghcr.io/nexuslbs/omni-deployer/omniagent
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/stable' }}
             type=semver,pattern={{version}}
@@ -82,7 +82,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/nexuslbs/omni-dashboard
+          images: ghcr.io/nexuslbs/omni-deployer/dashboard
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/stable' }}
             type=semver,pattern={{version}}
@@ -142,7 +142,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/nexuslbs/omni-stack-toolbox
+          images: ghcr.io/nexuslbs/omni-deployer/toolbox
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/stable' }}
             type=semver,pattern={{version}}
@@ -337,7 +337,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GH_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Download and push omniagent
         uses: actions/download-artifact@v4
@@ -360,21 +360,21 @@ jobs:
       - name: Push omniagent image
         run: |
           gunzip -c /tmp/push/omniagent/omniagent.tar.gz | docker load
-          for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omniagent'); do
+          for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omni-deployer/omniagent'); do
             docker push "$tag"
           done
       
       - name: Push dashboard image
         run: |
           gunzip -c /tmp/push/dashboard/omni-dashboard.tar.gz | docker load
-          for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omni-dashboard'); do
+          for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omni-deployer/dashboard'); do
             docker push "$tag"
           done
       
       - name: Push toolbox image
         run: |
           gunzip -c /tmp/push/toolbox/toolbox.tar.gz | docker load
-          for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omni-stack-toolbox'); do
+          for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omni-deployer/toolbox'); do
             docker push "$tag"
           done
 
