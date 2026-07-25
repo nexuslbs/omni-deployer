@@ -2448,8 +2448,8 @@ MM_BINARY = f"{MM_PLATFORM_DIR}/target/release/mattermost-platform"
 
 def _ensure_mm_platform_binary():
     """Compile mattermost platform binary from omniagent workspace if missing."""
-    # Check both possible target dirs (dev overlay uses CARGO_TARGET_DIR=/target)
-    for candidate in ["/app/target/release/mattermost-platform", "/target/release/mattermost-platform"]:
+    # Check dev paths (local mode) and production path (hybrid/CI mode)
+    for candidate in ["/app/target/release/mattermost-platform", "/target/release/mattermost-platform", "/usr/local/bin/mattermost-platform"]:
         if os.path.exists(candidate):
             return  # already exists
     binary = "/target/release/mattermost-platform"
