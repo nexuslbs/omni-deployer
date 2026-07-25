@@ -210,6 +210,7 @@ jobs:
         with:
           repository: nexuslbs/omni-plugins
           path: omni-plugins
+          fetch-depth: 0
 
       - name: Download omniagent image
         uses: actions/download-artifact@v4
