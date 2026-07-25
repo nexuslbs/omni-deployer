@@ -382,11 +382,12 @@ jobs:
         run: |
           for pkg in omni-deployer/omniagent omni-deployer/dashboard omni-deployer/toolbox; do
             echo "[$pkg] setting visibility to public..."
-            curl -s -X PATCH \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            RESP=$(curl -s -X PATCH \
+              -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+              -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/json" \
               -d '{"visibility": "public"}' \
-              "https://api.github.com/orgs/nexuslbs/packages/container/$pkg/visibility" \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  -> {d.get(\"visibility\",d.get(\"message\",\"?\"))}')"
+              "https://api.github.com/orgs/nexuslbs/packages/container/$pkg/visibility")
+            echo "  -> $RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); vis=d.get('visibility','?'); assert vis=='public', f'visibility is {vis}, not public'; print(f'OK: {vis}')" || { echo "FAILED: $RESP"; exit 1; }
           done
 
