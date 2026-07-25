@@ -1438,7 +1438,7 @@ def check_git_clean():
             # Remove untracked transient test artifacts (plugins/tools/)
             tools_dir = os.path.join(OMNI_STACK_DIR, "plugins", "tools")
             if os.path.isdir(tools_dir):
-                subprocess.run(["sudo", "rm", "-rf", tools_dir], capture_output=True)
+                subprocess.run(["rm", "-rf", tools_dir], capture_output=True)
             dirty = _git_status(OMNI_STACK_DIR)
             if not dirty:
                 return

@@ -173,9 +173,15 @@ def run_rust_integration_tests(compose):
 
     for test_file in ["api_tests", "plugin_tests"]:
         print(f"\n  Running {test_file}...")
+        extra_args = []
+        if test_file == "plugin_tests":
+            # Run sequentially to avoid parallel test interference:
+            # multiple tests share the same "test-rust-tool" fixture
+            extra_args = ["--test-threads=1"]
         r = run_compose(
             compose, "exec", "-T", "omniagent",
             "cargo", "test", "--release", "--test", test_file, "--", "--ignored",
+            *extra_args,
         )
         # Print last 30 lines of output
         if r.stdout:
@@ -342,7 +348,7 @@ def deploy(mode):
             "cargo", "build", "--release", "-p", "omniagent",
             label="omniagent binary build",
         )
-        # Build common MCP server binaries
+        # Build common MCP server binaries and platform binaries
         for pkg in [
             "mcp-server-cron", "mcp-server-kanban", "mcp-server-query",
             "mcp-server-search", "mcp-server-metrics",
@@ -350,6 +356,7 @@ def deploy(mode):
             "mcp-server-filesystem", "mcp-server-git", "mcp-server-hindsight",
             "mcp-server-memory", "mcp-server-plugin-manager",
             "mcp-server-skills", "mcp-server-subtasks",
+            "mattermost-platform",
         ]:
             print(f"  Building {pkg}...")
             run_compose(
