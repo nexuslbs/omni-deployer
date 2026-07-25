@@ -255,12 +255,6 @@ jobs:
 
     steps:
       # ── Determine version info ─────────────────────────────
-      - name: Checkout omni-deployer (for ref info)
-        uses: actions/checkout@v4
-        with:
-          repository: nexuslbs/omni-deployer
-          path: omni-deployer
-
       - name: Determine version
         id: version
         run: |
@@ -279,7 +273,6 @@ jobs:
         with:
           repository: nexuslbs/omni-stack
           path: omni-stack
-          token: ${{ secrets.GH_PAT }}
 
       - name: Push omni-stack stable branch
         run: |
@@ -300,7 +293,6 @@ jobs:
         with:
           repository: nexuslbs/omniagent
           path: omniagent
-          token: ${{ secrets.GH_PAT }}
 
       - name: Push omniagent stable branch
         run: |
@@ -321,7 +313,6 @@ jobs:
         with:
           repository: nexuslbs/omni-dashboard
           path: omni-dashboard
-          token: ${{ secrets.GH_PAT }}
 
       - name: Push omni-dashboard stable branch
         run: |
