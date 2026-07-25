@@ -249,6 +249,7 @@ jobs:
   publish:
     name: Publish stable + images
     runs-on: ubuntu-latest
+    needs: [build-omniagent, build-omni-dashboard, build-toolbox, integration-test]
     permissions:
       contents: write
       packages: write
