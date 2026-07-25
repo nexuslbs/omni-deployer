@@ -398,6 +398,26 @@ def deploy(mode):
 
     time.sleep(3)
 
+    # Step 8b: Wait for dashboard (same pattern as omniagent health check)
+    # Solves transient DNS / connection timeout for dashboard:3001 when tests
+    # start before the dashboard server finishes booting. This is especially
+    # relevant for hybrid mode where images are built locally and the
+    # bind-mounted server-dist/ may not be fully ready.
+    print("[deploy] Waiting for dashboard...")
+    for i in range(600):
+        r = run_compose(compose, "exec", "-T", "omniagent",
+                        "curl", "-sf", "http://dashboard:3001/")
+        if r.returncode == 0:
+            print("  dashboard is ready")
+            break
+        if i % 30 == 0 and i > 0:
+            print(f"  still waiting ({i * 2}s)...")
+        if i == 599:
+            rc = run_compose(compose, "logs", "--tail=30", "dashboard")
+            print(rc.stdout[-2000:])
+            raise RuntimeError("dashboard did not become healthy")
+        time.sleep(2)
+
     # Step 9: Rust integration tests (api_tests, plugin_tests)
     run_rust_integration_tests(compose, mode)
 
