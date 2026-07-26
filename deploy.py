@@ -241,10 +241,10 @@ def generate_env(mode):
     # Ensure .remote/ directory is clean before seeding (prevents stale git state)
     remote_tools = os.path.join(OMNI_STACK_DIR, "plugins", "tools", ".remote")
     if os.path.isdir(remote_tools):
-        subprocess.run(["sudo", "rm", "-rf", remote_tools], capture_output=True)
+        subprocess.run(["rm", "-rf", remote_tools], capture_output=True)
     existing = ""
     if os.path.exists(remote_yml_path):
-        r = subprocess.run(["sudo", "cat", remote_yml_path], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(["cat", remote_yml_path], capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
             existing = r.stdout
     if existing.strip() != remote_yml_content.strip():
@@ -253,7 +253,7 @@ def generate_env(mode):
         tmp.write(remote_yml_content)
         tmp_path = tmp.name
         tmp.close()
-        subprocess.run(["sudo", "cp", tmp_path, remote_yml_path], check=True)
+        subprocess.run(["cp", tmp_path, remote_yml_path], check=True)
         os.unlink(tmp_path)
         print(f"[deploy] Seeded {remote_yml_path}")
     else:
@@ -272,7 +272,7 @@ def deploy(mode):
     # container writes (remote.yml, plugins.yml, etc.) persist on the
     # host. This catches unintended state leaks before they accumulate.
     # Auto-revert known transient test artifacts.
-    sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; sudo rm -rf /opt/workspace/omni-stack/plugins/tools/ 2>/dev/null; true")
+    sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; rm -rf /opt/workspace/omni-stack/plugins/tools/ 2>/dev/null; true")
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     if r.stdout.strip():
         raise RuntimeError(
@@ -292,7 +292,7 @@ def deploy(mode):
     if mode == "hybrid":
         print("\n[deploy] Building omniagent image (production Dockerfile)...")
         r = subprocess.run(
-            ["sudo", "docker", "build", "-t", "local/omniagent:latest",
+            ["docker", "build", "-t", "local/omniagent:latest",
              "-f", os.path.join(OMNIAGENT_DIR, "Dockerfile"),
              OMNIAGENT_DIR],
             capture_output=True, text=True,
