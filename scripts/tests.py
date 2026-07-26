@@ -2815,7 +2815,7 @@ def test_fn_9b_provider_source_awareness():
     plugin_json = os.path.join(NOOP_TARGET, "plugin.json")
     with open(plugin_json) as f:
         pj = json.loads(f.read())
-    pj["entrypoint"]["args"] = [f"{WORKSPACE}/plugins/providers/noop/client.py"]
+    pj["entrypoint"]["args"] = ["/opt/omni/plugins/providers/noop/client.py"]
     with open(plugin_json, "w") as f:
         f.write(json.dumps(pj, indent=2))
     print("  [copied noop-full -> bundled noop, reply modified]")
@@ -2878,6 +2878,16 @@ def test_fn_9b_provider_source_awareness():
         shutil.rmtree(NOOP_TARGET)
     subprocess.run(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1", shell=True)
     print("  [restored original noop provider]")
+    # Refresh provider metadata so the restored plugin.json's default_base_url
+    # (http://noop-provider:9090/v1) is picked up. Without this, PROVIDER_METADATA
+    # still holds the noop-full metadata (no default_base_url), causing
+    # resolve_default_base_url("noop") to return "" and subsequent HTTP requests
+    # to fail with "builder error" (relative URL /chat/completions).
+    try:
+        api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+        print("  [refreshed provider metadata]")
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 10: Disabled Plugin Visibility Regression Tests
@@ -3467,6 +3477,21 @@ def test_fn_13_non_blocking():
     import urllib.request, urllib.error, time, uuid
     MM = "http://mattermost:8065"
 
+    # Safety: ensure noop provider is in clean HTTP-based state (no stale subprocess)
+    # Groups 9b modifies the noop plugin.json; the git checkout cleanup restores
+    # the HTTP-based original, but the registry may still hold the subprocess client
+    # and PROVIDER_METADATA may lack default_base_url.
+    # Disable + re-enable = registry remove + metadata refresh + correct base_url.
+    try:
+        api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+    except Exception:
+        pass
+
     # Add test-python as bundled plugin and enable via API
     ensure_bundled_plugin("test-python", "tools")
     yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
@@ -3597,6 +3622,17 @@ def test_fn_14_cancel_task():
     """
     import urllib.request, urllib.error, time, uuid
     MM = "http://mattermost:8065"
+
+    # Safety: ensure noop provider is in clean HTTP-based state (same as Group 13)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+    except Exception:
+        pass
 
     # Add test-python as bundled plugin and enable via API
     ensure_bundled_plugin("test-python", "tools")

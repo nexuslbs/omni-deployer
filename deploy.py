@@ -93,9 +93,12 @@ def run_pretests(mode):
     print("  PRETESTS")
     print("=" * 60)
 
-    if mode == "local":
-        # Build the dev image first
-        print("\n[pretests] Building dev image...")
+    if mode == "local" or mode == "hybrid":
+        # Build the dev image first (has cargo toolchain)
+        if mode == "hybrid":
+            print("\n[pretests] Building dev image for pretests...")
+        else:
+            print("\n[pretests] Building dev image...")
         run_compose_check(compose, "build", "omniagent", label="dev image")
 
         def run_cargo(args, label="", extra_env=None):
@@ -114,7 +117,7 @@ def run_pretests(mode):
 
         cargo_cwd = None
     else:
-        # CI / hybrid mode: cargo runs directly on the host
+        # CI mode: cargo runs directly on the host (has cargo in CI environment)
         def run_cargo(args, label="", extra_env=None):
             env = os.environ.copy()
             env["SQLX_OFFLINE"] = "true"
