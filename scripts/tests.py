@@ -3373,6 +3373,18 @@ def test_fn_12_file_upload():
     import urllib.request, urllib.error, time, uuid
 
     MM = "http://mattermost:8065"
+
+    # Safety: ensure noop provider is in clean HTTP-based state (same as Groups 13/14)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+    except Exception:
+        pass
+
     admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
     admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST", headers={"Content-Type": "application/json"})
     admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
@@ -3440,6 +3452,7 @@ def test_fn_12_file_upload():
     msg_data = json.dumps({
         "channel_id": mm_channel_id,
         "message": script,
+        "file_ids": [file_id],
     }).encode()
     msg_req = urllib.request.Request(
         f"{MM}/api/v4/posts",
