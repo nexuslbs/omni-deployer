@@ -2666,6 +2666,220 @@ def test_mm9_e2e():
     assert False, "Noop provider did not respond within 35s"
 
 # ═══════════════════════════════════════════════════════════════════════
+#  GROUP 9b: Provider source-awareness test (remote + bundled noop)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_fn_9b_provider_source_awareness():
+    import urllib.request, urllib.error, time, uuid, os, shutil
+    MM = "http://mattermost:8065"
+    test_pass = "Mattermost_Fresh_Start_1"
+    test_user = "testuser"
+    NOOP_REPO = f"{REMOTE_REPO}/providers/noop-full"
+    NOOP_TARGET = f"{WORKSPACE}/plugins/providers/noop"
+
+    # ── Re-run setup to get mm_channel_id ─────────────────────────────
+    req = urllib.request.Request(f"{BASE}/api/plugins/platforms/built-in/mattermost/setup", method="POST")
+    r = urllib.request.urlopen(req, timeout=120)
+    setup_resp = json.loads(r.read())
+    assert setup_resp.get("success"), f"setup failed: {setup_resp.get('error', 'unknown')}"
+    mm_channel_id = setup_resp.get("data", {}).get("channel_id")
+    assert mm_channel_id, "Setup did not return channel_id"
+
+    # Find omniagent channel_id for patching
+    channel_id = None
+    for _ in range(15):
+        r2 = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
+        channels = json.loads(r2.read()).get("data", [])
+        mm_agent = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
+        if mm_agent:
+            channel_id = mm_agent["id"]
+            break
+        time.sleep(2)
+    assert channel_id is not None, "No mattermost channel found"
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Phase 1: Remote "noop" provider
+    # ═══════════════════════════════════════════════════════════════════
+    print("\n  [Phase 1: Remote 'noop' provider]")
+
+    # Clean up any existing remote noop
+    try:
+        api_delete(f"/plugins/providers/remote/noop", raise_on_error=False)
+    except Exception:
+        pass
+    try:
+        api_post_body("/plugins/providers/remote/noop/disable", {})
+    except Exception:
+        pass
+    time.sleep(2)
+
+    # Register noop-full from omni-plugins as remote "noop"
+    try:
+        resp = api_post_body("/plugins/install-git", {
+            "url": f"file://{REMOTE_REPO}",
+            "name": "noop",
+            "path": "providers/noop-full"
+        }, timeout=60)
+        print(f"  [registered remote noop: {resp}]")
+    except AssertionError as e:
+        err_str = str(e).lower()
+        if "already" in err_str or "409" in err_str or "422" in err_str:
+            print("  [remote noop already registered]")
+        else:
+            raise
+
+    # Enable remote "noop" provider
+    resp = api_post_body("/plugins/providers/remote/noop/enable", {})
+    assert resp.get("success"), f"Enable remote noop failed: {resp}"
+    print("  [enabled remote noop provider]")
+
+    # Verify plugins.yml has "noop" with source=remote
+    plugins_data = read_plugins_yml()
+    noop_entry = plugins_data.get("providers", {}).get("noop", {})
+    assert noop_entry.get("enabled") == True, f"noop not enabled: {noop_entry}"
+    assert noop_entry.get("source") == "remote", f"noop source should be remote: {noop_entry.get('source')}"
+    print("  [plugins.yml: noop source=remote OK]")
+
+    restart_agent()
+    time.sleep(3)
+
+    # Patch channel to use noop/test-model-1
+    patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}",
+        data=json.dumps({"current_provider": "noop", "current_model": "test-model-1"}).encode(),
+        method="PATCH", headers={"Content-Type": "application/json"})
+    patch_resp = urllib.request.urlopen(patch_req, timeout=10)
+    assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
+    print("  [channel patched to noop/test-model-1]")
+    time.sleep(5)
+
+    # Login as testuser and send message
+    token = _mm_login(MM, test_user, test_pass)
+    test_msg = f"Source test remote [{uuid.uuid4().hex[:8]}]"
+    _mm_send_message(MM, mm_channel_id, token, test_msg)
+    print("  [remote phase: message sent]")
+
+    # Poll for reply containing "noop-full"
+    deadline = time.time() + 40
+    found_remote = False
+    while time.time() < deadline:
+        time.sleep(4)
+        posts = _mm_get_posts(MM, mm_channel_id, token)
+        for pid, post in posts.get("posts", {}).items():
+            msg = post.get("message", "")
+            if "noop-full" in msg.lower():
+                print(f"  [remote reply: {msg[:120]}...]")
+                found_remote = True
+                break
+        if found_remote:
+            break
+    assert found_remote, "Remote noop provider did not reply with 'noop-full' within 40s"
+    print("  [Phase 1 PASS: remote noop-full replied correctly]")
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Phase 2: Bundled "noop" provider (from noop-full, modified)
+    # ═══════════════════════════════════════════════════════════════════
+    print("\n  [Phase 2: Bundled 'noop' provider]")
+
+    # Remove remote noop
+    try:
+        api_post_body("/plugins/providers/remote/noop/disable", {})
+    except Exception:
+        pass
+    try:
+        api_delete(f"/plugins/providers/remote/noop", raise_on_error=False)
+    except Exception:
+        pass
+    time.sleep(2)
+
+    # Restore original noop if deleted by tests
+    if not os.path.exists(NOOP_TARGET):
+        subprocess.run(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1", shell=True)
+
+    # Copy noop-full from omni-plugins to bundled noop location
+    if os.path.exists(NOOP_TARGET):
+        shutil.rmtree(NOOP_TARGET)
+    shutil.copytree(NOOP_REPO, NOOP_TARGET, dirs_exist_ok=True)
+
+    # Modify client.py: "noop-full" -> "noop-bundled" in reply message
+    client_py = os.path.join(NOOP_TARGET, "client.py")
+    with open(client_py) as f:
+        code = f.read()
+    code = code.replace(
+        "This is a reply from the **noop-full** provider",
+        "This is a reply from the **noop-bundled** provider"
+    )
+    with open(client_py, "w") as f:
+        f.write(code)
+
+    # Update plugin.json entrypoint args for bundled location
+    plugin_json = os.path.join(NOOP_TARGET, "plugin.json")
+    with open(plugin_json) as f:
+        pj = json.loads(f.read())
+    pj["entrypoint"]["args"] = [f"{WORKSPACE}/plugins/providers/noop/client.py"]
+    with open(plugin_json, "w") as f:
+        f.write(json.dumps(pj, indent=2))
+    print("  [copied noop-full -> bundled noop, reply modified]")
+
+    # Set plugins.yml entry for bundled noop
+    yaml_del("providers", "noop")
+    yaml_set("providers", "noop", {"enabled": True, "source": "bundled", "config": {}})
+    restart_agent()
+    time.sleep(2)
+
+    # Enable bundled noop provider
+    resp = api_post_body("/plugins/providers/bundled/noop/enable", {})
+    assert resp.get("success"), f"Enable bundled noop failed: {resp}"
+    print("  [enabled bundled noop provider]")
+
+    # Verify plugins.yml has "noop" with source=bundled
+    plugins_data = read_plugins_yml()
+    noop_entry = plugins_data.get("providers", {}).get("noop", {})
+    assert noop_entry.get("enabled") == True, f"noop not enabled: {noop_entry}"
+    assert noop_entry.get("source") == "bundled", f"noop source should be bundled: {noop_entry.get('source')}"
+    print("  [plugins.yml: noop source=bundled OK]")
+
+    restart_agent()
+    time.sleep(3)
+
+    # Patch channel to noop/test-model-1
+    patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}",
+        data=json.dumps({"current_provider": "noop", "current_model": "test-model-1"}).encode(),
+        method="PATCH", headers={"Content-Type": "application/json"})
+    patch_resp = urllib.request.urlopen(patch_req, timeout=10)
+    assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
+    print("  [channel patched to noop/test-model-1]")
+    time.sleep(5)
+
+    # Send message as testuser
+    token = _mm_login(MM, test_user, test_pass)
+    test_msg = f"Source test bundled [{uuid.uuid4().hex[:8]}]"
+    _mm_send_message(MM, mm_channel_id, token, test_msg)
+    print("  [bundled phase: message sent]")
+
+    # Poll for reply containing "noop-bundled"
+    deadline = time.time() + 40
+    found_bundled = False
+    while time.time() < deadline:
+        time.sleep(4)
+        posts = _mm_get_posts(MM, mm_channel_id, token)
+        for pid, post in posts.get("posts", {}).items():
+            msg = post.get("message", "")
+            if "noop-bundled" in msg.lower():
+                print(f"  [bundled reply: {msg[:120]}...]")
+                found_bundled = True
+                break
+        if found_bundled:
+            break
+    assert found_bundled, "Bundled noop provider did not reply with 'noop-bundled' within 40s"
+    print("  [Phase 2 PASS: bundled noop replied correctly]")
+
+    # Cleanup: restore original noop provider
+    if os.path.exists(NOOP_TARGET):
+        shutil.rmtree(NOOP_TARGET)
+    subprocess.run(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1", shell=True)
+    print("  [restored original noop provider]")
+
+# ═══════════════════════════════════════════════════════════════════════
 #  GROUP 10: Disabled Plugin Visibility Regression Tests
 # ═══════════════════════════════════════════════════════════════════════
 #  These tests verify that bundled plugins with only a plugin.json file
@@ -3868,7 +4082,7 @@ if __name__ == "__main__":
     print("GROUP 9 -- Mattermost + Noop E2E Integration Test")
     print(f"{'=' * 60}")
 
-    for fn in [test_mm9_e2e]:
+    for fn in [test_mm9_e2e, test_fn_9b_provider_source_awareness]:
         test(fn)
 
 
