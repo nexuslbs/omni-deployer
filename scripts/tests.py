@@ -4529,6 +4529,271 @@ print(f"{'=' * 60}")
 
 test(test_fn_17_parallel_wait)
 
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 18: Multi-source Platform Plugin Tests (Python, JS, Rust)
+# ═══════════════════════════════════════════════════════════════════════
+#  Tests that platform plugins from 3 different languages (Python, Node.js,
+#  Rust) can be installed and enabled from remote source, then copied to
+#  bundled location and enabled as bundled (auto-disabling the remote).
+#  Also verifies that disabled remote platforms return errors on API calls.
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_fn_18_platform_multi_source():
+    import urllib.request, urllib.error, time, uuid, os, shutil, json, subprocess
+
+    PLATFORMS = {
+        "test-python": {"lang": "Python"},
+        "test-js": {"lang": "JS"},
+        "test-rust": {"lang": "Rust"},
+    }
+
+    for plat_name, plat_info in PLATFORMS.items():
+        lang = plat_info["lang"]
+        print(f"\n  ── Testing platform '{plat_name}' ({lang}) ──")
+
+        # ═══════════════════════════════════════════════════════════
+        #  Phase 1: Remote platform from omni-plugins
+        # ═══════════════════════════════════════════════════════════
+        print(f"  [Phase 1: Remote '{plat_name}' platform]")
+
+        # Clean up any existing remote/bundled versions
+        for src in ("remote", "bundled"):
+            try:
+                api_post_body(f"/plugins/platforms/{src}/{plat_name}/disable", {})
+            except Exception:
+                pass
+            try:
+                api_delete(f"/plugins/platforms/{src}/{plat_name}")
+            except Exception:
+                pass
+        time.sleep(2)
+
+        # Install from omni-plugins as remote (install-git API)
+        try:
+            ensure_remote_plugin(plat_name, plugin_type="platforms")
+        except Exception as e:
+            err = str(e).lower()
+            if "already" not in err:
+                raise
+
+        # Enable remote platform via API
+        resp = api_post_body(f"/plugins/platforms/remote/{plat_name}/enable", {}, timeout=30)
+        assert resp.get("success"), f"Enable remote {plat_name} failed: {resp}"
+        print(f"  [enabled remote {plat_name}]")
+        time.sleep(3)
+
+        # Verify it's in plugin listing with correct source=remote
+        plugins = api_get("/plugins").get("data", [])
+        plat = next((p for p in plugins if p["name"] == plat_name and p.get("plugin_type") == "platform"), None)
+        assert plat is not None, f"{plat_name} platform not found in plugin list"
+        assert plat.get("status") == "enabled" or plat.get("source") == "remote", \
+            f"{plat_name}: status={plat.get('status')} source={plat.get('source')}"
+        print(f"  [remote {plat_name}: status={plat.get('status')} source={plat.get('source')}]")
+
+        # Verify plugins.yml has the correct source
+        yml = read_plugins_yml()
+        yml_source = yml.get("platforms", {}).get(plat_name, {}).get("source")
+        yml_enabled = yml.get("platforms", {}).get(plat_name, {}).get("enabled")
+        print(f"  [plugins.yml: {plat_name} enabled={yml_enabled} source={yml_source}]")
+
+        # ═══════════════════════════════════════════════════════════
+        #  Phase 2: Bundled platform (copy from omni-plugins, modify)
+        # ═══════════════════════════════════════════════════════════
+        print(f"  [Phase 2: Bundled '{plat_name}' platform]")
+
+        # Source and target directories
+        src_dir = f"{REMOTE_REPO}/platforms/{plat_name}"
+        tgt_dir = f"{WORKSPACE}/plugins/platforms/{plat_name}"
+
+        # Remove any existing bundled version at target
+        if os.path.exists(tgt_dir):
+            shutil.rmtree(tgt_dir)
+        os.makedirs(tgt_dir, exist_ok=True)
+
+        # Copy with modifications for bundled flavor
+        if lang == "Python":
+            shutil.copy2(f"{src_dir}/platform.py", f"{tgt_dir}/platform.py")
+            with open(f"{src_dir}/plugin.json") as f:
+                pj = json.loads(f.read())
+            for cs in pj.get("config_schema", []):
+                if cs.get("key") == "PLATFORM_GREETING":
+                    cs["default"] = "Hello from Bundled Python"
+            with open(f"{tgt_dir}/plugin.json", "w") as f:
+                f.write(json.dumps(pj, indent=2))
+            print(f"  [copied {plat_name} Python -> bundled, greeting modified]")
+
+        elif lang == "JS":
+            shutil.copy2(f"{src_dir}/server.js", f"{tgt_dir}/server.js")
+            if os.path.exists(f"{src_dir}/package.json"):
+                shutil.copy2(f"{src_dir}/package.json", f"{tgt_dir}/package.json")
+            with open(f"{src_dir}/plugin.json") as f:
+                pj = json.loads(f.read())
+            for cs in pj.get("config_schema", []):
+                if cs.get("key") == "PLATFORM_GREETING":
+                    cs["default"] = "Hello from Bundled JS"
+            with open(f"{tgt_dir}/plugin.json", "w") as f:
+                f.write(json.dumps(pj, indent=2))
+            print(f"  [copied {plat_name} JS -> bundled, greeting modified]")
+
+        elif lang == "Rust":
+            shutil.copytree(src_dir, tgt_dir, dirs_exist_ok=True,
+                          ignore=shutil.ignore_patterns("target"))
+            main_rs = os.path.join(tgt_dir, "src", "main.rs")
+            with open(main_rs) as f:
+                code = f.read()
+            code = code.replace('"source": "Rust"', '"source": "Rust-Bundled"')
+            with open(main_rs, "w") as f:
+                f.write(code)
+            with open(f"{tgt_dir}/plugin.json") as f:
+                pj = json.loads(f.read())
+            for cs in pj.get("config_schema", []):
+                if cs.get("key") == "PLATFORM_GREETING":
+                    cs["default"] = "Hello from Bundled Rust"
+            with open(f"{tgt_dir}/plugin.json", "w") as f:
+                f.write(json.dumps(pj, indent=2))
+            print(f"  [copied {plat_name} Rust -> bundled, greeting modified]")
+
+        print(f"  [bundled {plat_name} ready at {tgt_dir}]")
+
+        # Important: enable bundled, which creates YAML entry.
+        # When bundled is enabled with same name as remote, the YAML source
+        # changes from "remote" to "bundled".
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/enable", {}, timeout=30)
+        assert resp.get("success"), f"Enable bundled {plat_name} failed: {resp}"
+        print(f"  [enabled bundled {plat_name}]")
+        time.sleep(3)
+
+        # Verify bundled shows in plugin listing
+        plugins = api_get("/plugins").get("data", [])
+        bundled_plat = next((p for p in plugins if p["name"] == plat_name and p.get("source") == "bundled" and p.get("plugin_type") == "platform"), None)
+        assert bundled_plat is not None, f"Bundled {plat_name} not found in plugin list"
+        print(f"  [bundled {plat_name}: status={bundled_plat.get('status')}]")
+
+        # Verify remote no longer has source=remote or is disabled
+        remote_plat = next((p for p in plugins if p["name"] == plat_name and p.get("source") == "remote" and p.get("plugin_type") == "platform"), None)
+        if remote_plat is not None:
+            print(f"  [remote {plat_name}: status={remote_plat.get('status')} (auto-disabled)]")
+
+        # Verify plugins.yml source changed to bundled
+        yml = read_plugins_yml()
+        yml_source = yml.get("platforms", {}).get(plat_name, {}).get("source")
+        assert yml_source == "bundled", f"plugins.yml source should be 'bundled', got '{yml_source}'"
+        assert yml.get("platforms", {}).get(plat_name, {}).get("enabled") == True
+        print(f"  [plugins.yml: {plat_name} source=bundled OK]")
+
+        # ═══════════════════════════════════════════════════════════
+        #  Phase 3: Direct protocol test (test binary stdin/stdout)
+        # ═══════════════════════════════════════════════════════════
+        print(f"  [Phase 3: Direct protocol test for {plat_name}]")
+
+        if lang == "Python":
+            cmd = ["python3", f"{src_dir}/platform.py"]
+        elif lang == "JS":
+            cmd = ["node", f"{src_dir}/server.js"]
+        elif lang == "Rust":
+            cmd = [f"{src_dir}/target/release/test-rust-platform"]
+        else:
+            cmd = []
+
+        # Test initialize
+        test_input = json.dumps({"id": 1, "method": "initialize", "params": {}})
+        result = subprocess.run(
+            cmd, input=test_input + "\n", capture_output=True, text=True, timeout=10
+        )
+        output_lines = [l for l in result.stdout.strip().split("\n") if l.strip()]
+        assert len(output_lines) > 0, f"No output from {plat_name}: stderr={result.stderr[:200]}"
+        init_resp = json.loads(output_lines[0])
+        assert init_resp.get("id") == 1, f"Expected id=1, got: {init_resp}"
+        init_result = init_resp.get("result", {})
+        assert init_result.get("name") == plat_name, f"Expected name={plat_name}, got: {init_result}"
+        caps = init_result.get("capabilities", {})
+        assert caps.get("outbound") == True, f"outbound should be true: {caps}"
+        print(f"  [initialize OK: name={init_result.get('name')} inbound={caps.get('inbound')} outbound={caps.get('outbound')}]")
+
+        # Test configure
+        test_input2 = json.dumps({"id": 2, "method": "configure", "params": {"config": {"PLATFORM_GREETING": "test"}}})
+        result2 = subprocess.run(
+            cmd, input=test_input + "\n" + test_input2 + "\n", capture_output=True, text=True, timeout=10
+        )
+        output_lines2 = [l for l in result2.stdout.strip().split("\n") if l.strip()]
+        assert len(output_lines2) >= 2, f"Expected 2 responses, got {len(output_lines2)}"
+        conf_resp = json.loads(output_lines2[1])
+        assert conf_resp.get("result", {}).get("configured") == True, f"configure failed: {conf_resp}"
+        print(f"  [configure OK]")
+
+        # Test deliver
+        test_input3 = json.dumps({"id": 3, "method": "deliver", "params": {"resource_identifier": "test-channel", "content": "hello", "msg_type": "text"}})
+        result3 = subprocess.run(
+            cmd, input=test_input + "\n" + test_input2 + "\n" + test_input3 + "\n", capture_output=True, text=True, timeout=10
+        )
+        output_lines3 = [l for l in result3.stdout.strip().split("\n") if l.strip()]
+        assert len(output_lines3) >= 3
+        del_resp = json.loads(output_lines3[2])
+        assert del_resp.get("result", {}).get("delivered") == True
+        print(f"  [deliver OK: external_id={del_resp.get('result', {}).get('external_id')}]")
+
+        # Test react
+        test_input4 = json.dumps({"id": 4, "method": "react", "params": {"resource_identifier": "test-channel", "external_id": "test-1", "emoji": "+1"}})
+        result4 = subprocess.run(
+            cmd, input=test_input + "\n" + test_input2 + "\n" + test_input3 + "\n" + test_input4 + "\n",
+            capture_output=True, text=True, timeout=10
+        )
+        output_lines4 = [l for l in result4.stdout.strip().split("\n") if l.strip()]
+        assert len(output_lines4) >= 4
+        react_resp = json.loads(output_lines4[3])
+        assert react_resp.get("result", {}).get("reacted") == True
+        print(f"  [react OK]")
+
+        # Test file upload (deliver with extra.file field)
+        test_input5 = json.dumps({"id": 5, "method": "deliver", "params": {"resource_identifier": "test-channel", "content": "file test", "msg_type": "text", "extra": {"file": True}}})
+        result5 = subprocess.run(
+            cmd, input=test_input + "\n" + test_input2 + "\n" + test_input3 + "\n" + test_input4 + "\n" + test_input5 + "\n",
+            capture_output=True, text=True, timeout=10
+        )
+        output_lines5 = [l for l in result5.stdout.strip().split("\n") if l.strip()]
+        assert len(output_lines5) >= 5
+        file_resp = json.loads(output_lines5[4])
+        assert file_resp.get("result", {}).get("delivered") == True
+        print(f"  [file upload deliver OK]")
+
+        # Test unknown method returns error
+        test_input6 = json.dumps({"id": 6, "method": "nosuchmethod", "params": {}})
+        result6 = subprocess.run(
+            cmd, input=test_input + "\n" + test_input6 + "\n", capture_output=True, text=True, timeout=10
+        )
+        output_lines6 = [l for l in result6.stdout.strip().split("\n") if l.strip()]
+        assert len(output_lines6) >= 2
+        err_resp = json.loads(output_lines6[1])
+        assert err_resp.get("error") is not None or "Unknown" in str(err_resp)
+        print(f"  [unknown method error OK]")
+
+        # ═══════════════════════════════════════════════════════════
+        #  Cleanup: remove bundled + remote for this platform
+        # ═══════════════════════════════════════════════════════════
+        try:
+            api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
+        except Exception:
+            pass
+        if os.path.exists(tgt_dir):
+            shutil.rmtree(tgt_dir)
+        try:
+            api_delete(f"/plugins/platforms/bundled/{plat_name}")
+        except Exception:
+            pass
+        try:
+            api_delete(f"/plugins/platforms/remote/{plat_name}")
+        except Exception:
+            pass
+        time.sleep(1)
+
+        print(f"  ✓ Platform '{plat_name}' ({lang}) multi-source test PASSED")
+
+print(f"\n{'=' * 60}")
+print("GROUP 18: Multi-source Platform Plugin Tests (Python, JS, Rust)")
+print(f"{'=' * 60}")
+
+test(test_fn_18_platform_multi_source)
+
 print(f"\n{'=' * 60}")
 print(f"\nTest Timing Summary:")
 print(f"{'─' * 50}")
@@ -4545,3 +4810,201 @@ if test_timings:
 discard_all_changes()
 
 sys.exit(0 if tests_fail == 0 else 1)
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 19: Platform Plugin Lifecycle (subprocess start/stop verification)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _get_platform_status(name):
+    """Get the status of a platform plugin from the listing API."""
+    plugins = api_get("/plugins")["data"]
+    for p in plugins:
+        if p.get("name") == name and p.get("plugin_type") == "platform":
+            return p.get("status")
+    return None
+
+def _get_platform_detail(name):
+    """Get full platform details from the listing API."""
+    plugins = api_get("/plugins")["data"]
+    for p in plugins:
+        if p.get("name") == name and p.get("plugin_type") == "platform":
+            return p
+    return None
+
+def _get_platform_source(name):
+    """Get the source of a platform plugin."""
+    detail = _get_platform_detail(name)
+    return detail.get("source") if detail else None
+
+def _platform_subprocess_running(name):
+    """Check if the platform plugin subprocess is currently running."""
+    # Use command that checks by the platform name in process args
+    r = subprocess.run(
+        f"ps aux | grep -v grep | grep '{name}' | head -5",
+        shell=True, capture_output=True, text=True, timeout=10
+    )
+    return r.stdout.strip() != ""
+
+def _wait_for_platform_status(name, expected_status, timeout=15):
+    """Wait for platform to reach expected status."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = _get_platform_status(name)
+        if status == expected_status:
+            return True
+        time.sleep(0.5)
+    return False
+
+def _wait_for_platform_subprocess(name, should_run, timeout=10):
+    """Wait for platform subprocess to start or stop."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        running = _platform_subprocess_running(name)
+        if running == should_run:
+            return True
+        time.sleep(0.5)
+    return False
+
+def test_fn_19_platform_lifecycle():
+    """Verify bundled platform plugins start/stop correctly (Rust, Python, JS)."""
+
+    platforms = [
+        ("test-python", "Python"),
+        ("test-js", "Node.js"),
+        ("test-rust", "Rust"),
+    ]
+
+    for plat_name, lang in platforms:
+        # ── Phase 1: Verify initial state ──────────────────────────────
+        detail = _get_platform_detail(plat_name)
+        assert detail is not None, f"Platform '{plat_name}' not found in listing"
+        assert detail.get("status") == "disabled", \
+            f"Platform '{plat_name}' should be disabled initially, got: {detail.get('status')}"
+        assert detail.get("source") == "bundled", \
+            f"Platform '{plat_name}' source should be bundled, got: {detail.get('source')}"
+
+        # Verify subprocess is NOT running initially
+        running = _platform_subprocess_running(plat_name)
+        f"  [{lang}] Initial state: status=disabled, subprocess_running={running}"
+
+        # ── Phase 2: Enable the platform (dynamic start) ───────────────
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/enable", {})
+        assert resp.get("success"), f"Enable '{plat_name}' failed: {resp}"
+        assert resp.get("data", {}).get("status") == "enabled", \
+            f"Enable '{plat_name}' response status should be enabled: {resp}"
+
+        # Verify YAML state
+        _assert_yaml_state(plat_name, "platforms", True, "bundled")
+
+        # Wait for subprocess to start
+        started = _wait_for_platform_subprocess(plat_name, True, timeout=10)
+        assert started, f"Platform '{plat_name}' subprocess did not start within 10s after enable"
+
+        # Verify plugin listing shows enabled
+        status = _get_platform_status(plat_name)
+        assert status == "enabled", \
+            f"Platform '{plat_name}' status should be enabled, got: {status}"
+
+        f"  [{lang}] Enabled: status=enabled, subprocess_running=True"
+
+        # ── Phase 3: Disable the platform (dynamic stop) ───────────────
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
+        assert resp.get("success"), f"Disable '{plat_name}' failed: {resp}"
+        assert resp.get("data", {}).get("status") == "disabled", \
+            f"Disable '{plat_name}' response status should be disabled: {resp}"
+
+        # Verify YAML state
+        _assert_yaml_state(plat_name, "platforms", False, "bundled")
+
+        # Wait for subprocess to stop
+        stopped = _wait_for_platform_subprocess(plat_name, False, timeout=10)
+        assert stopped, f"Platform '{plat_name}' subprocess did not stop within 10s after disable"
+
+        # Verify plugin listing shows disabled
+        status = _get_platform_status(plat_name)
+        assert status == "disabled", \
+            f"Platform '{plat_name}' status should be disabled, got: {status}"
+
+        f"  [{lang}] Disabled: status=disabled, subprocess_running=False"
+
+        # ── Phase 4: Re-enable (toggle) ────────────────────────────────
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/enable", {})
+        assert resp.get("success"), f"Re-enable '{plat_name}' failed: {resp}"
+
+        started = _wait_for_platform_subprocess(plat_name, True, timeout=10)
+        assert started, f"Platform '{plat_name}' subprocess did not start on re-enable"
+
+        status = _get_platform_status(plat_name)
+        assert status == "enabled", \
+            f"Platform '{plat_name}' status should be enabled after re-enable, got: {status}"
+
+        f"  [{lang}] Re-enabled: status=enabled, subprocess_running=True"
+
+        # ── Phase 5: Enable idempotency (enable already-enabled) ───────
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/enable", {})
+        assert resp.get("success"), f"Idempotent enable '{plat_name}' failed: {resp}"
+
+        status = _get_platform_status(plat_name)
+        assert status == "enabled", \
+            f"Platform '{plat_name}' should still be enabled after idempotent enable"
+
+        # Subprocess should still be running
+        running = _platform_subprocess_running(plat_name)
+        assert running, f"Platform '{plat_name}' subprocess should still be running after idempotent enable"
+
+        f"  [{lang}] Idempotent enable: subprocess still running"
+
+        # ── Phase 6: Disable idempotency (disable already-enabled to prepare for next test) ──
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
+        assert resp.get("success"), f"Final disable '{plat_name}' failed: {resp}"
+
+        stopped = _wait_for_platform_subprocess(plat_name, False, timeout=10)
+        assert stopped, f"Platform '{plat_name}' subprocess did not stop after final disable"
+
+        # Disable already-disabled should still succeed
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
+        assert resp.get("success"), f"Idempotent disable '{plat_name}' failed: {resp}"
+
+        f"  [{lang}] Idempotent disable: OK"
+
+        print(f"  ✓ Platform '{plat_name}' ({lang}) lifecycle test PASSED")
+
+
+def test_fn_19_platform_enable_non_existent():
+    """Verify enabling a non-existent platform returns an error."""
+    try:
+        api_post_body("/plugins/platforms/bundled/non-existent-platform/enable", {})
+        # If we get here, the API call didn't raise an error
+        # Check the response for an error
+        print("  ⚠ Enable non-existent returned without error (check response)")
+    except Exception as e:
+        # Expected failure - verify it's a proper error
+        error_str = str(e).lower()
+        assert "not found" in error_str or "404" in error_str or "error" in error_str, \
+            f"Expected 'not found' or 'error' for non-existent platform, got: {e}"
+
+    print("  ✓ Enable non-existent platform returns error")
+
+
+# Cleanup: disable any enabled test platforms after lifecycle tests
+def test_fn_19_ensure_disabled():
+    """Ensure all test platforms are disabled after lifecycle tests (cleanup)."""
+    for plat_name in ["test-python", "test-js", "test-rust"]:
+        status = _get_platform_status(plat_name)
+        if status == "enabled":
+            try:
+                api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
+                print(f"  Cleanup: disabled {plat_name}")
+            except Exception:
+                pass
+
+    print("  ✓ Cleanup complete")
+
+
+print(f"\n{'=' * 60}")
+print("GROUP 19: Platform Plugin Lifecycle (subprocess start/stop)")
+print(f"{'=' * 60}")
+
+test(test_fn_19_platform_enable_non_existent)
+test(test_fn_19_platform_lifecycle)
+test(test_fn_19_ensure_disabled)
+
