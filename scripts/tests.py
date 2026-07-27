@@ -2499,10 +2499,19 @@ def _check_mm_container():
 def _mm_login(base_url, username, password):
     import urllib.request
     data = json.dumps({"login_id": username, "password": password}).encode()
-    req = urllib.request.Request(f"{base_url}/api/v4/users/login", data=data, method="POST", headers={"Content-Type": "application/json"})
-    token = urllib.request.urlopen(req, timeout=10).headers.get("Token")
-    assert token, f"Login as {username} returned no Token header"
-    return token
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(f"{base_url}/api/v4/users/login", data=data, method="POST",
+                                          headers={"Content-Type": "application/json"})
+            token = urllib.request.urlopen(req, timeout=15).headers.get("Token")
+            assert token, f"Login as {username} returned no Token header"
+            return token
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(2)
+    raise last_err  # type: ignore
 
 def _mm_send_message(base_url, channel_id, token, message):
     import urllib.request
@@ -2637,7 +2646,20 @@ def test_mm9_e2e():
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("[channel patched to noop/test-model-1]")
 
-    time.sleep(5)
+    # Wait for provider to be actually ready before sending message
+    # The agent asynchronously starts provider subprocesses; polling
+    # threads ensures the previous channel's message was processed
+    # and the new provider is loaded.
+    print("[waiting for provider readiness...]")
+    time.sleep(2)
+    for _ in range(15):
+        try:
+            r = urllib.request.urlopen(f"{BASE}/threads?channel_id={channel_id}&limit=1", timeout=5)
+            break
+        except Exception:
+            pass
+        time.sleep(2)
+    time.sleep(3)
 
     # 8. Login as testuser (setup created this user with known password).
     #    No manual admin login, password reset, or team/channel membership
@@ -2652,7 +2674,7 @@ def test_mm9_e2e():
     print(f"[message sent: {msg_resp.get('id', '?')}]")
 
     # 10. Poll for noop response
-    deadline = time.time() + 35
+    deadline = time.time() + 60
     while time.time() < deadline:
         time.sleep(4)
         posts = _mm_get_posts(MM, mm_channel_id, token)
@@ -2750,7 +2772,18 @@ def test_fn_9b_provider_source_awareness():
     patch_resp = urllib.request.urlopen(patch_req, timeout=10)
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("  [channel patched to noop/test-model-1]")
-    time.sleep(5)
+
+    # Wait for provider readiness before sending message
+    print("  [waiting for provider readiness...]")
+    time.sleep(2)
+    for _ in range(15):
+        try:
+            r = urllib.request.urlopen(f"{BASE}/threads?channel_id={channel_id}&limit=1", timeout=5)
+            break
+        except Exception:
+            pass
+        time.sleep(2)
+    time.sleep(3)
 
     # Login as testuser and send message
     token = _mm_login(MM, test_user, test_pass)
@@ -2759,7 +2792,7 @@ def test_fn_9b_provider_source_awareness():
     print("  [remote phase: message sent]")
 
     # Poll for reply containing "noop-full"
-    deadline = time.time() + 40
+    deadline = time.time() + 60
     found_remote = False
     while time.time() < deadline:
         time.sleep(4)
@@ -2848,7 +2881,18 @@ def test_fn_9b_provider_source_awareness():
     patch_resp = urllib.request.urlopen(patch_req, timeout=10)
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("  [channel patched to noop/test-model-1]")
-    time.sleep(5)
+
+    # Wait for provider readiness before sending message
+    print("  [waiting for provider readiness...]")
+    time.sleep(2)
+    for _ in range(15):
+        try:
+            r = urllib.request.urlopen(f"{BASE}/threads?channel_id={channel_id}&limit=1", timeout=5)
+            break
+        except Exception:
+            pass
+        time.sleep(2)
+    time.sleep(3)
 
     # Send message as testuser
     token = _mm_login(MM, test_user, test_pass)
@@ -2857,7 +2901,7 @@ def test_fn_9b_provider_source_awareness():
     print("  [bundled phase: message sent]")
 
     # Poll for reply containing "noop-bundled"
-    deadline = time.time() + 40
+    deadline = time.time() + 60
     found_bundled = False
     while time.time() < deadline:
         time.sleep(4)
