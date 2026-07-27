@@ -3414,7 +3414,10 @@ def test_fn_12_file_upload():
         _g12t.sleep(2)
     _g12t.sleep(3)
 
-    # Upload a small text file via Mattermost API
+    # Upload a small text file via Mattermost API (as testuser, so file_ids link properly)
+    test_pass = "Mattermost_Fresh_Start_1"
+    test_user = "testuser"
+    test_token = _mm_login(MM, test_user, test_pass)
     test_content = b"Hello Hermes! Test file content: ABC123XYZ"
     boundary = uuid.uuid4().hex
     body = b""
@@ -3429,7 +3432,7 @@ def test_fn_12_file_upload():
     file_post = urllib.request.Request(
         f"{MM}/api/v4/files",
         data=body, method="POST",
-        headers={"Authorization": f"Bearer {admin_token}", "Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers={"Authorization": f"Bearer {test_token}", "Content-Type": f"multipart/form-data; boundary={boundary}"},
     )
     file_resp = json.loads(urllib.request.urlopen(file_post, timeout=10).read())
     file_id = file_resp.get("file_infos", [{}])[0].get("id", "")
@@ -3445,10 +3448,6 @@ def test_fn_12_file_upload():
         },
     ])
     # Send a JSON script as testuser (matches G9's working pattern)
-    test_pass = "Mattermost_Fresh_Start_1"
-    test_user = "testuser"
-    test_token = _mm_login(MM, test_user, test_pass)
-
     msg_data = json.dumps({
         "channel_id": mm_channel_id,
         "message": script,
