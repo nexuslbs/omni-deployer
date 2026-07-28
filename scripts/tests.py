@@ -412,6 +412,64 @@ def restart_agent():
         time.sleep(1)
     raise RuntimeError("Agent not healthy after waiting")
 
+# ── Provider subprocess readiness ─────────────────────────────────────
+
+def wait_for_provider_subprocess(provider_name, timeout=30):
+    """Wait for a provider subprocess to appear in the process list.
+
+    Uses pgrep to check for a process whose command line contains the
+    provider name.  Falls back to ``ps aux`` if pgrep is unavailable.
+    Prints diagnostics on timeout so we can see whether the provider
+    process ever started.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            r = subprocess.run(
+                ["pgrep", "-f", provider_name],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                pids = r.stdout.strip().split()
+                print(
+                    f"  [provider '{provider_name}' subprocess running"
+                    f" ({len(pids)} PID(s): {', '.join(pids)})]"
+                )
+                return True
+        except FileNotFoundError:
+            # pgrep not available — fall through to ps aux fallback below
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(2)
+
+    # Fallback: ps aux grep
+    deadline2 = time.time() + timeout
+    while time.time() < deadline2:
+        r = subprocess.run(
+            ["ps", "aux"], capture_output=True, text=True, timeout=5
+        )
+        if provider_name in r.stdout:
+            print(f"  [provider '{provider_name}' found via ps aux]")
+            return True
+        time.sleep(2)
+
+    # ── Diagnostics on timeout ───────────────────────────────────────
+    print(f"  [TIMEOUT waiting for provider '{provider_name}' subprocess]")
+    r = subprocess.run(
+        ["ps", "aux"], capture_output=True, text=True, timeout=5
+    )
+    lines = r.stdout.split("\n")
+    matches = [l for l in lines if provider_name.lower() in l.lower()]
+    total = len(lines)
+    if matches:
+        print(f"  [DIAG: {len(matches)} matching processes among {total} total]")
+        for m in matches[:5]:
+            print(f"    {m[:200]}")
+    else:
+        print(f"  [DIAG: no process matching '{provider_name}' among {total} total processes]")
+    return False
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Test harness
 # ═══════════════════════════════════════════════════════════════════════
@@ -435,13 +493,6 @@ def test(fn):
     except Exception as e:
         elapsed = time.time() - t0
         print(f"✗ FAIL ({elapsed:.1f}s): {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        tests_fail += 1
-        test_timings.append((name, elapsed))
-    except Exception as e:
-        elapsed = time.time() - t0
-        print(f"✗ ERROR ({elapsed:.1f}s): {e}", flush=True)
         import traceback
         traceback.print_exc()
         tests_fail += 1
@@ -2646,20 +2697,14 @@ def test_mm9_e2e():
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("[channel patched to noop/test-model-1]")
 
-    # Wait for provider to be actually ready before sending message
-    # The agent asynchronously starts provider subprocesses; polling
-    # threads ensures the previous channel's message was processed
-    # and the new provider is loaded.
-    print("[waiting for provider readiness...]")
-    time.sleep(2)
-    for _ in range(15):
-        try:
-            r = urllib.request.urlopen(f"{BASE}/threads?channel_id={channel_id}&limit=1", timeout=5)
-            break
-        except Exception:
-            pass
-        time.sleep(2)
-    time.sleep(3)
+    # Wait for provider to be actually ready before sending message.
+    # The agent asynchronously starts provider subprocesses; we verify
+    # the process is running rather than polling an endpoint that always
+    # returns 200 regardless of provider state.
+    print("[waiting for provider subprocess...]")
+    if not wait_for_provider_subprocess("noop", timeout=40):
+        print("[WARN: noop subprocess not found, continuing anyway]")
+    time.sleep(1)
 
     # 8. Login as testuser (setup created this user with known password).
     #    No manual admin login, password reset, or team/channel membership
@@ -2685,7 +2730,7 @@ def test_mm9_e2e():
                 assert "noop" in msg.lower(), f"Missing noop provider mention: {msg[:100]}"
                 print("[e2e test PASSED]")
                 return
-    assert False, "Noop provider did not respond within 35s"
+    assert False, "Noop provider did not respond within 60s"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 9b: Provider source-awareness test (remote + bundled noop)
@@ -2773,17 +2818,11 @@ def test_fn_9b_provider_source_awareness():
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("  [channel patched to noop/test-model-1]")
 
-    # Wait for provider readiness before sending message
-    print("  [waiting for provider readiness...]")
-    time.sleep(2)
-    for _ in range(15):
-        try:
-            r = urllib.request.urlopen(f"{BASE}/threads?channel_id={channel_id}&limit=1", timeout=5)
-            break
-        except Exception:
-            pass
-        time.sleep(2)
-    time.sleep(3)
+    # Wait for provider subprocess before sending message
+    print("  [waiting for provider subprocess...]")
+    if not wait_for_provider_subprocess("noop", timeout=40):
+        print("  [WARN: noop subprocess not found, continuing anyway]")
+    time.sleep(1)
 
     # Login as testuser and send message
     token = _mm_login(MM, test_user, test_pass)
@@ -2805,7 +2844,7 @@ def test_fn_9b_provider_source_awareness():
                 break
         if found_remote:
             break
-    assert found_remote, "Remote noop provider did not reply with 'noop-full' within 40s"
+    assert found_remote, "Remote noop provider did not reply with 'noop-full' within 60s"
     print("  [Phase 1 PASS: remote noop-full replied correctly]")
 
     # ═══════════════════════════════════════════════════════════════════
@@ -2882,17 +2921,11 @@ def test_fn_9b_provider_source_awareness():
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("  [channel patched to noop/test-model-1]")
 
-    # Wait for provider readiness before sending message
-    print("  [waiting for provider readiness...]")
-    time.sleep(2)
-    for _ in range(15):
-        try:
-            r = urllib.request.urlopen(f"{BASE}/threads?channel_id={channel_id}&limit=1", timeout=5)
-            break
-        except Exception:
-            pass
-        time.sleep(2)
-    time.sleep(3)
+    # Wait for provider subprocess before sending message
+    print("  [waiting for provider subprocess...]")
+    if not wait_for_provider_subprocess("noop", timeout=40):
+        print("  [WARN: noop subprocess not found, continuing anyway]")
+    time.sleep(1)
 
     # Send message as testuser
     token = _mm_login(MM, test_user, test_pass)
@@ -2914,7 +2947,7 @@ def test_fn_9b_provider_source_awareness():
                 break
         if found_bundled:
             break
-    assert found_bundled, "Bundled noop provider did not reply with 'noop-bundled' within 40s"
+    assert found_bundled, "Bundled noop provider did not reply with 'noop-bundled' within 60s"
     print("  [Phase 2 PASS: bundled noop replied correctly]")
 
     # Cleanup: restore original noop provider
@@ -4771,9 +4804,14 @@ def test_fn_18_platform_multi_source():
             cmd, input=test_input + "\n" + test_input2 + "\n" + test_input3 + "\n", capture_output=True, text=True, timeout=10
         )
         output_lines3 = [l for l in result3.stdout.strip().split("\n") if l.strip()]
-        assert len(output_lines3) >= 3
+        assert len(output_lines3) >= 3, (
+            f"Expected >=3 output lines for initialize+configure+deliver, "
+            f"got {len(output_lines3)}. stderr={result3.stderr[:300]}"
+        )
         del_resp = json.loads(output_lines3[2])
-        assert del_resp.get("result", {}).get("delivered") == True
+        assert del_resp.get("result", {}).get("delivered") == True, (
+            f"deliver failed: {del_resp}"
+        )
         print(f"  [deliver OK: external_id={del_resp.get('result', {}).get('external_id')}]")
 
         # Test react
@@ -4783,9 +4821,14 @@ def test_fn_18_platform_multi_source():
             capture_output=True, text=True, timeout=10
         )
         output_lines4 = [l for l in result4.stdout.strip().split("\n") if l.strip()]
-        assert len(output_lines4) >= 4
+        assert len(output_lines4) >= 4, (
+            f"Expected >=4 output lines for initialize+configure+deliver+react, "
+            f"got {len(output_lines4)}. stderr={result4.stderr[:300]}"
+        )
         react_resp = json.loads(output_lines4[3])
-        assert react_resp.get("result", {}).get("reacted") == True
+        assert react_resp.get("result", {}).get("reacted") == True, (
+            f"react response missing reacted=True: {react_resp}"
+        )
         print(f"  [react OK]")
 
         # Test file upload (deliver with extra.file field)
@@ -4795,9 +4838,13 @@ def test_fn_18_platform_multi_source():
             capture_output=True, text=True, timeout=10
         )
         output_lines5 = [l for l in result5.stdout.strip().split("\n") if l.strip()]
-        assert len(output_lines5) >= 5
+        assert len(output_lines5) >= 5, (
+            f"Expected >=5 output lines, got {len(output_lines5)}. stderr={result5.stderr[:300]}"
+        )
         file_resp = json.loads(output_lines5[4])
-        assert file_resp.get("result", {}).get("delivered") == True
+        assert file_resp.get("result", {}).get("delivered") == True, (
+            f"file deliver failed: {file_resp}"
+        )
         print(f"  [file upload deliver OK]")
 
         # Test unknown method returns error
@@ -4806,9 +4853,13 @@ def test_fn_18_platform_multi_source():
             cmd, input=test_input + "\n" + test_input6 + "\n", capture_output=True, text=True, timeout=10
         )
         output_lines6 = [l for l in result6.stdout.strip().split("\n") if l.strip()]
-        assert len(output_lines6) >= 2
+        assert len(output_lines6) >= 2, (
+            f"Expected >=2 output lines, got {len(output_lines6)}. stderr={result6.stderr[:300]}"
+        )
         err_resp = json.loads(output_lines6[1])
-        assert err_resp.get("error") is not None or "Unknown" in str(err_resp)
+        assert err_resp.get("error") is not None or "Unknown" in str(err_resp), (
+            f"Expected error for unknown method, got: {err_resp}"
+        )
         print(f"  [unknown method error OK]")
 
         # ═══════════════════════════════════════════════════════════
