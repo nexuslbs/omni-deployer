@@ -18,8 +18,6 @@ import os
 import subprocess
 import sys
 import time
-import urllib.request
-import urllib.error
 import uuid
 
 
@@ -409,33 +407,25 @@ def deploy(mode):
     # handles YAML serialization, .remote/ directory setup, and git clone properly.
     print("[deploy] Registering remote noop provider...")
     install_url = f"file://{REMOTE_REPO}"
-    payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"}).encode()
+    payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"})
     noop_registered = False
     for attempt in range(20):
-        try:
-            r = urllib.request.urlopen(
-                urllib.request.Request(
-                    "http://localhost:8080/api/plugins/install-git",
-                    data=payload,
-                    method="POST",
-                    headers={"Content-Type": "application/json"},
-                ),
-                timeout=120,
-            )
-            resp = r.read()
-            msg = resp[:100] if len(resp) > 100 else resp
+        r = run_compose(compose, "exec", "-T", "omniagent",
+                        "curl", "-sS", "-X", "POST",
+                        "-H", "Content-Type: application/json",
+                        "-d", payload,
+                        "http://localhost:8080/api/plugins/install-git")
+        if r.returncode == 0:
+            msg = r.stdout[:100] if len(r.stdout) > 100 else r.stdout
             print(f"  [registered remote noop: {msg}]")
             noop_registered = True
             break
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            if "already" in err_body.lower() or e.code in (409, 422):
+        else:
+            combined = (r.stdout + r.stderr).lower()
+            if "already" in combined:
                 print("  [remote noop already registered, skipping]")
                 noop_registered = True
                 break
-            else:
-                print(f"  [attempt {attempt + 1}/20: install-git failed (HTTP {e.code}): {err_body[:100]}]")
-        except urllib.error.URLError as e:
             if attempt == 0:
                 print(f"  [waiting for API ready...]", end="", flush=True)
             print(".", end="", flush=True)
