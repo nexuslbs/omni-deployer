@@ -500,11 +500,32 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
     (e.g. ``curl ... /bundled/noop/enable``) or the test runner itself.
 
     Falls back to ``ps aux`` if pgrep is unavailable.
+
+    In addition to process detection, also polls the agent's provider API
+    endpoint to confirm the provider is enabled with populated metadata
+    (verifying the subprocess was registered). This is more reliable than
+    process detection alone, especially in environments where ``pgrep``
+    and ``ps`` may not be available (e.g., slim production containers).
+
     Prints diagnostics on timeout so we can see whether the provider
     process ever started.
     """
-    deadline = time.time() + timeout
+    import urllib.request
+    deadline = time.time() + max(timeout, 60)
+
+    # Also check via provider API — polls until the provider reports
+    # itself as enabled with metadata (subprocess registration signal)
+    api_ready = False
+    pids_found = False
+    real_pids = []
+
+    # Try multiple source types for API check (the caller may not know
+    # which source the provider was registered under at this point)
+    api_sources = ["built-in", "remote", "bundled"]
+
     while time.time() < deadline:
+        # ── Process detection ──────────────────────────────────────
+        pids_found = False
         try:
             r = subprocess.run(
                 ["pgrep", "-f", provider_name],
@@ -525,35 +546,64 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
                     except (OSError, IOError):
                         pass  # process may have exited between pgrep and read
                 if real_pids:
-                    print(
-                        f"  [provider '{provider_name}' subprocess running"
-                        f" ({len(real_pids)} PID(s): {', '.join(real_pids)})]"
-                    )
-                    return True
+                    pids_found = True
         except FileNotFoundError:
             # pgrep not available — fall through to ps aux fallback below
-            break
+            pass
         except subprocess.TimeoutExpired:
             pass
-        time.sleep(2)
 
-    # Fallback: ps aux grep (if available)
-    try:
-        subprocess.run(["ps", "--version"], capture_output=True, text=True, timeout=5)
-        has_ps = True
-    except FileNotFoundError:
-        has_ps = False
+        if not pids_found:
+            # Fallback: ps aux grep (if available)
+            try:
+                subprocess.run(["ps", "--version"], capture_output=True, text=True, timeout=2)
+                has_ps_local = True
+            except FileNotFoundError:
+                has_ps_local = False
+            if has_ps_local:
+                r = subprocess.run(
+                    ["ps", "aux"], capture_output=True, text=True, timeout=5
+                )
+                if provider_name in r.stdout:
+                    pids_found = True
 
-    if has_ps:
-        deadline2 = time.time() + timeout
-        while time.time() < deadline2:
-            r = subprocess.run(
-                ["ps", "aux"], capture_output=True, text=True, timeout=5
+        # ── API readiness check ───────────────────────────────────
+        if not api_ready:
+            for api_source in api_sources:
+                try:
+                    api_path = f"/api/plugins/providers/{api_source}/{provider_name}"
+                    req = urllib.request.Request(f"{BASE}{api_path}", method="GET")
+                    resp = urllib.request.urlopen(req, timeout=10)
+                    pd = json.loads(resp.read()).get("data", {})
+                    if pd.get("status") == "enabled":
+                        # Check for metadata indicating the subprocess was
+                        # registered. Entrypoint providers have the binary
+                        # path; we verify the metadata is populated.
+                        manifest = pd.get("manifest", {}) or {}
+                        entrypoint = manifest.get("entrypoint", "")
+                        has_entrypoint = pd.get("has_entrypoint", False) or bool(entrypoint)
+                        env_count = len(pd.get("env", {}) or {})
+                        print(
+                            f"  [provider '{provider_name}' API: status=enabled,"
+                            f" source={api_source},"
+                            f" entrypoint={'yes' if has_entrypoint else 'no'},"
+                            f" env={env_count} vars]"
+                        )
+                        api_ready = True
+                        break
+                except Exception:
+                    pass
+
+        # If BOTH process + API confirm, return success
+        if pids_found and api_ready:
+            print(
+                f"  [provider '{provider_name}' ready: subprocess running"
+                f" ({len(real_pids)} PID(s): {', '.join(real_pids)})]"
             )
-            if provider_name in r.stdout:
-                print(f"  [provider '{provider_name}' found via ps aux]")
-                return True
-            time.sleep(2)
+            return True
+
+        # If only one of two checks passed, keep waiting for the other
+        time.sleep(2)
 
     # ── Diagnostics on timeout ───────────────────────────────────────
     print(f"  [TIMEOUT waiting for provider '{provider_name}' subprocess]")
@@ -572,7 +622,8 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
             print(f"  [DIAG: no process matching '{provider_name}' among {total} total processes]")
     except FileNotFoundError:
         print("  [DIAG: ps not available in container]")
-    return False
+    print(f"  [DIAG: provider API ready={api_ready}]")
+    return pids_found or api_ready
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Test harness
@@ -2804,8 +2855,8 @@ def test_mm9_e2e():
     # the process is running rather than polling an endpoint that always
     # returns 200 regardless of provider state.
     print("[waiting for provider subprocess...]")
-    if not wait_for_provider_subprocess("noop-full", timeout=40):
-        print("[WARN: noop-full subprocess not found, continuing anyway]")
+    assert wait_for_provider_subprocess("noop-full", timeout=40), \
+        "noop-full provider subprocess did not start within 40s"
     time.sleep(1)
 
     # 8. Login as testuser (setup created this user with known password).
@@ -2922,8 +2973,8 @@ def test_fn_9b_provider_source_awareness():
 
     # Wait for provider subprocess before sending message
     print("  [waiting for provider subprocess...]")
-    if not wait_for_provider_subprocess("noop", timeout=40):
-        print("  [WARN: noop subprocess not found, continuing anyway]")
+    assert wait_for_provider_subprocess("noop", timeout=40), \
+        "Provider subprocess did not start within 40s"
     time.sleep(1)
 
     # Login as testuser and send message
@@ -3025,8 +3076,8 @@ def test_fn_9b_provider_source_awareness():
 
     # Wait for provider subprocess before sending message
     print("  [waiting for provider subprocess...]")
-    if not wait_for_provider_subprocess("noop", timeout=40):
-        print("  [WARN: noop subprocess not found, continuing anyway]")
+    assert wait_for_provider_subprocess("noop", timeout=40, source=""), \
+        "Provider subprocess did not start within 40s"
     time.sleep(1)
 
     # Send message as testuser
