@@ -231,17 +231,22 @@ def generate_env(mode):
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
-    # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
+    # Seed remote.yml for test-rust-tool and noop-full plugins (required by plugin_tests)
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "remote.yml")
     remote_yml_content = """tools:
   test-rust-tool:
     url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/test-rust-tool
+providers:
+  noop:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: providers/noop-full
 """
-    # Ensure .remote/ directory is clean before seeding (prevents stale git state)
-    remote_tools = os.path.join(OMNI_STACK_DIR, "plugins", "tools", ".remote")
-    if os.path.isdir(remote_tools):
-        subprocess.run(["rm", "-rf", remote_tools], capture_output=True)
+    # Ensure .remote/ directories are clean before seeding (prevents stale git state)
+    for subdir in ["tools", "providers"]:
+        remote_dir = os.path.join(OMNI_STACK_DIR, "plugins", subdir, ".remote")
+        if os.path.isdir(remote_dir):
+            subprocess.run(["rm", "-rf", remote_dir], capture_output=True)
     existing = ""
     if os.path.exists(remote_yml_path):
         r = subprocess.run(["cat", remote_yml_path], capture_output=True, text=True, timeout=10)
