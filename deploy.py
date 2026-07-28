@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -231,16 +232,12 @@ def generate_env(mode):
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
-    # Seed remote.yml for test-rust-tool and noop-full plugins (required by plugin_tests)
+    # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "remote.yml")
     remote_yml_content = """tools:
   test-rust-tool:
     url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/test-rust-tool
-providers:
-  noop:
-    url: https://github.com/nexuslbs/omni-plugins.git
-    path: providers/noop-full
 """
     # Ensure .remote/ directories are clean before seeding (prevents stale git state)
     for subdir in ["tools", "providers"]:
@@ -405,6 +402,31 @@ def deploy(mode):
         time.sleep(2)
 
     time.sleep(3)
+
+    # Step 8a: Register remote noop provider (needs omniagent running)
+    # so remote.yml has the entry needed by test_fn_9b (provider source-awareness).
+    # We call the install-git API instead of editing remote.yml directly — the API
+    # handles YAML serialization, .remote/ directory setup, and git clone properly.
+    print("[deploy] Registering remote noop provider...")
+    install_url = f"file://{REMOTE_REPO}"
+    req = urllib.request.Request(
+        "http://localhost:8080/api/plugins/install-git",
+        data=json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        r = urllib.request.urlopen(req, timeout=120)
+        resp = r.read()
+        msg = resp[:100] if len(resp) > 100 else resp
+        print(f"  [registered remote noop: {msg}]")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        if "already" in err_body.lower() or e.code in (409, 422):
+            print("  [remote noop already registered, skipping]")
+        else:
+            print(f"  [WARN: install-git failed (HTTP {e.code}): {err_body[:200]}]")
+    time.sleep(2)
 
     # Step 8b: Wait for dashboard to start serving (max 2 minutes)
     print("[deploy] Waiting for dashboard...")
