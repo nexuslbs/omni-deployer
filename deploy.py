@@ -461,25 +461,16 @@ def deploy(mode):
     # Step 9: Rust integration tests (api_tests, plugin_tests)
     run_rust_integration_tests(compose, mode)
 
-    # Step 10: Python integration tests (2 passes, with 1 retry on transient failure)
+    # Step 10: Python integration tests (2 passes, no retry — tests must be robust)
     for pass_num in [1, 2]:
-        for attempt in [1, 2]:
-            # Before each tests.py invocation, clean transient artifacts
-            # (plugins.yml, remote.yml) from the bind-mounted omni-stack
-            # directory so check_git_clean() never fails on retries.
-            r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; true")
-            print(f"\n{'=' * 60}")
-            print(f"  INTEGRATION TESTS — PASS {pass_num}" + (f" (retry {attempt})" if attempt > 1 else ""))
-            print(f"{'=' * 60}")
-            try:
-                run_tests(compose)
-                break  # success, move to next pass
-            except RuntimeError as e:
-                if attempt == 1:
-                    print(f"  ⚠ Tests failed on attempt {attempt}, retrying...")
-                    time.sleep(5)
-                else:
-                    raise  # re-raise on second failure
+        # Before each tests.py invocation, clean transient artifacts
+        # (plugins.yml, remote.yml) from the bind-mounted omni-stack
+        # directory so check_git_clean() never fails on retries.
+        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; true")
+        print(f"\n{'=' * 60}")
+        print(f"  INTEGRATION TESTS — PASS {pass_num}")
+        print(f"{'=' * 60}")
+        run_tests(compose)
 
     print(f"\n{'=' * 60}")
     print("  ALL TESTS PASSED")

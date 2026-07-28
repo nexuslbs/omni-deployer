@@ -2730,6 +2730,64 @@ def _mm_get_posts(base_url, channel_id, token):
     req = urllib.request.Request(f"{base_url}/api/v4/channels/{channel_id}/posts", method="GET", headers={"Authorization": f"Bearer {token}"})
     return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
+
+def _wait_for_mm_bot_online(base_url, token, timeout=30):
+    """Wait for the Mattermost bot (omnibot) to be online (websocket connected).
+
+    The omniagent Mattermost platform plugin binary connects to the Mattermost
+    websocket as the omnibot user. Mattermost marks the user as "online" when
+    the websocket is connected. Messages sent before this connection are
+    permanently lost (Mattermost does not replay missed websocket events).
+    """
+    import urllib.request
+    deadline = time.time() + timeout
+
+    # Get bot user_id via usernames API
+    try:
+        req = urllib.request.Request(
+            f"{base_url}/api/v4/users/usernames",
+            data=json.dumps(["omnibot"]).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+        )
+        users = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        bot_user_id = users[0]["id"]
+    except Exception as e:
+        print(f"  [bot user lookup: {e}]")
+        # Fall back to fetching all users and finding omnibot
+        req = urllib.request.Request(
+            f"{base_url}/api/v4/users",
+            method="GET",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        all_users = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        bot_user_id = None
+        for u in all_users:
+            if u.get("username") == "omnibot":
+                bot_user_id = u["id"]
+                break
+        assert bot_user_id, "Could not find omnibot user in Mattermost"
+
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/api/v4/users/{bot_user_id}/status",
+                method="GET",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            status = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            current_status = status.get("status", "unknown")
+            if current_status == "online":
+                print(f"  [mattermost bot online: status={current_status}]")
+                return
+            print(f"  [waiting for mattermost bot... status={current_status}]")
+        except Exception as e:
+            print(f"  [status check error: {e}]")
+        time.sleep(2)
+
+    assert False, f"Mattermost bot (omnibot) did not come online within {timeout}s"
+
+
 def test_mm9_e2e():
     """Full e2e test: mattermost setup -> noop provider response.
 
@@ -2865,6 +2923,11 @@ def test_mm9_e2e():
     token = _mm_login(MM, test_user, test_pass)
     print("[testuser logged in]")
 
+    # 8b. Wait for Mattermost bot websocket to be connected before sending
+    #     the first message. If the bot's websocket isn't connected, the
+    #     message is lost forever (Mattermost doesn't replay missed events).
+    _wait_for_mm_bot_online(MM, token)
+
     # 9. Send message via Mattermost API (using channel_id from setup)
     import uuid
     test_msg = f"E2E test from {test_user} [{uuid.uuid4().hex[:8]}]"
@@ -2977,8 +3040,12 @@ def test_fn_9b_provider_source_awareness():
         "Provider subprocess did not start within 40s"
     time.sleep(1)
 
-    # Login as testuser and send message
+    # Login as testuser (3 retries on transient Mattermost auth delays)
     token = _mm_login(MM, test_user, test_pass)
+
+    # Wait for Mattermost bot websocket (may have been disconnected by restart_agent)
+    _wait_for_mm_bot_online(MM, token)
+
     test_msg = f"Source test remote [{uuid.uuid4().hex[:8]}]"
     _mm_send_message(MM, mm_channel_id, token, test_msg)
     print("  [remote phase: message sent]")
@@ -3080,8 +3147,9 @@ def test_fn_9b_provider_source_awareness():
         "Provider subprocess did not start within 40s"
     time.sleep(1)
 
-    # Send message as testuser
+    # Send message as testuser (bot websocket may have been disconnected by restart_agent)
     token = _mm_login(MM, test_user, test_pass)
+    _wait_for_mm_bot_online(MM, token)
     test_msg = f"Source test bundled [{uuid.uuid4().hex[:8]}]"
     _mm_send_message(MM, mm_channel_id, token, test_msg)
     print("  [bundled phase: message sent]")
