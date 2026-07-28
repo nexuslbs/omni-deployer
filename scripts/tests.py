@@ -2690,15 +2690,13 @@ def test_mm9_e2e():
     print(f"[mattermost platform enabled]")
     print("[mattermost platform enabled]")
 
-    resp = api_post_body("/plugins/providers/bundled/noop/enable", {})
-    print(f"[noop enabled]")
-    print("[noop enabled]")
+    resp = api_post_body("/plugins/providers/built-in/noop-full/enable", {})
 
-    # 2. Check noop is available
-    r = urllib.request.urlopen(f"{BASE}/api/plugins/providers/bundled/noop", timeout=10)
+    # 2. Check noop-full is available
+    r = urllib.request.urlopen(f"{BASE}/api/plugins/providers/built-in/noop-full", timeout=10)
     nd = json.loads(r.read()).get("data", {})
-    assert nd.get("status") == "enabled", f"noop status={nd.get('status')}, expected enabled"
-    print(f"[noop status=enabled]")
+    assert nd.get("status") == "enabled", f"noop-full status={nd.get('status')}, expected enabled"
+    print(f"[noop-full status=enabled]")
 
     # 3. Ensure the access token secret exists (empty, to be filled by setup)
     # Create all mattermost secrets needed by the setup handler
@@ -2776,19 +2774,19 @@ def test_mm9_e2e():
         time.sleep(2)
     assert channel_id is not None, "No mattermost channel found in omniagent channels after setup"
 
-    # 7. Patch channel to use noop provider with test-model-1 (default echo model)
-    patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}", data=json.dumps({"current_provider": "noop", "current_model": "test-model-1"}).encode(), method="PATCH", headers={"Content-Type": "application/json"})
+    # 7. Patch channel to use noop-full provider with test-model-1 (default echo model)
+    patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}", data=json.dumps({"current_provider": "noop-full", "current_model": "test-model-1"}).encode(), method="PATCH", headers={"Content-Type": "application/json"})
     patch_resp = urllib.request.urlopen(patch_req, timeout=10)
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
-    print("[channel patched to noop/test-model-1]")
+    print("[channel patched to noop-full/test-model-1]")
 
     # Wait for provider to be actually ready before sending message.
     # The agent asynchronously starts provider subprocesses; we verify
     # the process is running rather than polling an endpoint that always
     # returns 200 regardless of provider state.
     print("[waiting for provider subprocess...]")
-    if not wait_for_provider_subprocess("noop", timeout=40):
-        print("[WARN: noop subprocess not found, continuing anyway]")
+    if not wait_for_provider_subprocess("noop-full", timeout=40):
+        print("[WARN: noop-full subprocess not found, continuing anyway]")
     time.sleep(1)
 
     # 8. Login as testuser (setup created this user with known password).
