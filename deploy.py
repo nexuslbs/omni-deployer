@@ -92,12 +92,14 @@ def run_pretests(mode):
     print("  PRETESTS")
     print("=" * 60)
 
-    if mode == "local" or mode == "hybrid":
-        # Build the dev image first (has cargo toolchain)
-        if mode == "hybrid":
-            print("\n[pretests] Building dev image for pretests...")
-        else:
-            print("\n[pretests] Building dev image...")
+    if mode == "hybrid":
+        # Hybrid: no separate pretests — the production Dockerfile's builder
+        # stage runs fmt, check, clippy, and unit tests during `docker build`.
+        print("\n[pretests] Skipping (run via production Dockerfile build)...")
+        return
+
+    if mode == "local":
+        print("\n[pretests] Building dev image...")
         run_compose_check(compose, "build", "omniagent", label="dev image")
 
         def run_cargo(args, label="", extra_env=None):
@@ -289,10 +291,19 @@ def deploy(mode):
             + r.stdout
         )
 
+    # ── Step 0 (hybrid): Stop old containers first ────────────────
+    if mode == "hybrid":
+        print("\n[deploy] Stopping old services...")
+        run_compose(compose, "down")
+        print("[deploy] Removing data volumes...")
+        for vol in ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]:
+            subprocess.run(["docker", "volume", "rm", "-f", f"omnideploy_{vol}"], capture_output=True)
+
     # ── Step 0: Pretests ───────────────────────────────────────────
     # Run fmt, clippy, unit tests, build test binaries BEFORE deploy.
     # In local mode, runs inside the dev container.
-    # In CI / hybrid mode, runs directly on the host runner.
+    # In CI mode, runs directly on the host runner.
+    # In hybrid mode, skipped — production Dockerfile handles them.
     run_pretests(mode)
 
     # Step 0b (hybrid): Build images like CI would
