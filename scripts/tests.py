@@ -443,31 +443,41 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
             pass
         time.sleep(2)
 
-    # Fallback: ps aux grep
-    deadline2 = time.time() + timeout
-    while time.time() < deadline2:
-        r = subprocess.run(
-            ["ps", "aux"], capture_output=True, text=True, timeout=5
-        )
-        if provider_name in r.stdout:
-            print(f"  [provider '{provider_name}' found via ps aux]")
-            return True
-        time.sleep(2)
+    # Fallback: ps aux grep (if available)
+    try:
+        subprocess.run(["ps", "--version"], capture_output=True, text=True, timeout=5)
+        has_ps = True
+    except FileNotFoundError:
+        has_ps = False
+
+    if has_ps:
+        deadline2 = time.time() + timeout
+        while time.time() < deadline2:
+            r = subprocess.run(
+                ["ps", "aux"], capture_output=True, text=True, timeout=5
+            )
+            if provider_name in r.stdout:
+                print(f"  [provider '{provider_name}' found via ps aux]")
+                return True
+            time.sleep(2)
 
     # ── Diagnostics on timeout ───────────────────────────────────────
     print(f"  [TIMEOUT waiting for provider '{provider_name}' subprocess]")
-    r = subprocess.run(
-        ["ps", "aux"], capture_output=True, text=True, timeout=5
-    )
-    lines = r.stdout.split("\n")
-    matches = [l for l in lines if provider_name.lower() in l.lower()]
-    total = len(lines)
-    if matches:
-        print(f"  [DIAG: {len(matches)} matching processes among {total} total]")
-        for m in matches[:5]:
-            print(f"    {m[:200]}")
-    else:
-        print(f"  [DIAG: no process matching '{provider_name}' among {total} total processes]")
+    try:
+        r = subprocess.run(
+            ["ps", "aux"], capture_output=True, text=True, timeout=5
+        )
+        lines = r.stdout.split("\n")
+        matches = [l for l in lines if provider_name.lower() in l.lower()]
+        total = len(lines)
+        if matches:
+            print(f"  [DIAG: {len(matches)} matching processes among {total} total]")
+            for m in matches[:5]:
+                print(f"    {m[:200]}")
+        else:
+            print(f"  [DIAG: no process matching '{provider_name}' among {total} total processes]")
+    except FileNotFoundError:
+        print("  [DIAG: ps not available in container]")
     return False
 
 # ═══════════════════════════════════════════════════════════════════════
