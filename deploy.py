@@ -280,6 +280,7 @@ def deploy(mode):
     sh("cd /opt/workspace/omni-stack && "
        "git checkout HEAD -- plugins.yml remote.yml actions.yml 2>/dev/null; "
        "sudo rm -rf plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
+       "git checkout HEAD -- plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
        "true")
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     if r.stdout.strip():
