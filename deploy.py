@@ -258,7 +258,7 @@ providers:
         tmp.write(remote_yml_content)
         tmp_path = tmp.name
         tmp.close()
-        subprocess.run(["cp", tmp_path, remote_yml_path], check=True)
+        subprocess.run(["sudo", "cp", tmp_path, remote_yml_path], check=True)
         os.unlink(tmp_path)
         print(f"[deploy] Seeded {remote_yml_path}")
     else:
