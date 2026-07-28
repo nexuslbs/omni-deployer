@@ -2875,19 +2875,40 @@ def test_mm9_e2e():
     #     The binary was started at step 1 (enable) with an empty MATTERMOST_ACCESS_TOKEN,
     #     so it failed to authenticate. After setup set the real token, we must restart
     #     the platform so the binary reads the correct token.
+    #     We kill the binary directly because the disable/enable API may not actually
+    #     terminate the running process; the agent auto-restarts killed subprocesses
+    #     when the platform is enabled.
     print("[restarting mattermost platform for new bot token...]")
-    api_post_body("/plugins/platforms/built-in/mattermost/disable", {})
-    time.sleep(1)
-    api_post_body("/plugins/platforms/built-in/mattermost/enable", {})
-    # Wait for the re-enabled platform to start before continuing
-    for _ in range(15):
-        try:
-            r = urllib.request.urlopen(f"{BASE}/api/plugins/platforms/built-in/mattermost", timeout=5)
-            if r.status == 200:
-                break
-        except Exception:
-            pass
+    import subprocess as _sp
+    _sp.run(["pkill", "-f", "mattermost-platform"], capture_output=True, timeout=5)
+    time.sleep(3)
+    # The agent should have auto-restarted the binary. If not, re-enable the platform.
+    # Wait for the binary to be running before continuing.
+    def _find_mm_pid():
+        r = _sp.run(["pgrep", "-f", "mattermost-platform"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip().split()[0]
+        return None
+    for _ in range(30):
+        pid = _find_mm_pid()
+        if pid:
+            print(f"  [mattermost platform binary running (PID: {pid})]")
+            break
         time.sleep(1)
+    else:
+        # Binary didn't restart — force it via re-enable
+        print("  [binary did not auto-restart, re-enabling platform...]")
+        api_post_body("/plugins/platforms/built-in/mattermost/disable", {})
+        time.sleep(1)
+        api_post_body("/plugins/platforms/built-in/mattermost/enable", {})
+        for _ in range(30):
+            pid = _find_mm_pid()
+            if pid:
+                print(f"  [mattermost platform binary running (PID: {pid})]")
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("Mattermost platform binary did not start after restart")
 
     # 5c. Ensure prompt plugin is enabled
     resp = api_post_body("/plugins/tools/built-in/prompt/enable", {})
