@@ -150,10 +150,19 @@ def get_json(path):
     import urllib.request, json
     try:
         r = urllib.request.urlopen(f"{BASE}{path}", timeout=10)
-        return json.loads(r.read())
+        raw = json.loads(r.read())
+        # Response may be a list (actions, mcp/tools) or dict with/without 'data' key
+        return raw
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="replace")
         raise AssertionError(f"GET {path} failed (HTTP {e.code}): {raw}")
+
+def get_data(path):
+    """GET and extract the data payload, handling list/dict responses uniformly."""
+    raw = get_json(path)
+    if isinstance(raw, list):
+        return raw
+    return raw.get("data", raw)
 
 def post_json(path, body=None):
     """POST without /api prefix — for root-level CRUD routes."""
@@ -5213,8 +5222,7 @@ test(test_20_1_health)
 
 def test_20_2_channels():
     """Verify GET /channels returns channel list."""
-    d = get_json("/channels")
-    ch = d.get("data", d)
+    ch = get_data("/channels")
     assert isinstance(ch, list), f"Expected list, got {type(ch)}"
     print(f"✓ Channels: {len(ch)} found")
     if ch:
@@ -5227,7 +5235,7 @@ test(test_20_2_channels)
 def test_20_3_threads():
     """Verify GET /threads returns thread list."""
     d = get_json("/threads")
-    rows = d.get("data", {}).get("rows", []) if isinstance(d.get("data"), dict) else d.get("data", [])
+    rows = d.get("data", {}).get("rows", []) if isinstance(d.get("data"), dict) else (d if isinstance(d, list) else d.get("data", []))
     if not isinstance(rows, list): rows = []
     print(f"✓ Threads: {len(rows)} found")
     if rows:
@@ -5240,7 +5248,7 @@ test(test_20_3_threads)
 def test_20_4_messages():
     """Verify GET /messages/events returns messages."""
     d = get_json("/messages/events?limit=5")
-    rows = d.get("data", {}).get("rows", []) if isinstance(d.get("data"), dict) else d.get("data", [])
+    rows = d.get("data", {}).get("rows", []) if isinstance(d.get("data"), dict) else (d if isinstance(d, list) else d.get("data", []))
     if not isinstance(rows, list): rows = []
     print(f"✓ Messages: {len(rows)} found")
     if rows:
@@ -5252,12 +5260,11 @@ test(test_20_4_messages)
 
 def test_20_5_overview():
     """Verify GET /overview returns system stats."""
-    d = get_json("/overview")
-    o = d.get("data", d)
-    print(f"✓ Overview keys: {list(o.keys())[:10]}")
+    d = get_data("/overview")
+    print(f"✓ Overview keys: {list(d.keys())[:10]}")
     for key in ["threads", "messages", "channels", "providers"]:
-        assert key in o, f"Missing '{key}': {list(o.keys())}"
-        print(f"  {key}: {o[key]}")
+        assert key in d, f"Missing '{key}': {list(d.keys())}"
+        print(f"  {key}: {d[key]}")
 
 test(test_20_5_overview)
 
@@ -5266,13 +5273,22 @@ test(test_20_5_overview)
 def test_20_6_settings():
     """Verify GET/PUT /settings round-trip."""
     d = get_json("/settings")
-    s = d.get("data", d)
-    orig = s.get("default_provider")
-    put_json("/settings", {"default_provider": "test-provider"})
-    d2 = get_json("/settings")
-    s2 = d2.get("data", d2)
+    # Settings response has 'categories' key, not 'data'
+    s = d if isinstance(d, dict) and "default_provider" in d else (d.get("data", d) if isinstance(d, dict) else {})
+    # Flatten categories to find default_provider
+    if "categories" in d:
+        import itertools
+        cats = d["categories"]
+        all_settings = {}
+        for cat in cats.values() if isinstance(cats, dict) else (cats if isinstance(cats, list) else []):
+            if isinstance(cat, dict):
+                all_settings.update(cat)
+        s = all_settings
+    orig = s.get("default_provider", "openai")
+    # PUT expects {"updates": {"default_provider": "test"}}
+    put_json("/settings", {"updates": {"default_provider": "test-provider"}})
     print(f"✓ Updated default_provider to test-provider")
-    put_json("/settings", {"default_provider": orig})
+    put_json("/settings", {"updates": {"default_provider": orig}})
     print(f"✓ Restored to {orig}")
 
 test(test_20_6_settings)
@@ -5294,8 +5310,7 @@ def test_20_7_kanban_crud():
 
     try:
         get_json(f"/kanban/tasks/{tid}")
-        list_r = get_json("/kanban/tasks")
-        tasks = list_r.get("data", list_r)
+        tasks = get_data("/kanban/tasks")
         if isinstance(tasks, list):
             print(f"✓ Tasks list: {len(tasks)} total")
     finally:
@@ -5320,8 +5335,7 @@ def test_20_8_schedule_crud():
     print(f"✓ Created schedule: id={sid}")
     try:
         get_json(f"/schedule/{sid}")
-        list_r = get_json("/schedule")
-        scheds = list_r.get("data", list_r)
+        scheds = get_data("/schedule")
         if isinstance(scheds, list):
             print(f"✓ Schedule list: {len(scheds)} total")
     finally:
@@ -5339,8 +5353,7 @@ def test_20_9_secrets_crud():
     print(f"✓ Created secret")
     try:
         get_json(f"/secrets/{name}")
-        list_r = get_json("/secrets")
-        s_list = list_r.get("data", list_r)
+        s_list = get_data("/secrets")
         if isinstance(s_list, list):
             names = [s.get("name") for s in s_list]
             assert name in names, f"'{name}' not in list: {names}"
@@ -5361,8 +5374,7 @@ def test_20_10_actions_crud():
     import uuid
     name = f"test-act-{uuid.uuid4().hex[:8]}"
     
-    list_r = get_json("/actions")
-    acts = list_r.get("data", list_r)
+    acts = get_data("/actions")
     if isinstance(acts, list):
         print(f"✓ Actions list: {len(acts)} total")
 
@@ -5384,8 +5396,7 @@ test(test_20_10_actions_crud)
 
 def test_20_11_platforms():
     """Verify GET /platforms returns platform list."""
-    d = get_json("/platforms")
-    p = d.get("data", d)
+    p = get_data("/platforms")
     if isinstance(p, list):
         print(f"✓ Platforms: {len(p)} found")
         for pl in p[:3]:
@@ -5401,8 +5412,7 @@ test(test_20_11_platforms)
 
 def test_20_12_mcp_tools():
     """Verify GET /mcp/tools returns tool list."""
-    d = get_json("/mcp/tools")
-    t = d.get("data", d)
+    t = get_data("/mcp/tools")
     n = len(t) if isinstance(t, list) else (len(t.keys()) if isinstance(t, dict) else 0)
     print(f"✓ MCP tools: {n} total")
 
@@ -5412,8 +5422,7 @@ test(test_20_12_mcp_tools)
 
 def test_20_13_memory():
     """Verify GET /memory/stats returns memory statistics."""
-    d = get_json("/memory/stats")
-    s = d.get("data", d)
+    s = get_data("/memory/stats")
     print(f"✓ Memory stats keys: {list(s.keys())[:6]}")
 
 test(test_20_13_memory)
@@ -5431,13 +5440,12 @@ test(test_20_14_plugins_ping)
 
 def test_20_15_threads_list():
     """Verify GET /threads list has valid structure."""
-    d = get_json("/threads")
-    data = d.get("data", d)
-    rows = data.get("rows", data) if isinstance(data, dict) else data
+    thread_data = get_data("/threads")
+    rows = thread_data.get("rows", thread_data) if isinstance(thread_data, dict) else thread_data
     if isinstance(rows, list):
         print(f"✓ Threads list: {len(rows)} rows")
     else:
-        print(f"✓ Threads response: type={type(data).__name__}")
+        print(f"✓ Threads response: type={type(thread_data).__name__}")
 
 test(test_20_15_threads_list)
 
