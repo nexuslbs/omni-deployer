@@ -278,9 +278,8 @@ def deploy(mode):
     #   - actions.yml (dynamic action registration during tests)
     #   - any .remote/ directories (git clones for remote plugin tests)
     sh("cd /opt/workspace/omni-stack && "
-       "git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; "
+       "git checkout HEAD -- plugins.yml remote.yml actions.yml 2>/dev/null; "
        "rm -rf plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
-       "rm -f actions.yml 2>/dev/null; "
        "true")
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     if r.stdout.strip():
