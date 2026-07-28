@@ -409,23 +409,40 @@ def deploy(mode):
     # handles YAML serialization, .remote/ directory setup, and git clone properly.
     print("[deploy] Registering remote noop provider...")
     install_url = f"file://{REMOTE_REPO}"
-    req = urllib.request.Request(
-        "http://localhost:8080/api/plugins/install-git",
-        data=json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"}).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        r = urllib.request.urlopen(req, timeout=120)
-        resp = r.read()
-        msg = resp[:100] if len(resp) > 100 else resp
-        print(f"  [registered remote noop: {msg}]")
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        if "already" in err_body.lower() or e.code in (409, 422):
-            print("  [remote noop already registered, skipping]")
-        else:
-            print(f"  [WARN: install-git failed (HTTP {e.code}): {err_body[:200]}]")
+    payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"}).encode()
+    noop_registered = False
+    for attempt in range(20):
+        try:
+            r = urllib.request.urlopen(
+                urllib.request.Request(
+                    "http://localhost:8080/api/plugins/install-git",
+                    data=payload,
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                ),
+                timeout=120,
+            )
+            resp = r.read()
+            msg = resp[:100] if len(resp) > 100 else resp
+            print(f"  [registered remote noop: {msg}]")
+            noop_registered = True
+            break
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            if "already" in err_body.lower() or e.code in (409, 422):
+                print("  [remote noop already registered, skipping]")
+                noop_registered = True
+                break
+            else:
+                print(f"  [attempt {attempt + 1}/20: install-git failed (HTTP {e.code}): {err_body[:100]}]")
+        except urllib.error.URLError as e:
+            if attempt == 0:
+                print(f"  [waiting for API ready...]", end="", flush=True)
+            print(".", end="", flush=True)
+        time.sleep(3)
+    if not noop_registered:
+        raise RuntimeError("Failed to register remote noop provider via install-git API")
+    print()
     time.sleep(2)
 
     # Step 8b: Wait for dashboard to start serving (max 2 minutes)
