@@ -2879,7 +2879,7 @@ def test_mm9_e2e():
         posts = _mm_get_posts(MM, mm_channel_id, token)
         for pid, post in posts.get("posts", {}).items():
             msg = post.get("message", "")
-            if msg.startswith("This is a reply to your message"):
+            if msg.startswith("This is a reply from the **noop"):
                 print(f"[reply: {msg[:100]}...]")
                 assert "noop" in msg.lower(), f"Missing noop provider mention: {msg[:100]}"
                 print("[e2e test PASSED]")
@@ -2980,9 +2980,6 @@ def test_fn_9b_provider_source_awareness():
 
     # Login as testuser (3 retries on transient Mattermost auth delays)
     token = _mm_login(MM, test_user, test_pass)
-
-    # Wait for Mattermost bot websocket (may have been disconnected by restart_agent)
-    _wait_for_mm_bot_online(MM, token)
 
     test_msg = f"Source test remote [{uuid.uuid4().hex[:8]}]"
     _mm_send_message(MM, mm_channel_id, token, test_msg)
@@ -3085,9 +3082,8 @@ def test_fn_9b_provider_source_awareness():
         "Provider subprocess did not start within 40s"
     time.sleep(1)
 
-    # Send message as testuser (bot websocket may have been disconnected by restart_agent)
+    # Send message as testuser
     token = _mm_login(MM, test_user, test_pass)
-    _wait_for_mm_bot_online(MM, token)
     test_msg = f"Source test bundled [{uuid.uuid4().hex[:8]}]"
     _mm_send_message(MM, mm_channel_id, token, test_msg)
     print("  [bundled phase: message sent]")
