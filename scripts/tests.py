@@ -3076,7 +3076,7 @@ def test_fn_9b_provider_source_awareness():
 
     # Wait for provider subprocess before sending message
     print("  [waiting for provider subprocess...]")
-    assert wait_for_provider_subprocess("noop", timeout=40, source=""), \
+    assert wait_for_provider_subprocess("noop", timeout=40), \
         "Provider subprocess did not start within 40s"
     time.sleep(1)
 
