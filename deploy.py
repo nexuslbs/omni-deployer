@@ -271,14 +271,22 @@ def deploy(mode):
     # The stack dir is bind-mounted into the container. Any files the
     # container writes (remote.yml, plugins.yml, etc.) persist on the
     # host. This catches unintended state leaks before they accumulate.
-    # Auto-revert known transient test artifacts.
-    sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; rm -rf /opt/workspace/omni-stack/plugins/tools/ 2>/dev/null; true")
+    # Auto-revert ALL known transient test artifacts:
+    #   - plugins.yml, remote.yml (YAML state written by plugin API)
+    #   - plugins/tools/, plugins/platforms/, plugins/providers/
+    #     (test scripts may copytree() bundled plugins into these dirs)
+    #   - actions.yml (dynamic action registration during tests)
+    #   - any .remote/ directories (git clones for remote plugin tests)
+    sh("cd /opt/workspace/omni-stack && "
+       "git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; "
+       "rm -rf plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
+       "rm -f actions.yml 2>/dev/null; "
+       "true")
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     if r.stdout.strip():
         raise RuntimeError(
-            "Unstaged changes detected in omni-stack. These were likely written "
-            "by a previous deploy's container via bind-mount. Review and commit "
-            "or revert them before re-deploying.\n"
+            "Unstaged changes detected in omni-stack after auto-cleanup. "
+            "Review and commit or revert them before re-deploying.\n"
             + r.stdout
         )
 

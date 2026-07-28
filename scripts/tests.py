@@ -492,8 +492,14 @@ def restart_agent():
 def wait_for_provider_subprocess(provider_name, timeout=30):
     """Wait for a provider subprocess to appear in the process list.
 
-    Uses pgrep to check for a process whose command line contains the
-    provider name.  Falls back to ``ps aux`` if pgrep is unavailable.
+    Uses pgrep to find candidate PIDs, then filters by verifying the
+    process's /proc/PID/cmdline actually references the provider's
+    plugin directory (``/plugins/providers/{name}/`` or
+    ``/plugins/providers/{name}``).  This avoids false positives from
+    ``pgrep -f`` which matches the provider name in API URL arguments
+    (e.g. ``curl ... /bundled/noop/enable``) or the test runner itself.
+
+    Falls back to ``ps aux`` if pgrep is unavailable.
     Prints diagnostics on timeout so we can see whether the provider
     process ever started.
     """
@@ -505,12 +511,25 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
                 capture_output=True, text=True, timeout=5,
             )
             if r.returncode == 0 and r.stdout.strip():
-                pids = r.stdout.strip().split()
-                print(
-                    f"  [provider '{provider_name}' subprocess running"
-                    f" ({len(pids)} PID(s): {', '.join(pids)})]"
-                )
-                return True
+                # Filter: only keep PIDs whose command line references
+                # the provider's plugin directory (filters out curl/sh
+                # processes that include the name in URL arguments).
+                real_pids = []
+                for pid_text in r.stdout.strip().split():
+                    try:
+                        cmdline = open(f"/proc/{pid_text}/cmdline", "rb").read()
+                        cmdline_str = cmdline.decode("utf-8", errors="replace").replace("\0", " ")
+                        # Must reference the plugin directory, not just API URL
+                        if f"/plugins/providers/{provider_name}" in cmdline_str:
+                            real_pids.append(pid_text)
+                    except (OSError, IOError):
+                        pass  # process may have exited between pgrep and read
+                if real_pids:
+                    print(
+                        f"  [provider '{provider_name}' subprocess running"
+                        f" ({len(real_pids)} PID(s): {', '.join(real_pids)})]"
+                    )
+                    return True
         except FileNotFoundError:
             # pgrep not available — fall through to ps aux fallback below
             break
