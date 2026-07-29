@@ -4939,8 +4939,11 @@ def test_fn_18_platform_multi_source():
         elif lang == "JS":
             binary_path = f"{src_dir}/server.js"
         elif lang == "Rust":
-            # The install API compiled the Rust binary at the .remote/ location
-            binary_path = f"{WORKSPACE}/plugins/platforms/.remote/{plat_name}/target/release/test-rust-platform"
+            # The install API compiled the Rust binary at the .remote/ location.
+            # install-git clones the entire monorepo to .remote/{name}/, then
+            # selects {plugin_type}/{name} as the sub-path, so the full path is:
+            # .remote/{name}/{plugin_type}/{name}/target/release/{binary}
+            binary_path = f"{WORKSPACE}/plugins/platforms/.remote/{plat_name}/platforms/{plat_name}/target/release/test-rust-platform"
         else:
             binary_path = ""
 
