@@ -158,7 +158,7 @@ def start_stack():
     # Tear down any existing omnistable stack first
     sh(f"docker compose -f {compose_file} --env-file {ENV_PATH} -p omnistable down -v 2>&1 >/dev/null")
     # Start fresh
-    r = sh(f"docker compose -f {compose_file} --env-file {ENV_PATH} -p omnistable up -d --pull missing 2>&1")
+    r = sh(f"docker compose -f {compose_file} --env-file {ENV_PATH} -p omnistable up -d --pull always 2>&1")
     output = r.stdout or r.stderr or ""
     # Filter out warnings from output for display
     clean_lines = [l for l in output.split("\n") if "level=warning" not in l and l.strip()]
