@@ -384,7 +384,7 @@ jobs:
             echo "[$pkg] setting visibility to public..."
             ENCODED="${pkg//\//%2F}"
             RESP=$(curl -s -X PATCH \
-              -H "Authorization: Bearer *** secrets.GH_PAT }}" \
+              -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/json" \
               -d '{"visibility": "public"}' \
