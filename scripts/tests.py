@@ -436,7 +436,11 @@ def ensure_remote_plugin(name, plugin_type="tools"):
     registers in remote.yml through Rust's save_remote_plugin (proper 
     YAML serialization). Does NOT touch .remote/ directly.
     """
-    url = f"file://{REMOTE_REPO}"
+    # Use GitHub URL as default (works in CI/hybrid where bind mounts
+    # may not resolve). Fall back to local file:// for offline dev.
+    url = "https://github.com/nexuslbs/omni-plugins.git"
+    if os.path.exists(REMOTE_REPO):
+        url = f"file://{REMOTE_REPO}"
     try:
         resp = api_post_body("/plugins/install-git", {
             "url": url,
@@ -2257,8 +2261,11 @@ def ensure_remote_yaml_entry(name, ptype="tools"):
     serialization. Requires the server to be running.
     """
     if not remote_yml_has(name, ptype):
+        url = "https://github.com/nexuslbs/omni-plugins.git"
+        if os.path.exists(REMOTE_REPO):
+            url = f"file://{REMOTE_REPO}"
         api_post_body("/plugins/install-git", {
-            "url": f"file://{REMOTE_REPO}",
+            "url": url,
             "name": name,
             "path": f"{ptype}/{name}"
         }, timeout=60)
@@ -2936,8 +2943,11 @@ def test_fn_9b_provider_source_awareness():
 
     # Register noop-full from omni-plugins as remote "noop"
     try:
+        url = "https://github.com/nexuslbs/omni-plugins.git"
+        if os.path.exists(REMOTE_REPO):
+            url = f"file://{REMOTE_REPO}"
         resp = api_post_body("/plugins/install-git", {
-            "url": f"file://{REMOTE_REPO}",
+            "url": url,
             "name": "noop",
             "path": "providers/noop-full"
         }, timeout=60)

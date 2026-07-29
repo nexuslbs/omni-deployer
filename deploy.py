@@ -424,7 +424,11 @@ def deploy(mode):
     # We call the install-git API instead of editing remote.yml directly — the API
     # handles YAML serialization, .remote/ directory setup, and git clone properly.
     print("[deploy] Registering remote noop provider...")
-    install_url = f"file://{REMOTE_REPO}"
+    # Use GitHub URL as default (works everywhere). Fall back to local file://
+    # for offline dev environments where the workspace is bind-mounted.
+    install_url = "https://github.com/nexuslbs/omni-plugins.git"
+    if os.path.isdir(REMOTE_REPO):
+        install_url = f"file://{REMOTE_REPO}"
     payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"})
     noop_registered = False
     for attempt in range(20):
