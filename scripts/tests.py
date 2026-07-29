@@ -4933,24 +4933,10 @@ def test_fn_18_platform_multi_source():
         elif lang == "JS":
             cmd = ["node", f"{src_dir}/server.js"]
         elif lang == "Rust":
-            rust_binary = f"{src_dir}/target/release/test-rust-platform"
-            if not os.path.exists(rust_binary):
-                print(f"  [building Rust platform binary (--release)...]")
-                build = subprocess.run(
-                    ["cargo", "build", "--release", "--manifest-path", f"{src_dir}/Cargo.toml"],
-                    capture_output=True, text=True, timeout=300
-                )
-                if build.returncode != 0:
-                    print(f"  [release build failed, trying debug build: {build.stderr[-200:]}]")
-                    build = subprocess.run(
-                        ["cargo", "build", "--manifest-path", f"{src_dir}/Cargo.toml"],
-                        capture_output=True, text=True, timeout=300
-                    )
-                    rust_binary = f"{src_dir}/target/debug/test-rust-platform"
-                assert os.path.exists(rust_binary), \
-                    f"Rust build failed: {build.stderr[-500:] if build.stderr else 'unknown error'}"
-                print(f"  [Rust binary ready: {rust_binary}]")
-            cmd = [rust_binary]
+            # The enable API in Phase 2 already compiled the binary at the
+            # bundled location. Use that path instead of the source repo's
+            # target/ (which doesn't exist in a fresh checkout).
+            cmd = [f"{tgt_dir}/target/release/test-rust-platform"]
         else:
             cmd = []
 
