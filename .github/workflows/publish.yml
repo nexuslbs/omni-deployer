@@ -377,18 +377,3 @@ jobs:
           for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'ghcr.io/nexuslbs/omni-deployer/toolbox'); do
             docker push "$tag"
           done
-
-      - name: Set packages public
-        run: |
-          for pkg in omni-deployer/omniagent omni-deployer/dashboard omni-deployer/toolbox; do
-            echo "[$pkg] setting visibility to public..."
-            ENCODED="${pkg//\//%2F}"
-            RESP=$(curl -s -X PATCH \
-              -H "Authorization: Bearer *** secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "Content-Type: application/json" \
-              -d '{"visibility": "public"}' \
-              "https://api.github.com/orgs/nexuslbs/packages/container/${ENCODED}/visibility")
-            echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); vis=d.get('visibility','?'); assert vis=='public', f'visibility is {vis}, not public'; print(f'OK: {vis}')" || { echo "FAILED: $RESP"; exit 1; }
-          done
-
