@@ -426,20 +426,33 @@ def deploy(mode):
     print("[deploy] Registering remote noop provider...")
     # Use GitHub URL as default (works everywhere). Fall back to local file://
     # for offline dev environments where the workspace is bind-mounted.
+    # IMPORTANT: file:// URL must use the CONTAINER path, not the host path.
+    # The docker-compose mounts ${WORKSPACE_DIR} to /opt/workspace inside the
+    # container, so the repo is always at /opt/workspace/omni-plugins there.
+    CONTAINER_REMOTE = "/opt/workspace/omni-plugins"
     install_url = "https://github.com/nexuslbs/omni-plugins.git"
     if os.path.isdir(REMOTE_REPO):
-        install_url = f"file://{REMOTE_REPO}"
+        install_url = f"file://{CONTAINER_REMOTE}"
     payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"})
     noop_registered = False
     for attempt in range(20):
         r = run_compose(compose, "exec", "-T", "omniagent",
-                        "curl", "-sS", "-X", "POST",
+                        "curl", "-sSf", "-X", "POST",
                         "-H", "Content-Type: application/json",
                         "-d", payload,
                         "http://localhost:8080/api/plugins/install-git")
         if r.returncode == 0:
-            msg = r.stdout[:100] if len(r.stdout) > 100 else r.stdout
-            print(f"  [registered remote noop: {msg}]")
+            # Verify the response actually indicates success, not an error message
+            # (curl -sSf ensures HTTP errors exit non-zero, but the API may return
+            # HTTP 200 with an error body when git operations fail).
+            resp_text = r.stdout.strip()
+            try:
+                resp_data = json.loads(resp_text) if resp_text else {}
+                if resp_data.get("error"):
+                    raise RuntimeError(f"API returned error: {resp_data['error'][:200]}")
+            except json.JSONDecodeError:
+                pass  # non-JSON response from install-git is unusual but not fatal
+            print(f"  [registered remote noop: {resp_text[:120]}]")
             noop_registered = True
             break
         else:
