@@ -435,24 +435,39 @@ def ensure_remote_plugin(name, plugin_type="tools"):
     Uses the omniagent API which clones from the local git repo and 
     registers in remote.yml through Rust's save_remote_plugin (proper 
     YAML serialization). Does NOT touch .remote/ directly.
+    
+    Falls back from file:// to HTTPS URL after the first failure
+    to handle CI/hybrid environments where bind mounts may not resolve.
     """
-    # Use GitHub URL as default (works in CI/hybrid where bind mounts
-    # may not resolve). Fall back to local file:// for offline dev.
-    url = "https://github.com/nexuslbs/omni-plugins.git"
-    if os.path.exists(REMOTE_REPO):
-        url = f"file://{REMOTE_REPO}"
-    try:
-        resp = api_post_body("/plugins/install-git", {
-            "url": url,
-            "name": name,
-            "path": f"{plugin_type}/{name}"
-        }, timeout=120)
-        print(f"  [ensure_remote_plugin: registered '{name}' via install-git API]")
-    except Exception as e:
-        err = str(e).lower()
-        if "already" in err:
-            print(f"  [ensure_remote_plugin: '{name}' already registered, skipping]")
-        else:
+    # Prefer container-local file:// URL (fast, offline, no auth).
+    # Fall back to HTTPS for CI environments where the repo may not
+    # be bind-mounted (/opt/workspace/omni-plugins must resolve inside
+    # the container, which only works when the workspace is mounted).
+    CONTAINER_REMOTE = "/opt/workspace/omni-plugins"
+    HTTPS_URL = "https://github.com/nexuslbs/omni-plugins.git"
+    candidates = [HTTPS_URL]
+    if os.path.exists(f"{CONTAINER_REMOTE}/.git" if os.name != 'nt' else CONTAINER_REMOTE):
+        candidates.insert(0, f"file://{CONTAINER_REMOTE}")
+    install_url = candidates[0]
+    for attempt in range(2):
+        try:
+            resp = api_post_body("/plugins/install-git", {
+                "url": install_url,
+                "name": name,
+                "path": f"{plugin_type}/{name}"
+            }, timeout=120)
+            print(f"  [ensure_remote_plugin: registered '{name}' via install-git API]")
+            return
+        except AssertionError as e:
+            err = str(e).lower()
+            if "already" in err:
+                print(f"  [ensure_remote_plugin: '{name}' already registered, skipping]")
+                return
+            # Try next URL candidate on first failure
+            if attempt == 0 and len(candidates) > 1:
+                print(f"  [ensure_remote_plugin: {install_url} failed, falling back to HTTPS...]")
+                install_url = candidates[1]
+                continue
             print(f"  [ensure_remote_plugin: install-git failed: {e}]")
             raise
 
@@ -2261,14 +2276,21 @@ def ensure_remote_yaml_entry(name, ptype="tools"):
     serialization. Requires the server to be running.
     """
     if not remote_yml_has(name, ptype):
-        url = "https://github.com/nexuslbs/omni-plugins.git"
-        if os.path.exists(REMOTE_REPO):
-            url = f"file://{REMOTE_REPO}"
-        api_post_body("/plugins/install-git", {
-            "url": url,
-            "name": name,
-            "path": f"{ptype}/{name}"
-        }, timeout=60)
+        for url in [
+            f"file:///opt/workspace/omni-plugins",
+            "https://github.com/nexuslbs/omni-plugins.git",
+        ]:
+            try:
+                api_post_body("/plugins/install-git", {
+                    "url": url,
+                    "name": name,
+                    "path": f"{ptype}/{name}"
+                }, timeout=60)
+                return
+            except AssertionError:
+                if url == "https://github.com/nexuslbs/omni-plugins.git":
+                    raise  # both URLs exhausted
+                continue
 
 
 def test_t6_collision_enable_bundled():
@@ -2942,22 +2964,29 @@ def test_fn_9b_provider_source_awareness():
     time.sleep(2)
 
     # Register noop-full from omni-plugins as remote "noop"
-    try:
-        url = "https://github.com/nexuslbs/omni-plugins.git"
-        if os.path.exists(REMOTE_REPO):
-            url = f"file://{REMOTE_REPO}"
-        resp = api_post_body("/plugins/install-git", {
-            "url": url,
-            "name": "noop",
-            "path": "providers/noop-full"
-        }, timeout=60)
-        print(f"  [registered remote noop: {resp}]")
-    except AssertionError as e:
-        err_str = str(e).lower()
-        if "already" in err_str or "409" in err_str or "422" in err_str:
-            print("  [remote noop already registered]")
-        else:
-            raise
+    for attempt in range(2):
+        for candidate_url in [
+            f"file:///opt/workspace/omni-plugins",
+            "https://github.com/nexuslbs/omni-plugins.git",
+        ]:
+            try:
+                resp = api_post_body("/plugins/install-git", {
+                    "url": candidate_url if attempt == 0 else "https://github.com/nexuslbs/omni-plugins.git",
+                    "name": "noop",
+                    "path": "providers/noop-full"
+                }, timeout=60)
+                print(f"  [registered remote noop: {resp}]")
+                break
+            except AssertionError as e:
+                err_str = str(e).lower()
+                if "already" in err_str or "409" in err_str or "422" in err_str:
+                    print("  [remote noop already registered]")
+                    break
+                if candidate_url == "https://github.com/nexuslbs/omni-plugins.git":
+                    raise  # both URLs exhausted
+                print(f"  [file:// failed, retrying with HTTPS...]")
+                continue
+        break
 
     # Enable remote "noop" provider
     resp = api_post_body("/plugins/providers/remote/noop/enable", {})

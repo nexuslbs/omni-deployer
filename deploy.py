@@ -421,37 +421,41 @@ def deploy(mode):
 
     # Step 8a: Register remote noop provider (needs omniagent running)
     # so remote.yml has the entry needed by test_fn_9b (provider source-awareness).
-    # We call the install-git API instead of editing remote.yml directly — the API
-    # handles YAML serialization, .remote/ directory setup, and git clone properly.
     print("[deploy] Registering remote noop provider...")
-    # Use GitHub URL as default (works everywhere). Fall back to local file://
-    # for offline dev environments where the workspace is bind-mounted.
-    # IMPORTANT: file:// URL must use the CONTAINER path, not the host path.
-    # The docker-compose mounts ${WORKSPACE_DIR} to /opt/workspace inside the
-    # container, so the repo is always at /opt/workspace/omni-plugins there.
+    # Three-phase strategy:
+    #   1. file:// with container path (works when bind-mount resolves)
+    #   2. HTTPS GitHub URL (works everywhere, requires internet)
+    #   3. Retry the working URL until success or deadline
+    # This handles CI, hybrid, and offline dev environments robustly.
     CONTAINER_REMOTE = "/opt/workspace/omni-plugins"
-    install_url = "https://github.com/nexuslbs/omni-plugins.git"
+    HTTPS_URL = "https://github.com/nexuslbs/omni-plugins.git"
+    # Start with file:// if the repo exists on host, else go straight to HTTPS
+    candidates = []
     if os.path.isdir(REMOTE_REPO):
-        install_url = f"file://{CONTAINER_REMOTE}"
-    payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"})
+        candidates.append(f"file://{CONTAINER_REMOTE}")
+    candidates.append(HTTPS_URL)
     noop_registered = False
-    for attempt in range(20):
+    install_url = candidates[0]
+    for attempt in range(30):
+        payload = json.dumps({"url": install_url, "name": "noop", "path": "providers/noop-full"})
         r = run_compose(compose, "exec", "-T", "omniagent",
                         "curl", "-sSf", "-X", "POST",
                         "-H", "Content-Type: application/json",
                         "-d", payload,
                         "http://localhost:8080/api/plugins/install-git")
         if r.returncode == 0:
-            # Verify the response actually indicates success, not an error message
-            # (curl -sSf ensures HTTP errors exit non-zero, but the API may return
-            # HTTP 200 with an error body when git operations fail).
             resp_text = r.stdout.strip()
             try:
                 resp_data = json.loads(resp_text) if resp_text else {}
                 if resp_data.get("error"):
+                    # file:// succeeded HTTP-wise but git failed → fall back to HTTPS
+                    if attempt < 3 and install_url != HTTPS_URL and HTTPS_URL not in candidates[:candidates.index(install_url)+1]:
+                        print(f"\n  [file:// failed, falling back to HTTPS...]")
+                        install_url = HTTPS_URL
+                        continue
                     raise RuntimeError(f"API returned error: {resp_data['error'][:200]}")
             except json.JSONDecodeError:
-                pass  # non-JSON response from install-git is unusual but not fatal
+                pass
             print(f"  [registered remote noop: {resp_text[:120]}]")
             noop_registered = True
             break
@@ -461,6 +465,11 @@ def deploy(mode):
                 print("  [remote noop already registered, skipping]")
                 noop_registered = True
                 break
+            # After 3 failures with file://, fall back to HTTPS
+            if attempt == 2 and install_url != HTTPS_URL:
+                print(f"\n  [file:// unavailable, falling back to HTTPS...]")
+                install_url = HTTPS_URL
+                continue
             if attempt == 0:
                 print(f"  [waiting for API ready...]", end="", flush=True)
             print(".", end="", flush=True)
