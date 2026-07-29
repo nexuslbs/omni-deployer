@@ -4897,12 +4897,12 @@ def test_fn_18_platform_multi_source():
 
         print(f"  [bundled {plat_name} ready at {tgt_dir}]")
 
-        # Important: enable bundled, which creates YAML entry.
-        # When bundled is enabled with same name as remote, the YAML source
+        # Important: install bundled, which compiles (for Rust) + creates YAML entry.
+        # When bundled is installed with same name as remote, the YAML source
         # changes from "remote" to "bundled".
-        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/enable", {}, timeout=30)
-        assert resp.get("success"), f"Enable bundled {plat_name} failed: {resp}"
-        print(f"  [enabled bundled {plat_name}]")
+        resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/install", {}, timeout=120)
+        assert resp.get("success"), f"Install bundled {plat_name} failed: {resp}"
+        print(f"  [installed bundled {plat_name}]")
         time.sleep(3)
 
         # Verify bundled shows in plugin listing
