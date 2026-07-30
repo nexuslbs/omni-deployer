@@ -826,10 +826,13 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
                 for p in posts:
                     if p.get("create_at", 0) > max_create_at:
                         msg = p.get("message", "")
+                        # Skip the user's own post (the JSON script we just sent)
+                        if msg and msg.strip() == user_msg.strip():
+                            continue
                         if msg:
                             if expect_error:
-                                # Tool should be restricted/disabled — accept any reply or no reply
-                                if "restricted" in msg.lower() or "disabled" in msg.lower() or "not allowed" in msg.lower() or "error" in msg.lower():
+                                # Tool should be restricted/disabled — any error message is fine
+                                if _is_error_response(msg):
                                     return msg
                             else:
                                 # Tool should have executed — validate output contains keyword
@@ -840,6 +843,14 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
         time.sleep(0.3)
 
     return None
+
+
+def _is_error_response(msg):
+    """Check if a response message indicates an error/restriction."""
+    keywords = ["❌", "is_error", "disabled", "restricted", "not allowed",
+                 "is not available", "unknown tool", "unavailable",
+                 "not configured", "not in allowed_tools"]
+    return any(k in msg.lower() for k in keywords)
 
 
 def _print_result(name, status, detail=""):
@@ -1234,7 +1245,7 @@ def _run_tests():
                 # No response = tool correctly unavailable
                 _print_result(f"{tool_name} (disabled)", "PASS", "Tool unavailable (no agent reply)")
                 passed += 1
-            elif "❌" in resp_a or "is_error" in resp_a.lower():
+            elif _is_error_response(resp_a):
                 # Agent replied with error indicator
                 _print_result(f"{tool_name} (disabled)", "PASS", "Agent correctly returned error")
                 passed += 1
@@ -1270,7 +1281,7 @@ def _run_tests():
             if resp_b is None or resp_b == "":
                 _print_result(f"{tool_name} (restricted)", "PASS", "Tool restricted (no agent reply)")
                 passed += 1
-            elif "❌" in resp_b or "is_error" in resp_b.lower():
+            elif _is_error_response(resp_b):
                 _print_result(f"{tool_name} (restricted)", "PASS", "Agent correctly returned restriction error")
                 passed += 1
             elif success_key.lower() in resp_b.lower():
