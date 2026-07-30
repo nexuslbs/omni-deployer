@@ -563,9 +563,9 @@ TOOL_DEFS = {
     },
     "docker_compose": {
         "plugin": "docker",
-        "test_args": {"arguments": ["ps"], "project_dir": "/opt/omni"},
-        "success_key": "CONTAINER",
-        "mcp_test_args": {"arguments": {"command": "ps", "project_dir": "/opt/omni"}},
+        "test_args": {"command": "ps", "project_dir": "/opt/workspace/omniagent"},
+        "success_key": "NAME",
+        "mcp_test_args": {"command": "ps", "project_dir": "/opt/workspace/omniagent"},
     },
     "fetch_fetch": {
         "plugin": "fetch",
@@ -948,7 +948,7 @@ def _run_tests():
             # Configure for noop/test-tool-caller
             print("  Configuring channel for noop/test-tool-caller...")
             try:
-                oc_curl("PATCH", f"/api/channels/{omni_channel_id_test}", {
+                oc_curl("PATCH", f"/channels/{omni_channel_id_test}", {
                     "current_provider": "noop",
                     "current_model": "test-tool-caller",
                     "plan": False,
@@ -1101,7 +1101,7 @@ def _run_tests():
         # Register the count of phase 2 tests up front (each tool = 3 states)
         phase2_tools_list = [
             ("cron_list-cron-jobs", {}, "cron"),
-            ("docker_compose", {"arguments": ["ps"], "project_dir": "/opt/omni"}, "CONTAINER"),
+            ("docker_compose", {"command": "ps", "project_dir": "/opt/workspace/omniagent"}, "NAME"),
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
             ("filesystem_read", {"path": "/app/README.md"}, "OmniAgent"),
             ("git_status", {}, "git"),
@@ -1289,7 +1289,7 @@ def _run_tests():
     # Restore channel provider/model if we changed it
     if channel_backup and omni_channel_id_test:
         try:
-            oc_curl("PATCH", f"/api/channels/{omni_channel_id_test}", channel_backup)
+            oc_curl("PATCH", f"/channels/{omni_channel_id_test}", channel_backup)
             print("  Channel restored to original config")
         except Exception as e:
             print(f"  WARNING: Could not restore channel: {str(e)[:80]}")
