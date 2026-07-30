@@ -553,98 +553,79 @@ def cmd_agent(args):
 # Define the tools to test: (plugin_type, plugin_name, plugin_source, tool_name, test_description, test_args, expected_check_fn)
 # We use a simple format: just the tool name and its arguments for functional testing
 TOOL_DEFS = {
-    # (tool_name, plugin_name, test_args)
-    # These are the canonical tools from the built-in plugins
-    "cron": {
-        "tools": ["cron_list-cron-jobs"],
+    # Map of tool_name -> (plugin_name, test_args, success_keyword)
+    # Used by Phase 2 (agent via Mattermost) and Phase 1 (direct MCP)
+    "cron_list-cron-jobs": {
         "plugin": "cron",
-        "test_tool": "cron_list-cron-jobs",
         "test_args": {},
-        "verify_fn": lambda r: "cron" in r.get("content", "").lower() or r.get("is_error") == False,
+        "success_key": "cron",
+        "mcp_test_args": {},
     },
-    "docker": {
-        "tools": ["docker_compose"],
+    "docker_compose": {
         "plugin": "docker",
-        "test_tool": "docker_compose",
-        "test_args": {},
-        "verify_fn": lambda r: True,  # just check it runs
+        "test_args": {"arguments": ["ps"], "project_dir": "/opt/omni"},
+        "success_key": "CONTAINER",
+        "mcp_test_args": {"arguments": {"command": "ps", "project_dir": "/opt/omni"}},
     },
-    "fetch": {
-        "tools": ["fetch_fetch"],
+    "fetch_fetch": {
         "plugin": "fetch",
-        "test_tool": "fetch_fetch",
         "test_args": {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"},
-        "verify_fn": lambda r: "omniagent" in r.get("content", "").lower() or r.get("is_error") == False,
+        "success_key": "omniagent",
+        "mcp_test_args": {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"},
     },
-    "filesystem": {
-        "tools": ["filesystem_read", "filesystem_info", "filesystem_list", "filesystem_search", "filesystem_write"],
+    "filesystem_read": {
         "plugin": "filesystem",
-        "test_tool": "filesystem_read",
-        "test_args": {"path": "/opt/omni/docker-compose.yml"},
-        "verify_fn": lambda r: "name:" in r.get("content", "") or "services" in r.get("content", "").lower(),
+        "test_args": {"path": "/app/README.md"},
+        "success_key": "OmniAgent",
+        "mcp_test_args": {"path": "/app/README.md"},
     },
-    "git": {
-        "tools": ["git_status", "git_clone-repo", "git_commit-push", "git_create-repo"],
+    "git_status": {
         "plugin": "git",
-        "test_tool": "git_status",
         "test_args": {},
-        "verify_fn": lambda r: True,
+        "success_key": "git",
+        "mcp_test_args": {},
     },
-    "kanban": {
-        "tools": ["kanban_list-kanban-tasks", "kanban_create-task", "kanban_delete-task", "kanban_update-task", "kanban_add-dependency", "kanban_remove-dependency"],
+    "kanban_list-kanban-tasks": {
         "plugin": "kanban",
-        "test_tool": "kanban_list-kanban-tasks",
         "test_args": {},
-        "verify_fn": lambda r: True,
+        "success_key": "kanban",
+        "mcp_test_args": {},
     },
-    "memory": {
-        "tools": [],
-        "plugin": "memory",
-        "test_tool": None,
-        "test_args": {},
-        "verify_fn": lambda r: True,
-        "skip_reason": "memory_list-memories not a registered MCP tool; memory uses hindsight_recall/reflect/retain",
-    },
-    "metrics": {
-        "tools": ["metrics_get-metrics"],
+    "metrics_get-metrics": {
         "plugin": "metrics",
-        "test_tool": "metrics_get-metrics",
         "test_args": {},
-        "verify_fn": lambda r: True,
+        "success_key": "metrics",
+        "mcp_test_args": {},
     },
-    "prompt": {
-        "tools": ["prompt_generate", "prompt_compact-messages"],
+    "prompt_generate": {
         "plugin": "prompt",
-        "test_tool": "prompt_generate",
-        "test_args": {
-            "profile_name": "omni",
-            "platform": "test",
-            "user_message": "test message",
-            "tool_names": [],
-        },
-        "verify_fn": lambda r: True,
+        "test_args": {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []},
+        "success_key": "prompt",
+        "mcp_test_args": {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []},
     },
-    "search": {
-        "tools": ["search_wiki"],
+    "prompt_compact-messages": {
+        "plugin": "prompt",
+        "test_args": {},
+        "success_key": "compact",
+        "mcp_test_args": {},
+    },
+    "search_messages": {
         "plugin": "search",
-        "test_tool": "search_wiki",
         "test_args": {"query": "test", "limit": 1},
-        "verify_fn": lambda r: True,
+        "success_key": "search",
+        "mcp_test_args": {"query": "test", "limit": 1},
     },
-    "skills": {
-        "tools": [],  # skills_list-skill doesn't exist yet (only skills_create-skill)
-        "plugin": "skills",
-        "test_tool": None,
-        "test_args": {},
-        "verify_fn": lambda r: True,
-        "skip_reason": "skills_list-skill not registered; only skills_create-skill exists",
+    "search_wiki": {
+        "plugin": "search",
+        "test_args": {"query": "omniagent", "limit": 1},
+        "success_key": "omniagent",
+        "mcp_test_args": {"query": "omniagent", "limit": 1},
     },
-    "subtasks": {
-        "tools": ["subtasks_list-subtasks", "subtasks_add-subtask", "subtasks_delete-subtask", "subtasks_get-subtask-counts", "subtasks_update-subtask"],
+    "subtasks_list-subtasks": {
         "plugin": "subtasks",
-        "test_tool": "subtasks_list-subtasks",
         "test_args": {},
-        "verify_fn": lambda r: True,
+        "success_key": "subtask",
+        "mcp_test_args": {},
     },
 }
 
@@ -1024,7 +1005,7 @@ def _run_tests():
     print(f"\n  Registered tools: {len(registered)}")
 
     for def_name, tool_def in TOOL_DEFS.items():
-        tool_name = tool_def.get("test_tool")
+        tool_name = def_name
         if not tool_name:
             _print_result(def_name, "SKIP", tool_def.get("skip_reason", "No test tool defined"))
             skipped += 1
@@ -1039,7 +1020,7 @@ def _run_tests():
         print(f"\n  --- Testing {tool_name} ---")
 
         # Test 1: Tool works (enabled + activated)
-        result = _mcp_execute(tool_name, tool_def.get("test_args"))
+        result = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
         total_assertions += 1
 
         if result.get("success") and not result.get("is_error"):
@@ -1054,7 +1035,7 @@ def _run_tests():
             failed += 1
 
         # For fetch tool, verify we got content with "omniagent"
-        if tool_name == "fetch" and result.get("success"):
+        if tool_name == "fetch_fetch" and result.get("success"):
             content = result.get("content", "")
             if "omniagent" in content.lower():
                 _print_result(f"{tool_name} (content check)", "PASS", "README contains 'omniagent'")
@@ -1087,7 +1068,7 @@ def _run_tests():
         _disable_plugin("tools", "built-in", plugin_name)
         time.sleep(2)
 
-        result_disabled = _mcp_execute(tool_name, tool_def.get("test_args"))
+        result_disabled = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
         total_assertions += 1
         if not result_disabled.get("success") or result_disabled.get("is_error"):
             _print_result(f"{tool_name} (disabled)", "PASS", "Correctly unavailable")
@@ -1111,7 +1092,7 @@ def _run_tests():
         _write_profile(profile)
         time.sleep(1)
 
-        result_restricted = _mcp_execute(tool_name, tool_def.get("test_args"))
+        result_restricted = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
         total_assertions += 1
         # Note: /mcp/execute bypasses profile allowed_tools check, so this will still return success.
         # The restriction only applies through the agent pipeline.
@@ -1144,119 +1125,163 @@ def _run_tests():
         print("  PHASE 2: Agent Integration Tests (via Mattermost + test-tool-caller)")
         print("=" * 50)
 
-        # Set profile to have some tools active
+        # Start with empty profile — no tools allowed
         profile = _read_profile()
-        profile["allowed_tools"] = [
-            "cron_list-cron-jobs",
-            "docker_compose",
-            "fetch",
-            "filesystem_read",
-            "git_status",
-            "kanban_list-kanban-tasks",
-            "metrics_get-metrics",
-            "search_messages",
-            "search_wiki",
-            "subtasks_list-subtasks",
+        profile["allowed_tools"] = []
+        _write_profile(profile)
+        time.sleep(1)
+
+        # Register the count of phase 2 tests up front (each tool = 3 states)
+        phase2_tools_list = [
+            ("cron_list-cron-jobs", {}, "cron"),
+            ("docker_compose", {"arguments": ["ps"], "project_dir": "/opt/omni"}, "CONTAINER"),
+            ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
+            ("filesystem_read", {"path": "/app/README.md"}, "OmniAgent"),
+            ("git_status", {}, "git"),
+            ("kanban_list-kanban-tasks", {}, "kanban"),
+            ("metrics_get-metrics", {}, "metrics"),
+            ("prompt_generate", {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []}, "prompt"),
+            ("prompt_compact-messages", {}, "compact"),
+            ("search_messages", {"query": "test", "limit": 1}, "search"),
+            ("search_wiki", {"query": "omniagent", "limit": 1}, "omniagent"),
+            ("subtasks_list-subtasks", {}, "subtask"),
         ]
-        _write_profile(profile)
-        time.sleep(1)
 
-        # Test a representative tool via Mattermost
-        print("\n  [Testing filesystem_read via Mattermost...]")
-        resp = _test_tool_via_mattermost(
-            mm_channel_id_test, testuser_token,
-            "filesystem_read", {"path": "/app/README.md"},
-            expected_keyword="OmniAgent",
-        )
-        total_assertions += 1
-        if resp:
-            _print_result("filesystem_read via Mattermost", "PASS", "Tool output validated in response")
-            passed += 1
-        else:
-            _print_result("filesystem_read via Mattermost", "FAIL", "No response or missing tool output")
-            failed += 1
+        # Also attempt these tools if registered (may not exist as MCP tools)
+        phase2_extra_tools = [
+            ("memory_list-memories", {}, "memory"),
+            ("skills_list", {}, "skill"),
+        ]
 
-        # Test restricted tool (not in profile)
-        print("\n  [Testing restricted tool via Mattermost...]")
-        # Remove filesystem_read from profile
-        profile = _read_profile()
-        profile["allowed_tools"] = [t for t in profile.get("allowed_tools", []) if t != "filesystem_read"]
-        _write_profile(profile)
-        time.sleep(1)
+        # Check which tools are actually registered
+        registered_tools = _get_registered_tools()
+        print(f"\n  Registered tools: {len(registered_tools)}")
+        phase2_count = 0
 
-        resp2 = _test_tool_via_mattermost(
-            mm_channel_id_test, testuser_token,
-            "filesystem_read", {"path": "/app/README.md"},
-            expect_error=True,
-        )
-        total_assertions += 1
-        if resp2:
-            _print_result("filesystem_read (restricted) via Mattermost", "PASS", "Agent correctly reported restriction")
-            passed += 1
-        else:
-            _print_result("filesystem_read (restricted) via Mattermost", "FAIL", "No response or tool still worked")
-            failed += 1
+        for tool_name, tool_args, success_key in phase2_tools_list + phase2_extra_tools:
+            if tool_name not in registered_tools:
+                _print_result(f"{tool_name} (agent)", "SKIP", "Tool not registered")
+                skipped += 1
+                continue
 
-        # Restore filesystem_read
-        profile["allowed_tools"] = list(set(profile.get("allowed_tools", []) + ["filesystem_read"]))
-        _write_profile(profile)
+            # Map tool_name to plugin name
+            # plugin name = first part before underscore or hyphen
+            if "_" in tool_name:
+                plugin_name = tool_name.split("_")[0]
+            elif "-" in tool_name:
+                parts = tool_name.split("-")
+                # docker_compose -> docker, filesystem_read -> filesystem
+                # Some tools are like "list-cron-jobs" -> cron
+                if parts[0] == "list":
+                    plugin_name = parts[1] if len(parts) > 1 else parts[0]
+                elif parts[0] == "get":
+                    plugin_name = parts[1] if len(parts) > 1 else parts[0]
+                else:
+                    plugin_name = parts[0]
+            else:
+                plugin_name = tool_name
 
-        # Test disabled plugin via Mattermost
-        print("\n  [Testing disabled plugin via Mattermost...]")
-        _disable_plugin("tools", "built-in", "filesystem")
-        time.sleep(2)
+            # Normalize plugin names
+            plugin_map = {
+                "cron": "cron",
+                "docker": "docker",
+                "fetch": "fetch",
+                "filesystem": "filesystem",
+                "git": "git",
+                "kanban": "kanban",
+                "memory": "memory",
+                "metrics": "metrics",
+                "prompt": "prompt",
+                "search": "search",
+                "skills": "skills",
+                "subtasks": "subtasks",
+            }
 
-        resp3 = _test_tool_via_mattermost(
-            mm_channel_id_test, testuser_token,
-            "filesystem_read", {"path": "/app/README.md"},
-            expect_error=True,
-        )
-        total_assertions += 1
-        if resp3:
-            _print_result("filesystem_read (disabled plugin) via Mattermost", "PASS", "Agent correctly reported disabled")
-            passed += 1
-        else:
-            _print_result("filesystem_read (disabled plugin) via Mattermost", "FAIL", "No response or tool still worked")
-            failed += 1
+            plugin = plugin_map.get(plugin_name)
+            if not plugin:
+                _print_result(f"{tool_name} (agent)", "SKIP", f"Unknown plugin mapping for '{plugin_name}'")
+                skipped += 1
+                continue
 
-        # Re-enable
-        _enable_plugin("tools", "built-in", "filesystem")
+            phase2_count += 1
+            print(f"\n  {'=' * 50}")
+            print(f"  Tool {phase2_count}: {tool_name}")
+            print(f"  {'=' * 50}")
 
-        # Test prompt_compact-messages as extra test
-        print("\n  [Testing prompt_compact-messages via Mattermost...]")
-        resp4 = _test_tool_via_mattermost(
-            mm_channel_id_test, testuser_token,
-            "prompt_compact-messages", {},
-            expected_keyword="compact",
-        )
-        total_assertions += 1
-        if resp4:
-            _print_result("prompt_compact-messages via Mattermost", "PASS", "Tool output validated in response")
-            passed += 1
-        else:
-            _print_result("prompt_compact-messages via Mattermost", "FAIL", "No response or missing tool output")
-            failed += 1
+            # ── State A: Plugin disabled → expect error ──
+            print(f"\n  [State A: Disabling plugin '{plugin}' → expect error]")
+            _disable_plugin("tools", "built-in", plugin)
+            time.sleep(2)
+            total_assertions += 1
+            resp_a = _test_tool_via_mattermost(
+                mm_channel_id_test, testuser_token,
+                tool_name, tool_args,
+                expect_error=True,
+                expected_keyword=None,
+            )
+            if resp_a:
+                _print_result(f"{tool_name} (disabled)", "PASS", "Agent correctly rejected disabled tool")
+                passed += 1
+            else:
+                _print_result(f"{tool_name} (disabled)", "FAIL", "No error response or tool still worked")
+                failed += 1
 
-        # Test search_wiki via Mattermost
-        print("\n  [Testing search_wiki via Mattermost...]")
-        resp5 = _test_tool_via_mattermost(
-            mm_channel_id_test, testuser_token,
-            "search_wiki", {"query": "omniagent"},
-            expected_keyword="omniagent",
-        )
-        total_assertions += 1
-        if resp5:
-            _print_result("search_wiki via Mattermost", "PASS", "Tool output validated in response")
-            passed += 1
-        else:
-            _print_result("search_wiki via Mattermost", "FAIL", "No response or missing tool output")
-            failed += 1
+            # ── State B: Plugin enabled, but NOT in profile → expect error ──
+            print(f"\n  [State B: Enabling '{plugin}', removing from profile → expect error]")
+            _enable_plugin("tools", "built-in", plugin)
+            time.sleep(2)
+
+            # Read current profile, ensure the tool is NOT in allowed_tools
+            profile = _read_profile()
+            all_tools = profile.get("allowed_tools", [])
+            profile["allowed_tools"] = [t for t in all_tools if t != tool_name]
+            _write_profile(profile)
+            time.sleep(1)
+
+            total_assertions += 1
+            resp_b = _test_tool_via_mattermost(
+                mm_channel_id_test, testuser_token,
+                tool_name, tool_args,
+                expect_error=True,
+                expected_keyword=None,
+            )
+            if resp_b:
+                _print_result(f"{tool_name} (restricted)", "PASS", "Agent correctly rejected profile-restricted tool")
+                passed += 1
+            else:
+                _print_result(f"{tool_name} (restricted)", "FAIL", "No error response or tool still worked")
+                failed += 1
+
+            # ── State C: Plugin enabled AND in profile → expect success ──
+            print(f"\n  [State C: Adding '{tool_name}' to profile → expect success]")
+            profile = _read_profile()
+            allowed = profile.get("allowed_tools", [])
+            if tool_name not in allowed:
+                allowed.append(tool_name)
+            profile["allowed_tools"] = allowed
+            _write_profile(profile)
+            time.sleep(1)
+
+            total_assertions += 1
+            resp_c = _test_tool_via_mattermost(
+                mm_channel_id_test, testuser_token,
+                tool_name, tool_args,
+                expected_keyword=success_key,
+            )
+            if resp_c:
+                _print_result(f"{tool_name} (active)", "PASS", f"Tool output validated")
+                passed += 1
+            else:
+                _print_result(f"{tool_name} (active)", "FAIL", "No response or missing tool output")
+                failed += 1
+
+        print(f"\n  Phase 2 completed: {phase2_count} tool(s) tested (3 states each)")
 
     else:
         print("\n" + "=" * 50)
         print("  PHASE 2: SKIPPED (Mattermost test channel not available)")
         print("=" * 50)
-        skipped += 5  # Count the 5 Phase 2 tests as skipped
+        skipped += len(TOOL_DEFS) * 3
 
     # ── Restore profile ──
     if profile_backup is not None:
