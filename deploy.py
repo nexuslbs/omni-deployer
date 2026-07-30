@@ -7,7 +7,7 @@ full integration test suite. Handles env generation, Docker Compose
 lifecycle, database setup, migrations, and test execution.
 
 Usage:
-    python3 deploy.py local     # Local dev mode (builds from source)
+    python3 deploy.py dev       # Dev mode (builds from source + shared tool tests)
     python3 deploy.py ci        # CI mode (uses pre-built images)
     python3 deploy.py test      # Just run tests (stack must already be up)
 """
@@ -19,6 +19,10 @@ import subprocess
 import sys
 import time
 import uuid
+
+# Import shared.py for Phase 1 + Phase 2 tool tests
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shared
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -44,7 +48,7 @@ def sh(cmd):
 
 def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
-    if mode == "local":
+    if mode == "dev":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
     # hybrid and ci use no dev overlay — just base compose
     return cmd
@@ -83,9 +87,9 @@ def run_pretests(mode):
     Run pre-deploy checks: fmt, clippy, unit tests, build test binaries.
 
     In CI mode, cargo runs directly on the host (GitHub runner has Rust).
-    In local mode, cargo runs inside the dev container (via docker compose run).
+    In dev mode, cargo runs inside the dev container (via docker compose run).
     """
-    docker_mode = mode  # for compose run; only local uses the dev overlay
+    docker_mode = mode  # for compose run; only dev uses the dev overlay
     compose = compose_cmd(docker_mode)
 
     print("=" * 60)
@@ -98,7 +102,7 @@ def run_pretests(mode):
         print("\n[pretests] Skipping (run via production Dockerfile build)...")
         return
 
-    if mode == "local":
+    if mode == "dev":
         print("\n[pretests] Building dev image...")
         run_compose_check(compose, "build", "omniagent", label="dev image")
 
@@ -165,16 +169,16 @@ def run_pretests(mode):
     print("  ✓ Unit tests passed")
 
 
-def run_rust_integration_tests(compose, mode="local"):
+def run_rust_integration_tests(compose, mode="dev"):
     """Run api_tests and plugin_tests via cargo test.
 
-    Only works in local mode where the dev image has the Rust toolchain
+    Only works in dev mode where the dev image has the Rust toolchain
     and all build dependencies. In CI/hybrid mode, the production image
     is too minimal (no cargo, no libssl-dev, no pkg-config) to compile
     Rust code — Python integration tests cover end-to-end flows instead.
     """
-    if mode != "local":
-        print("[integration] Skipping Rust integration tests (local mode only — "
+    if mode != "dev":
+        print("[integration] Skipping Rust integration tests (dev mode only — "
               "production image lacks build toolchain)")
         return
 
@@ -351,8 +355,8 @@ def deploy(mode):
     for vol in ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]:
         subprocess.run(["docker", "volume", "rm", "-f", f"omnideploy_{vol}"], capture_output=True)
 
-    # Step 2 (local): Build images
-    if mode == "local":
+    # Step 2 (dev): Build images
+    if mode == "dev":
         print("\n[deploy] Building omniagent image...")
         run_compose_check(compose, "build", "omniagent", label="omniagent image build")
         print("[deploy] Building dashboard image...")
@@ -367,11 +371,11 @@ def deploy(mode):
     wait_for_db(compose, "postgres", "omniagent", "omniagent", "postgres")
     wait_for_db(compose, "mattermost-db", "mmuser", "mattermost", "mattermost-db")
 
-    # Step 5 (local): Build all binaries via build.py
+    # Step 5 (dev): Build all binaries via build.py
     # build.py auto-discovers all workspace members from Cargo.toml
     # and builds everything — omniagent, db-migrations, and all plugin
     # binaries (platforms + tools). No hardcoded package lists.
-    if mode == "local":
+    if mode == "dev":
         print("\n[deploy] Building all binaries...")
         run_compose_check(
             compose, "run", "--rm", "-e", "SQLX_OFFLINE=true", "omniagent",
@@ -386,7 +390,7 @@ def deploy(mode):
         run_compose_check(compose, "run", "--rm", "omniagent",
                           "db-migrations", label="migrations")
     else:
-        # Local: binary at /target/release/ (built with CARGO_TARGET_DIR=/target)
+        # Dev: binary at /target/release/ (built with CARGO_TARGET_DIR=/target)
         r = run_compose(compose, "run", "--rm", "omniagent",
                         "test", "-f", "/target/release/db-migrations")
         if r.returncode == 0:
@@ -523,6 +527,29 @@ def deploy(mode):
     print("  ALL TESTS PASSED")
     print(f"{'=' * 60}")
 
+    # Step 11: Shared tool tests (Phase 1 + Phase 2) — dev mode only
+    if mode == "dev":
+        print(f"\n{'=' * 60}")
+        print("  SHARED TOOL TESTS (Phase 1 + Phase 2)")
+        print(f"{'=' * 60}")
+        shared_settings = shared.Settings(
+            env_path=OMNI_ENV_PATH,
+            compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
+            dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml"),
+            project_name="omnideploy",
+            container="omnideploy-omniagent-1",
+            setup_channel="setup",
+            omni_stack_dir=OMNI_STACK_DIR,
+            workspace_dir=WORKSPACE_DIR,
+            script_dir=SCRIPT_DIR,
+            use_api=False,
+        )
+        shared.init(shared_settings)
+        shared.run_tests()
+        print(f"\n{'=' * 60}")
+        print("  ALL TESTS PASSED (including shared tool tests)")
+        print(f"{'=' * 60}")
+
 
 def run_tests(compose=None):
     """Run integration tests via tests.py piped into the omniagent container."""
@@ -530,7 +557,7 @@ def run_tests(compose=None):
         raise RuntimeError(f"Tests script not found: {TESTS_SCRIPT}")
 
     if compose is None:
-        compose = compose_cmd("local")
+        compose = compose_cmd("dev")
 
     cmd = list(compose) + ["--env-file", OMNI_ENV_PATH,
                            "exec", "-T", "omniagent", "python3", "-u", "-"]
@@ -549,8 +576,8 @@ def main():
     parser = argparse.ArgumentParser(description="OmniAgent deployer")
     parser.add_argument(
         "mode",
-        choices=["local", "ci", "hybrid", "test"],
-        help="local=build from source, ci=use pre-built images, hybrid=build images+run like CI, test=run tests only",
+        choices=["dev", "ci", "hybrid", "test"],
+        help="dev=build from source + shared tool tests, ci=use pre-built images, hybrid=build images+run like CI, test=run tests only",
     )
     args = parser.parse_args()
 
