@@ -762,6 +762,16 @@ def _disable_plugin(p_type, source, name):
 def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_args, expected_keyword=None, expect_error=False):
     """
     Send a JSON script via Mattermost (testuser) and wait for the agent to process it.
+
+    The test-tool-caller model parses the JSON script into tool calls, omniagent
+    executes them (same as any real provider/model), and posts the results back to
+    Mattermost. This function polls for the reply and validates tool execution output.
+
+    Args:
+        expected_keyword: The response must contain this text to PASS.
+                          When None (and not expect_error), defaults to tool_name.
+        expect_error: If True, the response should indicate tool is restricted/disabled.
+
     Returns the response message or None on timeout.
     """
     # Build the JSON script — must be the ENTIRE message for test-tool-caller to parse
@@ -787,6 +797,9 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
         print(f"    Failed to post to Mattermost: {post.stderr[:100]}")
         return None
 
+    # Determine validation keyword
+    keyword = expected_keyword if expected_keyword is not None else tool_name
+
     # Poll for response
     poll_start = time.time()
     timeout = 120
@@ -801,8 +814,15 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
                 for p in posts:
                     if p.get("create_at", 0) > max_create_at:
                         msg = p.get("message", "")
-                        if msg and "test-tool-caller" in msg:
-                            return msg
+                        if msg:
+                            if expect_error:
+                                # Tool should be restricted/disabled — expect agent to say so
+                                if "restricted" in msg.lower() or "disabled" in msg.lower() or "not allowed" in msg.lower():
+                                    return msg
+                            else:
+                                # Tool should have executed — validate output contains keyword
+                                if keyword.lower() in msg.lower():
+                                    return msg
             except (json.JSONDecodeError, KeyError):
                 pass
         time.sleep(10)
@@ -1146,13 +1166,14 @@ def _run_tests():
         resp = _test_tool_via_mattermost(
             mm_channel_id_test, testuser_token,
             "filesystem_read", {"path": "/app/README.md"},
+            expected_keyword="OmniAgent",
         )
         total_assertions += 1
         if resp:
-            _print_result("filesystem_read via Mattermost", "PASS", "Agent responded")
+            _print_result("filesystem_read via Mattermost", "PASS", "Tool output validated in response")
             passed += 1
         else:
-            _print_result("filesystem_read via Mattermost", "FAIL", "No response")
+            _print_result("filesystem_read via Mattermost", "FAIL", "No response or missing tool output")
             failed += 1
 
         # Test restricted tool (not in profile)
@@ -1166,13 +1187,14 @@ def _run_tests():
         resp2 = _test_tool_via_mattermost(
             mm_channel_id_test, testuser_token,
             "filesystem_read", {"path": "/app/README.md"},
+            expect_error=True,
         )
         total_assertions += 1
         if resp2:
-            _print_result("filesystem_read (restricted) via Mattermost", "PASS", "Got response")
+            _print_result("filesystem_read (restricted) via Mattermost", "PASS", "Agent correctly reported restriction")
             passed += 1
         else:
-            _print_result("filesystem_read (restricted) via Mattermost", "FAIL", "No response")
+            _print_result("filesystem_read (restricted) via Mattermost", "FAIL", "No response or tool still worked")
             failed += 1
 
         # Restore filesystem_read
@@ -1187,13 +1209,14 @@ def _run_tests():
         resp3 = _test_tool_via_mattermost(
             mm_channel_id_test, testuser_token,
             "filesystem_read", {"path": "/app/README.md"},
+            expect_error=True,
         )
         total_assertions += 1
         if resp3:
-            _print_result("filesystem_read (disabled plugin) via Mattermost", "PASS", "Got response")
+            _print_result("filesystem_read (disabled plugin) via Mattermost", "PASS", "Agent correctly reported disabled")
             passed += 1
         else:
-            _print_result("filesystem_read (disabled plugin) via Mattermost", "FAIL", "No response")
+            _print_result("filesystem_read (disabled plugin) via Mattermost", "FAIL", "No response or tool still worked")
             failed += 1
 
         # Re-enable
@@ -1204,13 +1227,14 @@ def _run_tests():
         resp4 = _test_tool_via_mattermost(
             mm_channel_id_test, testuser_token,
             "prompt_compact-messages", {},
+            expected_keyword="compact",
         )
         total_assertions += 1
         if resp4:
-            _print_result("prompt_compact-messages via Mattermost", "PASS", "Agent responded")
+            _print_result("prompt_compact-messages via Mattermost", "PASS", "Tool output validated in response")
             passed += 1
         else:
-            _print_result("prompt_compact-messages via Mattermost", "FAIL", "No response")
+            _print_result("prompt_compact-messages via Mattermost", "FAIL", "No response or missing tool output")
             failed += 1
 
         # Test search_wiki via Mattermost
@@ -1218,13 +1242,14 @@ def _run_tests():
         resp5 = _test_tool_via_mattermost(
             mm_channel_id_test, testuser_token,
             "search_wiki", {"query": "omniagent"},
+            expected_keyword="omniagent",
         )
         total_assertions += 1
         if resp5:
-            _print_result("search_wiki via Mattermost", "PASS", "Agent responded")
+            _print_result("search_wiki via Mattermost", "PASS", "Tool output validated in response")
             passed += 1
         else:
-            _print_result("search_wiki via Mattermost", "FAIL", "No response")
+            _print_result("search_wiki via Mattermost", "FAIL", "No response or missing tool output")
             failed += 1
 
     else:
