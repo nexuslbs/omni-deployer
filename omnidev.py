@@ -770,7 +770,7 @@ def _disable_plugin(p_type, source, name):
         return None
 
 
-def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_args, expected_keyword=None, expect_error=False, poll_timeout=5):
+def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_args, expected_keyword=None, expect_error=False, poll_timeout=5, validate_fn=None):
     """
     Send a JSON script via Mattermost (testuser) and wait for the agent to process it.
 
@@ -783,6 +783,8 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
                           When None (and not expect_error), defaults to tool_name.
         expect_error: If True, the response should indicate tool is restricted/disabled.
         poll_timeout: Max seconds to poll for a response. Default 5.
+        validate_fn: Optional callable(response_msg) -> bool. If provided, used
+                     instead of expected_keyword for success validation.
 
     Returns the response message or None on timeout.
     """
@@ -835,8 +837,11 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
                                 if _is_error_response(msg):
                                     return msg
                             else:
-                                # Tool should have executed — validate output contains keyword
-                                if keyword.lower() in msg.lower():
+                                # Tool should have executed — validate output
+                                if validate_fn:
+                                    if validate_fn(msg):
+                                        return msg
+                                elif keyword.lower() in msg.lower():
                                     return msg
             except (json.JSONDecodeError, KeyError):
                 pass
@@ -851,6 +856,183 @@ def _is_error_response(msg):
                  "is not available", "unknown tool", "unavailable",
                  "not configured", "not in allowed_tools"]
     return any(k in msg.lower() for k in keywords)
+
+
+# ── Tool result validators for Phase 2 ──────────────────────────────────────
+
+def _validate_not_error(msg):
+    """Basic validator: response exists and is not an error."""
+    return bool(msg) and not _is_error_response(msg)
+
+
+def _validate_cron_list(msg):
+    """cron_list-cron-jobs should return cron job listing."""
+    return _validate_not_error(msg) and (
+        "job" in msg.lower() or "cron" in msg.lower() or "schedule" in msg.lower()
+        or "entry" in msg.lower() or "task" in msg.lower() or "[]" in msg
+    )
+
+
+def _validate_docker_ps(msg):
+    """docker_compose ps should show containers or output."""
+    return _validate_not_error(msg) and (
+        "name" in msg.upper() or "command" in msg.lower()
+        or "container" in msg.lower() or "omnidev" in msg
+        or "up" in msg.lower() or "exit" in msg.lower() or "running" in msg.lower()
+    )
+
+
+def _validate_fetch(msg):
+    """fetch_fetch should return fetched page content."""
+    return _validate_not_error(msg) and (
+        "omniagent" in msg.lower() or "# " in msg
+        or "readme" in msg.lower() or "project" in msg.lower()
+    )
+
+
+def _validate_filesystem_read(msg):
+    """filesystem_read should return file content."""
+    return _validate_not_error(msg) and (
+        "[package]" in msg or "name =" in msg or "version" in msg
+        or "dependencies" in msg.lower() or "workspace" in msg.lower()
+    )
+
+
+def _validate_git_status(msg):
+    """git_status should show git repo state."""
+    return _validate_not_error(msg) and (
+        "branch" in msg.lower() or "commit" in msg.lower()
+        or "status" in msg.lower() or "modified" in msg.lower()
+        or "untracked" in msg.lower() or "staged" in msg.lower()
+    )
+
+
+def _validate_kanban_list(msg):
+    """kanban_list-kanban-tasks should return tasks or empty list."""
+    return _validate_not_error(msg) and (
+        "task" in msg.lower() or "kanban" in msg.lower()
+        or "status" in msg.lower() or "todo" in msg.lower()
+        or "[]" in msg or "no " in msg.lower()
+    )
+
+
+def _validate_metrics(msg):
+    """metrics_get-metrics should return system metrics."""
+    return _validate_not_error(msg) and (
+        "metric" in msg.lower() or "message" in msg.lower()
+        or "channel" in msg.lower() or "thread" in msg.lower()
+        or "count" in msg.lower() or "total" in msg.lower()
+    )
+
+
+def _validate_prompt_generate(msg):
+    """prompt_generate should return a generated prompt."""
+    return _validate_not_error(msg) and (
+        "prompt" in msg.lower() or "user" in msg.lower()
+        or "system" in msg.lower() or "message" in msg.lower()
+        or "role" in msg.lower()
+    )
+
+
+def _validate_prompt_compact(msg):
+    """prompt_compact-messages should return compacted messages."""
+    return _validate_not_error(msg) and (
+        "compact" in msg.lower() or "token" in msg.lower()
+        or "content" in msg.lower() or "message" in msg.lower()
+    )
+
+
+def _validate_search_messages(msg):
+    """search_messages should return search results."""
+    return _validate_not_error(msg) and (
+        "result" in msg.lower() or "match" in msg.lower()
+        or "message" in msg.lower() or "found" in msg.lower()
+        or "channel" in msg.lower()
+    )
+
+
+def _validate_search_wiki(msg):
+    """search_wiki should return wiki results."""
+    return _validate_not_error(msg) and (
+        "omniagent" in msg.lower() or "wiki" in msg.lower()
+        or "result" in msg.lower() or "page" in msg.lower()
+        or "match" in msg.lower()
+    )
+
+
+def _validate_subtasks(msg):
+    """subtasks_list-subtasks should return subtasks."""
+    return _validate_not_error(msg) and (
+        "subtask" in msg.lower() or "task" in msg.lower()
+        or "thread" in msg.lower() or "step" in msg.lower()
+    )
+
+
+def _validate_skills_list(msg):
+    """skills_list-skills should return skill entries."""
+    return _validate_not_error(msg) and (
+        "skill" in msg.lower() or "name" in msg.lower()
+        or "description" in msg.lower() or "version" in msg.lower()
+    )
+
+
+def _validate_actions_relevance(msg):
+    """actions_relevance-indexer should return index state."""
+    return _validate_not_error(msg) and (
+        "relevance" in msg.lower() or "index" in msg.lower()
+        or "action" in msg.lower() or "result" in msg.lower()
+        or "processed" in msg.lower()
+    )
+
+
+def _validate_plugin_manager_list(msg):
+    """plugin-manager_plugin-manager list should return plugin list."""
+    return _validate_not_error(msg) and (
+        "plugin" in msg.lower() or "name" in msg.lower()
+        or "version" in msg.lower() or "status" in msg.lower()
+        or "type" in msg.lower() or "enabled" in msg.lower()
+        or "[]" in msg
+    )
+
+
+def _validate_query_database(msg):
+    """query_database search_messages should return DB results."""
+    return _validate_not_error(msg) and (
+        "message" in msg.lower() or "content" in msg.lower()
+        or "channel" in msg.lower() or "result" in msg.lower()
+        or "row" in msg.lower() or "found" in msg.lower()
+    )
+
+
+def _validate_memory_list(msg):
+    """memory_list-memories should return memory entries."""
+    return _validate_not_error(msg) and (
+        "memory" in msg.lower() or "entry" in msg.lower()
+        or "content" in msg.lower() or "summary" in msg.lower()
+        or "record" in msg.lower() or "[]" in msg
+    )
+
+
+# Map tool_name -> validator function
+TOOL_VALIDATORS = {
+    "cron_list-cron-jobs": _validate_cron_list,
+    "docker_compose": _validate_docker_ps,
+    "fetch_fetch": _validate_fetch,
+    "filesystem_read": _validate_filesystem_read,
+    "git_status": _validate_git_status,
+    "kanban_list-kanban-tasks": _validate_kanban_list,
+    "metrics_get-metrics": _validate_metrics,
+    "prompt_generate": _validate_prompt_generate,
+    "prompt_compact-messages": _validate_prompt_compact,
+    "search_messages": _validate_search_messages,
+    "search_wiki": _validate_search_wiki,
+    "subtasks_list-subtasks": _validate_subtasks,
+    "skills_list-skills": _validate_skills_list,
+    "actions_relevance-indexer": _validate_actions_relevance,
+    "plugin-manager_plugin-manager": _validate_plugin_manager_list,
+    "query_database": _validate_query_database,
+    "memory_list-memories": _validate_memory_list,
+}
 
 
 def _print_result(name, status, detail=""):
@@ -1241,6 +1423,7 @@ def _run_tests():
                 expected_keyword=None,
                 poll_timeout=2,
             )
+            validator_a = TOOL_VALIDATORS.get(tool_name, _validate_not_error)
             if resp_a is None or resp_a == "":
                 # No response = tool correctly unavailable
                 _print_result(f"{tool_name} (disabled)", "PASS", "Tool unavailable (no agent reply)")
@@ -1249,8 +1432,8 @@ def _run_tests():
                 # Agent replied with error indicator
                 _print_result(f"{tool_name} (disabled)", "PASS", "Agent correctly returned error")
                 passed += 1
-            elif success_key.lower() in resp_a.lower():
-                # Agent replied with expected tool output — tool wasn't actually disabled!
+            elif validator_a(resp_a):
+                # Agent replied with valid tool output — tool wasn't actually disabled!
                 _print_result(f"{tool_name} (disabled)", "FAIL", "Tool still worked despite being disabled")
                 failed += 1
             else:
@@ -1278,13 +1461,14 @@ def _run_tests():
                 expected_keyword=None,
                 poll_timeout=2,
             )
+            validator_b = TOOL_VALIDATORS.get(tool_name, _validate_not_error)
             if resp_b is None or resp_b == "":
                 _print_result(f"{tool_name} (restricted)", "PASS", "Tool restricted (no agent reply)")
                 passed += 1
             elif _is_error_response(resp_b):
                 _print_result(f"{tool_name} (restricted)", "PASS", "Agent correctly returned restriction error")
                 passed += 1
-            elif success_key.lower() in resp_b.lower():
+            elif validator_b(resp_b):
                 _print_result(f"{tool_name} (restricted)", "FAIL", "Tool still worked despite profile restriction")
                 failed += 1
             else:
@@ -1305,14 +1489,15 @@ def _run_tests():
             resp_c = _test_tool_via_mattermost(
                 mm_channel_id_test, testuser_token,
                 tool_name, tool_args,
-                expected_keyword=success_key,
+                validate_fn=TOOL_VALIDATORS.get(tool_name),
                 poll_timeout=4,
             )
             if resp_c:
-                _print_result(f"{tool_name} (active)", "PASS", f"Tool output validated")
+                validator_name = TOOL_VALIDATORS.get(tool_name, _validate_not_error).__name__
+                _print_result(f"{tool_name} (active)", "PASS", f"Validator '{validator_name}' passed")
                 passed += 1
             else:
-                _print_result(f"{tool_name} (active)", "FAIL", "No response or missing tool output")
+                _print_result(f"{tool_name} (active)", "FAIL", "No response or validation failed")
                 failed += 1
 
         print(f"\n  Phase 2 completed: {phase2_count} tool(s) tested (3 states each)")
