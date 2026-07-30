@@ -527,28 +527,27 @@ def deploy(mode):
     print("  ALL TESTS PASSED")
     print(f"{'=' * 60}")
 
-    # Step 11: Shared tool tests (Phase 1 + Phase 2) — dev mode only
-    if mode == "dev":
-        print(f"\n{'=' * 60}")
-        print("  SHARED TOOL TESTS (Phase 1 + Phase 2)")
-        print(f"{'=' * 60}")
-        shared_settings = shared.Settings(
-            env_path=OMNI_ENV_PATH,
-            compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
-            dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml"),
-            project_name="omnideploy",
-            container="omnideploy-omniagent-1",
-            setup_channel="setup",
-            omni_stack_dir=OMNI_STACK_DIR,
-            workspace_dir=WORKSPACE_DIR,
-            script_dir=SCRIPT_DIR,
-            use_api=False,
-        )
-        shared.init(shared_settings)
-        shared.run_tests()
-        print(f"\n{'=' * 60}")
-        print("  ALL TESTS PASSED (including shared tool tests)")
-        print(f"{'=' * 60}")
+    # Step 11: Shared tool tests (Phase 1 + Phase 2) — all modes
+    print(f"\n{'=' * 60}")
+    print("  SHARED TOOL TESTS (Phase 1 + Phase 2)")
+    print(f"{'=' * 60}")
+    shared_settings = shared.Settings(
+        env_path=OMNI_ENV_PATH,
+        compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
+        dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml") if mode == "dev" else None,
+        project_name="omnideploy",
+        container="omnideploy-omniagent-1",
+        setup_channel="setup",
+        omni_stack_dir=OMNI_STACK_DIR,
+        workspace_dir=WORKSPACE_DIR,
+        script_dir=SCRIPT_DIR,
+        use_api=False,
+    )
+    shared.init(shared_settings)
+    shared.run_tests()
+    print(f"\n{'=' * 60}")
+    print("  ALL TESTS PASSED (including shared tool tests)")
+    print(f"{'=' * 60}")
 
 
 def run_tests(compose=None):
