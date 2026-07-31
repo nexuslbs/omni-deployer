@@ -961,9 +961,9 @@ TOOL_DEFS = {
     },
     "docker_compose": {
         "plugin": "docker",
-        "test_args": {"command": "ps", "compose_file": "/opt/workspace/omni-stack/docker-compose.yml"},
+        "test_args": {"command": "ps", "project_dir": "/opt/workspace/omni-stack"},
         "success_key": "NAME",
-        "mcp_test_args": {"command": "ps", "compose_file": "/opt/workspace/omni-stack/docker-compose.yml"},
+        "mcp_test_args": {"command": "ps", "project_dir": "/opt/workspace/omni-stack"},
     },
     "fetch_fetch": {
         "plugin": "fetch",
@@ -1355,7 +1355,7 @@ def run_tests():
 
         phase2_tools_list = [
             ("cron_list-cron-jobs", {}, "cron"),
-            ("docker_compose", {"command": "ps", "compose_file": "/opt/workspace/omni-stack/docker-compose.yml"}, "NAME"),
+            ("docker_compose", {"command": "ps", "project_dir": "/opt/workspace/omni-stack"}, "NAME"),
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
             ("filesystem_read", {"path": "/opt/workspace/omniagent/README.md"}, "OmniAgent"),
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),

@@ -270,30 +270,34 @@ def deploy(mode):
     if not os.path.isdir(OMNI_STACK_DIR):
         raise RuntimeError(f"omni-stack not found at {OMNI_STACK_DIR}")
 
-    generate_env(mode)
-    compose = compose_cmd(mode)
-
-    # Step 0.5: Check for unstaged changes in omni-stack ──────────
-    # The stack dir is bind-mounted into the container. Any files the
-    # container writes (remote.yml, plugins.yml, etc.) persist on the
-    # host. This catches unintended state leaks before they accumulate.
-    # Auto-revert ALL known transient test artifacts:
-    #   - plugins.yml, remote.yml (YAML state written by plugin API)
-    #   - plugins/tools/, plugins/platforms/, plugins/providers/
-    #     (test scripts may copytree() bundled plugins into these dirs)
-    #   - actions.yml (dynamic action registration during tests)
-    #   - any .remote/ directories (git clones for remote plugin tests)
-    sh("cd /opt/workspace/omni-stack && "
-       "sudo rm -rf plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
-       "git checkout HEAD -- . 2>/dev/null; "
-       "true")
+    # Step 0.5: Verify omni-stack is clean BEFORE touching anything ──
+    # The stack dir is bind-mounted into the container, so state persists
+    # on the host. NEVER auto-discard user changes — `git checkout HEAD -- .`
+    # is forbidden here: it silently reverts uncommitted work (e.g. an env
+    # or compose edit). Instead, fail fast and let the user discard, stage,
+    # or commit their changes first. This check must run before generate_env()
+    # because that function writes remote.yml back to the tracked file.
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     if r.stdout.strip():
         raise RuntimeError(
-            "Unstaged changes detected in omni-stack after auto-cleanup. "
-            "Review and commit or revert them before re-deploying.\n"
+            "Uncommitted changes detected in omni-stack. deploy.py will NOT "
+            "discard them automatically — discard, stage, or commit them "
+            "first, then re-run deploy.\n\n"
             + r.stdout
         )
+
+    # Repo is verified clean, so it is now safe to remove root-owned,
+    # gitignored build/test residue (target/, .remote/, test-* artifacts)
+    # that the container wrote into the bind mount. No git checkout is
+    # needed — with a clean tree there is nothing tracked to restore, and
+    # these paths are gitignored, so this only touches disposable runtime
+    # state. Removing them keeps local runs as fresh as a CI checkout.
+    sh("cd /opt/workspace/omni-stack && "
+       "sudo rm -rf plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
+       "true")
+
+    generate_env(mode)
+    compose = compose_cmd(mode)
 
     # ── Step 0 (hybrid): Stop old containers first ────────────────
     if mode == "hybrid":
