@@ -245,6 +245,36 @@ def ensure_secret(name, value):
 
 # ── Stack lifecycle ───────────────────────────────────────────────────────────
 
+# Data volumes that are wiped on every stack reset. Build-cache volumes
+# (cargo-registry, cargo-target, omniagent-target) are always preserved so
+# dev-mode re-runs don't recompile the dependency tree from scratch.
+DATA_VOLUMES = ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]
+
+
+def _remove_data_volumes(project_name):
+    """Remove only data volumes for the given compose project.
+
+    Hard guard: only volumes prefixed with the project name are considered,
+    and within those only suffixes in DATA_VOLUMES are removed — build caches
+    and search/memory data (qdrant_data, hindsight-data) are preserved.
+    """
+    listed = subprocess.run(
+        ["docker", "volume", "ls", "-q", "--filter", f"name={project_name}_"],
+        capture_output=True, text=True,
+    ).stdout.split()
+    removed = []
+    for vol in listed:
+        if not vol.startswith(project_name + "_"):
+            continue
+        suffix = vol[len(project_name) + 1:]
+        if suffix not in DATA_VOLUMES:
+            continue
+        subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
+        removed.append(vol)
+    if removed:
+        print(f"  Removed data volumes: {', '.join(removed)}")
+
+
 def generate_env(mode="dev"):
     """Generate .env file with random passwords. mode='dev' or 'stable'."""
     s = sett()
@@ -274,23 +304,61 @@ def generate_env(mode="dev"):
 
 
 def stop_stack():
-    """Tear down the stack."""
+    """Tear down the stack.
+
+    Stable mode: `down -v` (no build caches to preserve — fresh volumes).
+    Dev mode: `down` + remove only data volumes, preserving the
+    cargo-registry/cargo-target build caches so re-runs don't recompile deps.
+    """
     s = sett()
     print(f"\n=== Stopping stack (project={s.project_name}) ===")
-    r = sh(f"docker compose -f {s.compose_file} --env-file {s.env_path} -p {s.project_name} down -v 2>&1")
-    for line in (r.stdout or "").split("\n"):
-        if line.strip():
-            print(f"  {line}")
+    if s.dev_overlay:
+        r = sh(f"docker compose -f {s.compose_file} -f {s.dev_overlay} --env-file {s.env_path} -p {s.project_name} down 2>&1")
+        for line in (r.stdout or "").split("\n"):
+            if line.strip():
+                print(f"  {line}")
+        _remove_data_volumes(s.project_name)
+    else:
+        r = sh(f"docker compose -f {s.compose_file} --env-file {s.env_path} -p {s.project_name} down -v 2>&1")
+        for line in (r.stdout or "").split("\n"):
+            if line.strip():
+                print(f"  {line}")
 
 
 def build_dev():
-    """Build the dev image (omnidev mode only)."""
+    """Full dev build: images, then all workspace binaries, then migrations.
+
+    Mirrors deploy.py's dev flow: build images -> start DBs -> build.py
+    (auto-discovers and builds every workspace member binary) -> db-migrations,
+    so the dev overlay's command (/target/release/omniagent) finds a real
+    binary running against a migrated database when `up -d` executes.
+    """
     s = sett()
-    print(f"\n=== Building dev image (project={s.project_name}) ===")
+    print(f"\n=== Building dev images (project={s.project_name}) ===")
     r = sh(f"docker compose -f {s.compose_file} -f {s.dev_overlay} --env-file {s.env_path} -p {s.project_name} build 2>&1")
     for line in (r.stdout or "").split("\n"):
         if line.strip() and "level=warning" not in line.lower():
             print(f"  {line}")
+    if r.returncode != 0:
+        raise RuntimeError("dev image build failed (exit=" + str(r.returncode) + ")")
+
+    # Start databases (needed for migrations)
+    print("\n=== Starting databases ===")
+    run_compose_check("up", "-d", "postgres", "mattermost-db", label="db start")
+    wait_for_db("postgres", "omniagent", "omniagent", "postgres")
+    wait_for_db("mattermost-db", "mmuser", "mattermost", "mattermost-db")
+
+    # Build all binaries via build.py (workspace member auto-discovery)
+    print("\n=== Building all binaries (build.py) ===")
+    run_compose_check(
+        "run", "--rm", "-e", "SQLX_OFFLINE=true", "omniagent",
+        "python3", "/app/scripts/build.py",
+        label="build all binaries",
+    )
+
+    # Run migrations
+    print("\n=== Running migrations ===")
+    run_compose_check("run", "--rm", "omniagent", "/target/release/db-migrations", label="migrations")
 
 
 def start_services():
@@ -341,6 +409,54 @@ def _api_call(use_api, path, method="GET", body=None, timeout=15):
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
+def _wait_for_mattermost(timeout=180):
+    """Wait until mattermost's API + DB are fully serving.
+
+    The ping endpoint returns 200 as soon as the HTTP server listens — even
+    while first-run DB migrations are still running in background jobs — so it
+    is NOT a reliable readiness gate (that is exactly the race that made the
+    setup POST fail with transport errors). A DB-backed endpoint
+    (GET /api/v4/users, which requires auth) returns a definitive 401 only
+    once the API layer AND the database are actually serving; connection
+    errors / 5xx mean the server is still warming up.
+    """
+    s = sett()
+    print("  Waiting for mattermost readiness (DB-backed check)...")
+    for i in range(timeout // 5):
+        r = oc("curl -s -o /dev/null -w '%{http_code}' http://mattermost:8065/api/v4/users")
+        code = r.stdout.strip() if r.returncode == 0 else ""
+        if code in ("401", "403", "200"):
+            print(f"  mattermost is ready ({i * 5}s)")
+            return
+        time.sleep(5)
+    raise RuntimeError("mattermost did not become DB-ready after " + str(timeout) + "s")
+
+
+def _run_mattermost_setup_with_retry(s, attempts=6, delay=30):
+    """POST the mattermost setup endpoint, retrying only as a defensive fallback.
+
+    The primary race elimination is `_wait_for_mattermost`'s DB-backed gate,
+    which runs before this and only returns once the server is actually
+    serving. The retry here is belt-and-suspenders for non-race transient
+    blips (e.g. a container restart mid-setup); the setup is idempotent, so
+    re-running converges and errors are now reported truthfully.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = _api_call(s.use_api, "/api/plugins/platforms/built-in/mattermost/setup", "POST",
+                             body={}, timeout=120)
+        except RuntimeError as e:
+            resp = {"success": False, "error": str(e)}
+        if resp.get("success"):
+            return resp
+        err = resp.get("error") or (resp.get("data") or {}).get("error", "unknown")
+        print(f"  Setup attempt {attempt}/{attempts} failed: {err}")
+        if attempt < attempts:
+            print(f"  Retrying in {delay}s...")
+            time.sleep(delay)
+    return resp
+
+
 def setup(deepseek_api_key):
     """Full setup: generate env, start stack, configure omniagent."""
     s = sett()
@@ -376,11 +492,11 @@ def setup(deepseek_api_key):
 
     # Enable mattermost platform
     print("\n[Enabling mattermost platform...]")
-    _api_call(s.use_api, "/plugins/platforms/built-in/mattermost/enable", "POST", {})
+    _api_call(s.use_api, "/api/plugins/platforms/built-in/mattermost/enable", "POST", {})
 
     # Configure mattermost
     print("\n[Configuring mattermost...]")
-    _api_call(s.use_api, "/plugins/platforms/built-in/mattermost/config", "POST", {
+    _api_call(s.use_api, "/api/plugins/platforms/built-in/mattermost/config", "POST", {
         "config": {
             "server_url": "http://mattermost:8065",
             "access_token_name": "MATTERMOST_ACCESS_TOKEN",
@@ -395,17 +511,17 @@ def setup(deepseek_api_key):
         }
     })
 
-    # Run mattermost setup
+    # Run mattermost setup (with readiness wait + retries)
     print("\n[Running mattermost setup...]")
-    resp = _api_call(s.use_api, "/plugins/platforms/built-in/mattermost/setup", "POST",
-                     body={}, timeout=120)
+    _wait_for_mattermost(timeout=120)
+    resp = _run_mattermost_setup_with_retry(s, attempts=6, delay=30)
     if not resp.get("success"):
         error = resp.get("error", resp.get("data", {}).get("error", "unknown"))
         raise RuntimeError(f"Mattermost setup failed: {error}")
 
     # Enable prompt plugin
     print("\n[Enabling prompt plugin...]")
-    _api_call(s.use_api, "/plugins/tools/built-in/prompt/enable", "POST", {})
+    _api_call(s.use_api, "/api/plugins/tools/built-in/prompt/enable", "POST", {})
 
     print(f"\n{'=' * 50}")
     print(f"  Setup complete! Channel: {s.setup_channel}")
@@ -591,8 +707,10 @@ def agent():
     last_msg = full_msg
     print(f"\n  Last agent message: {str(last_msg)[:300]}")
 
-    # Verify it answered
-    if "597" in str(last_msg) or "15 * 37" in str(last_msg):
+    # Verify it answered — require the actual math result, not the question
+    # being echoed back (e.g. a noop/test-tool-caller canned reply echoes the
+    # question text, which would match a "15 * 37" substring check).
+    if "597" in str(last_msg):
         print(f"\n  {'=' * 50}")
         print(f"  ✅ AGENT TEST PASSED")
         print(f"{'=' * 50}")
@@ -677,6 +795,12 @@ def _disable_plugin(p_type, source, name):
     except RuntimeError as e:
         print(f"  ~ {p_type}/{name} disable: {str(e)[:80]}")
         return None
+
+
+# External-network tools need more wall time for the agent round-trip
+# (fetch_fetch hits GitHub and can take seconds); local tools reply in <1s.
+PHASE2_ACTIVE_POLL_TIMEOUT = 6
+PHASE2_POLL_TIMEOUTS = {"fetch_fetch": 15}
 
 
 def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_args, expected_keyword=None, expect_error=False, poll_timeout=5, validate_fn=None):
@@ -1497,7 +1621,7 @@ def run_tests():
                 mm_channel_id_test, testuser_token,
                 tool_name, tool_args,
                 validate_fn=TOOL_VALIDATORS.get(tool_name),
-                poll_timeout=4,
+                poll_timeout=PHASE2_POLL_TIMEOUTS.get(tool_name, PHASE2_ACTIVE_POLL_TIMEOUT),
             )
             if resp_c:
                 validator_name = TOOL_VALIDATORS.get(tool_name, _validate_not_error).__name__
