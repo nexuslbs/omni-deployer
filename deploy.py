@@ -139,26 +139,27 @@ def run_pretests(mode):
             print(r.stderr[-2000:] if r.stderr else "")
             raise RuntimeError(f"Pretest failed: {label or ' '.join(args[:3])}")
 
-    # 1. cargo fmt --check
+    # 1. cargo fmt --check (workspace-wide: core + all plugins)
     print("\n[pretests] Checking code format (cargo fmt --check)...")
-    check_cargo(["cargo", "fmt", "--check"], label="cargo fmt --check")
+    check_cargo(["cargo", "fmt", "--all", "--check"], label="cargo fmt --check")
     print("  ✓ Format check passed")
 
-    # 2. cargo check -D warnings (via RUSTFLAGS)
-    print("\n[pretests] Running cargo check (warnings as errors)...")
+    # 2. cargo check -D warnings (via RUSTFLAGS) — whole workspace, all targets
+    print("\n[pretests] Running cargo check (warnings as errors, workspace all targets)...")
     # RUSTFLAGS is used because `cargo check` doesn't support `--` passthrough to rustc
+    # --workspace --all-targets: lints core AND every plugin crate (incl. tests/benches)
     check_cargo(
-        ["cargo", "check", "--release"],
+        ["cargo", "check", "--workspace", "--all-targets", "--release"],
         label="cargo check -D warnings",
         extra_env={"RUSTFLAGS": "-D warnings"},
     )
     print("  ✓ cargo check passed")
 
-    # 3. cargo clippy -D warnings
-    print("\n[pretests] Running cargo clippy (warnings as errors)...")
+    # 3. cargo clippy -D warnings — whole workspace, all targets
+    print("\n[pretests] Running cargo clippy (warnings as errors, workspace all targets)...")
     # clippy DOES support `--` to pass args to rustc
     check_cargo(
-        ["cargo", "clippy", "--release", "--", "-D", "warnings"],
+        ["cargo", "clippy", "--workspace", "--all-targets", "--release", "--", "-D", "warnings"],
         label="cargo clippy -D warnings",
     )
     print("  ✓ cargo clippy passed")
