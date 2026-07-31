@@ -961,9 +961,9 @@ TOOL_DEFS = {
     },
     "docker_compose": {
         "plugin": "docker",
-        "test_args": {"command": "ps", "project_dir": "/opt/workspace/omniagent"},
+        "test_args": {"command": "ps", "compose_file": "/opt/workspace/omni-stack/docker-compose.yml"},
         "success_key": "NAME",
-        "mcp_test_args": {"command": "ps", "project_dir": "/opt/workspace/omniagent"},
+        "mcp_test_args": {"command": "ps", "compose_file": "/opt/workspace/omni-stack/docker-compose.yml"},
     },
     "fetch_fetch": {
         "plugin": "fetch",
@@ -1355,9 +1355,9 @@ def run_tests():
 
         phase2_tools_list = [
             ("cron_list-cron-jobs", {}, "cron"),
-            ("docker_compose", {"command": "ps", "project_dir": "/opt/workspace/omniagent"}, "NAME"),
+            ("docker_compose", {"command": "ps", "compose_file": "/opt/workspace/omni-stack/docker-compose.yml"}, "NAME"),
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
-            ("filesystem_read", {"path": "/opt/workspace/README.md"}, "OmniAgent"),
+            ("filesystem_read", {"path": "/opt/workspace/omniagent/README.md"}, "OmniAgent"),
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),
             ("kanban_list-kanban-tasks", {}, "kanban"),
             ("metrics_get-metrics", {}, "metrics"),
