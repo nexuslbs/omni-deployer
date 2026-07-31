@@ -973,9 +973,9 @@ TOOL_DEFS = {
     },
     "filesystem_read": {
         "plugin": "filesystem",
-        "test_args": {"path": "/opt/workspace/README.md"},
+        "test_args": {"path": "/opt/workspace/omniagent/README.md"},
         "success_key": "OmniAgent",
-        "mcp_test_args": {"path": "/opt/workspace/README.md"},
+        "mcp_test_args": {"path": "/opt/workspace/omniagent/README.md"},
     },
     "git_status": {
         "plugin": "git",
@@ -1418,9 +1418,9 @@ def run_tests():
 
             pre_check = _mcp_execute(tool_name, TOOL_DEFS.get(tool_name, {}).get("mcp_test_args", tool_args))
             if pre_check.get("is_error"):
-                print(f"  [SKIP: {tool_name} failed MCP pre-check — skipping Phase 2 tests]")
-                _print_result(f"{tool_name} (all states)", "SKIP", f"MCP error: {str(pre_check.get('content', ''))[:100]}")
-                skipped += 3
+                print(f"  [FAIL: {tool_name} failed MCP pre-check — Phase 2 tests failing]")
+                _print_result(f"{tool_name} (all states)", "FAIL", f"MCP error: {str(pre_check.get('content', ''))[:100]}")
+                failed += 3
                 continue
 
             # ── State A: Plugin disabled → expect error ──
