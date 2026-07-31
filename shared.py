@@ -275,6 +275,43 @@ def _remove_data_volumes(project_name):
         print(f"  Removed data volumes: {', '.join(removed)}")
 
 
+# Compose project names of the three omni stack launchers. Only ONE stack
+# may run at a time — all three publish the same host ports
+# (8080 omniagent / 12346 dashboard / 12349 mattermost). Each launcher
+# tears down the other two projects' containers before starting its own.
+OMNI_STACK_PROJECTS = ["omnidev", "omnideploy", "omnistable"]
+
+
+def stop_other_stacks(current_project):
+    """Stop + remove containers of the OTHER omni stack projects.
+
+    Only one of omnidev/omnideploy/omnistable can run at a time because they
+    all publish the same host ports. Before starting our own stack, tear down
+    the other projects' containers so the ports are free.
+
+    Containers are matched by the compose project label
+    (com.docker.compose.project), NOT by name prefix, so unrelated containers
+    are never touched. Networks left behind by the removed containers are
+    pruned best-effort (only networks not in use by any container).
+    """
+    for proj in OMNI_STACK_PROJECTS:
+        if proj == current_project:
+            continue
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={proj}"],
+            capture_output=True, text=True,
+        ).stdout.split()
+        if not listed:
+            continue
+        print(f"  Stopping {proj} containers ({len(listed)})...")
+        subprocess.run(["docker", "rm", "-f"] + listed, capture_output=True)
+        subprocess.run(
+            ["docker", "network", "prune", "-f",
+             "--filter", f"label=com.docker.compose.project={proj}"],
+            capture_output=True,
+        )
+
+
 def generate_env(mode="dev"):
     """Generate .env file with random passwords. mode='dev' or 'stable'."""
     s = sett()
@@ -463,6 +500,10 @@ def setup(deepseek_api_key):
     print(f"\n{'=' * 50}")
     print(f"  OmniStack Setup (project={s.project_name})")
     print(f"{'=' * 50}")
+
+    # Only one stack can run at a time (shared host ports 8080/12346/12349) —
+    # tear down the other launchers' containers BEFORE starting our own.
+    stop_other_stacks(s.project_name)
 
     # Generate env file
     mode = "stable" if not s.dev_overlay else "dev"
