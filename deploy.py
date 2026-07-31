@@ -266,6 +266,36 @@ def generate_env(mode):
         print(f"[deploy] {remote_yml_path} unchanged")
 
 
+# Data volumes that get wiped for a fresh start (like CI). Build-cache
+# volumes (cargo-registry, cargo-target, omniagent-target) are preserved.
+# ⚠️ SAFETY: only volumes whose name starts with the deploy project prefix
+# ("omnideploy_") are ever deleted. The compose project is forced to
+# "omnideploy" via COMPOSE_PROJECT_NAME in omni.env — this guard makes that
+# explicit so a future project-name change can never make deploy wipe the
+# wrong project's data (e.g. the "omni" project volumes from omni-stack).
+DATA_VOLUMES = ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]
+DEPLOY_VOLUME_PREFIX = "omnideploy_"
+
+
+def remove_data_volumes():
+    listed = subprocess.run(
+        ["docker", "volume", "ls", "-q", "--filter", f"name={DEPLOY_VOLUME_PREFIX}"],
+        capture_output=True, text=True,
+    ).stdout.split()
+    removed = []
+    for vol in listed:
+        # Hard guard: never touch a volume that isn't ours.
+        if not vol.startswith(DEPLOY_VOLUME_PREFIX):
+            continue
+        suffix = vol[len(DEPLOY_VOLUME_PREFIX):]
+        if suffix not in DATA_VOLUMES:
+            continue  # build cache / other data — preserved
+        subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
+        removed.append(vol)
+    if removed:
+        print(f"[deploy] Removed data volumes: {', '.join(removed)}")
+
+
 def deploy(mode):
     if not os.path.isdir(OMNI_STACK_DIR):
         raise RuntimeError(f"omni-stack not found at {OMNI_STACK_DIR}")
@@ -288,12 +318,13 @@ def deploy(mode):
 
     # Repo is verified clean, so it is now safe to remove root-owned,
     # gitignored build/test residue (target/, .remote/, test-* artifacts)
-    # that the container wrote into the bind mount. No git checkout is
-    # needed — with a clean tree there is nothing tracked to restore, and
-    # these paths are gitignored, so this only touches disposable runtime
-    # state. Removing them keeps local runs as fresh as a CI checkout.
+    # that the container wrote into the bind mount. `git clean -fdX` removes
+    # ONLY ignored files — tracked files (e.g. the bundled noop provider in
+    # plugins/providers/) are never touched, so nothing needs restoring and
+    # user work can never be discarded. Removing the residue keeps local runs
+    # as fresh as a CI checkout.
     sh("cd /opt/workspace/omni-stack && "
-       "sudo rm -rf plugins/tools/ plugins/platforms/ plugins/providers/ 2>/dev/null; "
+       "sudo git clean -fdX -- plugins/tools plugins/platforms plugins/providers 2>/dev/null; "
        "true")
 
     generate_env(mode)
@@ -304,8 +335,7 @@ def deploy(mode):
         print("\n[deploy] Stopping old services...")
         run_compose(compose, "down")
         print("[deploy] Removing data volumes...")
-        for vol in ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]:
-            subprocess.run(["docker", "volume", "rm", "-f", f"omnideploy_{vol}"], capture_output=True)
+        remove_data_volumes()
 
     # ── Step 0: Pretests ───────────────────────────────────────────
     # Run fmt, clippy, unit tests, build test binaries BEFORE deploy.
@@ -356,8 +386,7 @@ def deploy(mode):
 
     # Remove only data volumes, preserving build cache volumes
     print("[deploy] Removing data volumes...")
-    for vol in ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]:
-        subprocess.run(["docker", "volume", "rm", "-f", f"omnideploy_{vol}"], capture_output=True)
+    remove_data_volumes()
 
     # Step 2 (dev): Build images
     if mode == "dev":
