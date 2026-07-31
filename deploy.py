@@ -164,9 +164,10 @@ def run_pretests(mode):
     )
     print("  ✓ cargo clippy passed")
 
-    # 4. cargo test --release (unit tests only; integration tests are #[ignore] and run later)
-    print("\n[pretests] Running cargo test --release...")
-    check_cargo(["cargo", "test", "--release"], label="cargo test --release")
+    # 4. cargo test --release --workspace (unit tests for core + all plugins;
+    #    integration tests are #[ignore] and run later)
+    print("\n[pretests] Running cargo test --workspace --release...")
+    check_cargo(["cargo", "test", "--workspace", "--release"], label="cargo test --workspace --release")
     print("  ✓ Unit tests passed")
 
 
