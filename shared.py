@@ -1234,13 +1234,13 @@ def run_tests():
     for def_name, tool_def in TOOL_DEFS.items():
         tool_name = def_name
         if not tool_name:
-            _print_result(def_name, "SKIP", tool_def.get("skip_reason", "No test tool defined"))
-            skipped += 1
+            _print_result(def_name, "FAIL", tool_def.get("skip_reason", "No test tool defined"))
+            failed += 1
             continue
 
         if tool_name not in registered:
-            _print_result(def_name, "SKIP", f"Tool '{tool_name}' not registered")
-            skipped += 1
+            _print_result(def_name, "FAIL", f"Tool '{tool_name}' not registered")
+            failed += 1
             continue
 
         print(f"\n  --- Testing {tool_name} ---")
@@ -1380,8 +1380,8 @@ def run_tests():
 
         for tool_name, tool_args, success_key in phase2_tools_list + phase2_extra_tools:
             if tool_name not in registered_tools:
-                _print_result(f"{tool_name} (agent)", "SKIP", "Tool not registered")
-                skipped += 1
+                _print_result(f"{tool_name} (agent)", "FAIL", "Tool not registered")
+                failed += 1
                 continue
 
             if "_" in tool_name:
@@ -1407,8 +1407,8 @@ def run_tests():
             }
             plugin = plugin_map.get(plugin_name)
             if not plugin:
-                _print_result(f"{tool_name} (agent)", "SKIP", f"Unknown plugin mapping for '{plugin_name}'")
-                skipped += 1
+                _print_result(f"{tool_name} (agent)", "FAIL", f"Unknown plugin mapping for '{plugin_name}'")
+                failed += 1
                 continue
 
             phase2_count += 1
