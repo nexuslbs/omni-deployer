@@ -4490,7 +4490,9 @@ if __name__ == "__main__":
         test(fn)
 
     # Disable the prompt plugin after tests (restore default state)
-    resp = api_post_body("/plugins/tools/built-in/prompt/disable", {})
+    # Use 60s timeout — cargo-watch rebuilds from PASS 1's file changes
+    # can temporarily block the API
+    resp = api_post_body("/plugins/tools/built-in/prompt/disable", {}, timeout=60)
     print("  ✓ Prompt plugin disabled after GROUP 11")
 
     # Verify that prompt_generate returns an error when prompt plugin is disabled
@@ -4520,7 +4522,8 @@ if __name__ == "__main__":
     _check_mm_container()
 
     # Re-enable the prompt plugin (G11 disabled it at the end of its tests)
-    resp = api_post_body("/plugins/tools/built-in/prompt/enable", {})
+    # Use 60s timeout — cargo-watch rebuilds may temporarily block the API
+    resp = api_post_body("/plugins/tools/built-in/prompt/enable", {}, timeout=60)
     pass
     print("  ✓ Prompt plugin enabled for G12")
 
