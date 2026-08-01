@@ -504,6 +504,17 @@ def build_dev():
     print("\n=== Running migrations ===")
     run_compose_check("run", "--rm", "omniagent", "/target/release/db-migrations", label="migrations")
 
+    # prepare.py: cargo fmt + cargo sqlx prepare --workspace — formats the Rust
+    # sources and regenerates the offline .sqlx query cache against the live
+    # migrated DB, so committed caches stay fresh for SQLX_OFFLINE=true
+    # (stable/CI) builds.
+    print("\n=== Running prepare.py (cargo fmt + sqlx prepare) ===")
+    run_compose_check(
+        "run", "--rm", "omniagent",
+        "python3", "/app/scripts/prepare.py",
+        label="prepare (fmt + sqlx offline cache)",
+    )
+
     # Build all binaries via build.py (workspace member auto-discovery).
     # SQLX_OFFLINE comes from the compose env (false in dev overlay, true in
     # base/stable) — no hardcoded flag here.

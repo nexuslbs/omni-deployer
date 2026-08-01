@@ -430,6 +430,17 @@ def deploy(mode):
             "/target/release/db-migrations", label="migrations",
         )
 
+        # prepare.py: cargo fmt + cargo sqlx prepare --workspace — formats the
+        # Rust sources and regenerates the offline .sqlx query cache against
+        # the live migrated DB, so committed caches stay fresh for
+        # SQLX_OFFLINE=true (stable/CI) builds.
+        print("\n[deploy] Running prepare.py (cargo fmt + sqlx prepare)...")
+        run_compose_check(
+            compose, "run", "--rm", "omniagent",
+            "python3", "/app/scripts/prepare.py",
+            label="prepare (fmt + sqlx offline cache)",
+        )
+
         print("\n[deploy] Building all binaries...")
         run_compose_check(
             compose, "run", "--rm", "omniagent",
