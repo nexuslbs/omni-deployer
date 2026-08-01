@@ -3,7 +3,7 @@
 OmniStack stable launcher — thin wrapper around shared.py.
 
 Usage:
-  python3 omnistable.py setup [<deepseek-api-key>]
+  python3 omnistable.py setup
   python3 omnistable.py agent
   python3 omnistable.py test
 
@@ -12,7 +12,7 @@ The `setup` command:
      :latest image tags (omniagent, dashboard, toolbox)
   2. Starts Docker Compose (project=omnistable, profiles=noop,mattermost,memory)
      with `--pull always` so the newest :latest images are always fetched
-  3. Creates secrets (DEEPSEEK_API_KEY, Mattermost credentials)
+  3. Creates secrets (from secrets.env + Mattermost credentials)
   4. Enables + configures + runs the Mattermost platform setup
      (team `omni`, channel `stable-channel`, admin/test/bot users)
   5. Patches the stable-channel to deepseek/deepseek-v4-flash
@@ -65,26 +65,6 @@ settings = shared.Settings(
 shared.init(settings)
 
 
-def _load_deepseek_key():
-    """Read DEEPSEEK_API_KEY from the data .env file without printing it."""
-    candidates = [
-        "/opt/data/.env",
-        "/opt/omni/data/.env",
-    ]
-    for path in candidates:
-        try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("DEEPSEEK_API_KEY"):
-                        key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if key and not key.startswith("$"):
-                            return key
-        except OSError:
-            continue
-    return None
-
-
 def patch_channel_to_deepseek():
     """Patch the Mattermost stable-channel to deepseek/deepseek-v4-flash.
 
@@ -127,10 +107,6 @@ def main():
     setup_parser = subparsers.add_parser(
         "setup", help="Pull latest images, start the stack, configure omniagent + mattermost"
     )
-    setup_parser.add_argument(
-        "deepseek_api_key", nargs="?",
-        help="DeepSeek API key (defaults to DEEPSEEK_API_KEY from /opt/data/.env)",
-    )
 
     subparsers.add_parser("agent", help="Send math question via Mattermost and verify the agent response")
     subparsers.add_parser("test", help="Comprehensive plugin/tool testing")
@@ -138,11 +114,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "setup":
-        key = args.deepseek_api_key or _load_deepseek_key()
-        if not key:
-            print("ERROR: no deepseek API key provided and DEEPSEEK_API_KEY not found in /opt/data/.env")
-            sys.exit(1)
-        shared.setup(key)
+        shared.setup()
         patch_channel_to_deepseek()
     elif args.command == "agent":
         shared.agent()

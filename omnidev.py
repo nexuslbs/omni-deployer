@@ -3,7 +3,7 @@
 OmniStack dev launcher — thin wrapper around shared.py.
 
 Usage:
-  python3 omnidev.py setup --deepseek-api-key <key>
+  python3 omnidev.py setup
   python3 omnidev.py agent
   python3 omnidev.py test
 """
@@ -38,26 +38,6 @@ settings = shared.Settings(
 )
 
 shared.init(settings)
-
-
-def _load_deepseek_key():
-    """Read DEEPSEEK_API_KEY from the data .env file without printing it."""
-    candidates = [
-        "/opt/data/.env",
-        "/opt/omni/data/.env",
-    ]
-    for path in candidates:
-        try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("DEEPSEEK_API_KEY"):
-                        key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if key and not key.startswith("$"):
-                            return key
-        except OSError:
-            continue
-    return None
 
 
 def patch_channel_to_deepseek():
@@ -100,10 +80,6 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     setup_parser = subparsers.add_parser("setup", help="Build, start, and configure the stack")
-    setup_parser.add_argument(
-        "--deepseek-api-key", default=None,
-        help="DeepSeek API key (defaults to DEEPSEEK_API_KEY from /opt/data/.env)",
-    )
 
     subparsers.add_parser("agent", help="Send math question via Mattermost and verify")
 
@@ -112,11 +88,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "setup":
-        key = args.deepseek_api_key or _load_deepseek_key()
-        if not key:
-            print("ERROR: --deepseek-api-key not provided and DEEPSEEK_API_KEY not found in /opt/data/.env")
-            sys.exit(1)
-        shared.setup(key)
+        shared.setup()
         patch_channel_to_deepseek()
     elif args.command == "agent":
         shared.agent()

@@ -3,6 +3,9 @@ omni.env
 omnistable.env
 omnidev.env
 
+# API secrets (name=value pairs consumed by setup) — never commit
+secrets.env
+
 # Python cache
 __pycache__/
 *.pyc

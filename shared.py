@@ -178,26 +178,129 @@ def wait_for_db(service, user, db, label="db"):
 
 # ── Configuration helpers ─────────────────────────────────────────────────────
 
-def configure_deepseek_provider():
-    """Set the deepseek api_key reference in plugins.yml for secret resolution."""
+def _read_env_value(name):
+    """Read a non-secret value from /opt/data/.env or /opt/omni/data/.env (never printed)."""
+    for path in ("/opt/data/.env", "/opt/omni/data/.env"):
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(name + "="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if val and not val.startswith("$"):
+                            return val
+        except OSError:
+            continue
+    return None
+
+
+def configure_secret_refs():
+    """Set $secret: references in plugins.yml for providers and tools.
+
+    - deepseek provider    → api_key: "$secret:DEEPSEEK_API_KEY"
+    - opencode-go provider → api_key: "$secret:OPENCODE_API_KEY"
+    - git tool plugin      → github_app_private_key: "$secret:GITHUB_APP_KEY"
+
+    Each value must be created as a secret first (see ensure_secret + secrets.env).
+    """
     s = sett()
     yml_path = os.path.join(s.omni_stack_dir, "plugins.yml")
     r = sh("sudo cat " + yml_path)
     if r.returncode != 0:
-        print("  WARNING: Could not read plugins.yml — skipping provider config")
+        print("  WARNING: Could not read plugins.yml — skipping secret ref config")
         return
     yml = r.stdout
-    old_block = "  deepseek:\n    enabled: true\n    source: built-in\n    config: {}"
-    new_block = '  deepseek:\n    enabled: true\n    source: built-in\n    config:\n      api_key: "$secret:DEEPSEEK_API_KEY"'
-    if old_block in yml:
-        yml = yml.replace(old_block, new_block)
-        sh("sudo tee " + yml_path + " > /dev/null <<'HERMES_EOF'\n" + yml + "\nHERMES_EOF")
+    changed = False
+
+    # deepseek: config: {} → api_key ref (or already set)
+    ds_old = "  deepseek:\n    enabled: true\n    source: built-in\n    config: {}"
+    ds_new = '  deepseek:\n    enabled: true\n    source: built-in\n    config:\n      api_key: "$secret:DEEPSEEK_API_KEY"'
+    if ds_old in yml:
+        yml = yml.replace(ds_old, ds_new)
+        changed = True
         print("  Plugins.yml updated: deepseek api_key set to $secret:DEEPSEEK_API_KEY")
+    elif 'api_key: "$secret:DEEPSEEK_API_KEY"' in yml or "api_key: $secret:DEEPSEEK_API_KEY" in yml:
+        print("  Deepseek provider already configured in plugins.yml")
     else:
-        if 'api_key: "$secret:DEEPSEEK_API_KEY"' in yml:
-            print("  Deepseek provider already configured in plugins.yml")
+        print("  WARNING: Could not find expected deepseek block in plugins.yml")
+
+    # opencode-go: config: {} → api_key ref (or already set)
+    oc_old = "  opencode-go:\n    enabled: true\n    source: built-in\n    config: {}"
+    oc_new = '  opencode-go:\n    enabled: true\n    source: built-in\n    config:\n      api_key: "$secret:OPENCODE_API_KEY"'
+    if oc_old in yml:
+        yml = yml.replace(oc_old, oc_new)
+        changed = True
+        print("  Plugins.yml updated: opencode-go api_key set to $secret:OPENCODE_API_KEY")
+    elif 'api_key: "$secret:OPENCODE_API_KEY"' in yml or "api_key: $secret:OPENCODE_API_KEY" in yml:
+        print("  Opencode-go provider already configured in plugins.yml")
+    else:
+        print("  WARNING: Could not find expected opencode-go block in plugins.yml")
+
+    # git tool: ensure github_app_private_key points at $secret:GITHUB_APP_KEY.
+    # Handles both a fresh `config: {}` block and an existing private-key ref
+    # (swaps whatever ref is present to the canonical GITHUB_APP_KEY name).
+    git_old = "  git:\n    enabled: true\n    source: built-in\n    config: {}"
+    if git_old in yml:
+        app_id = _read_env_value("GITHUB_APP_ID") or "3967918"
+        inst_id = _read_env_value("GITHUB_INSTALLATION_ID") or "138119822"
+        yml = yml.replace(
+            git_old,
+            '  git:\n    enabled: true\n    source: built-in\n    config:\n'
+            f'      github_app_id: "{app_id}"\n'
+            '      github_app_private_key: "$secret:GITHUB_APP_KEY"\n'
+            f'      github_installation_id: "{inst_id}"',
+        )
+        changed = True
+        print("  Plugins.yml updated: git github_app_private_key set to $secret:GITHUB_APP_KEY")
+    elif "github_app_private_key" in yml:
+        new_yml, n = re.subn(
+            r'github_app_private_key:\s*(\$secret:[A-Z0-9_]+|"[^"]*")',
+            'github_app_private_key: "$secret:GITHUB_APP_KEY"',
+            yml,
+        )
+        if n:
+            yml = new_yml
+            changed = True
+            print("  Plugins.yml updated: git github_app_private_key set to $secret:GITHUB_APP_KEY")
         else:
-            print("  WARNING: Could not find expected deepseek block in plugins.yml")
+            print("  Git plugin already configured in plugins.yml")
+    else:
+        print("  WARNING: Could not find expected git block in plugins.yml")
+
+    if changed:
+        sh("sudo tee " + yml_path + " > /dev/null <<'HERMES_EOF'\n" + yml + "\nHERMES_EOF")
+        print("  Plugins.yml written")
+
+
+def load_secrets_env():
+    """Read secrets.env from the omni-deployer dir (name=value pairs, .env style).
+
+    Returns {NAME: value}. Supports:
+    - blank lines and '#' comments
+    - optional single/double quotes around values
+    - literal \\n escapes inside values (unescaped to real newlines) so
+      multi-line secrets like PEM keys fit on a single line
+    """
+    s = sett()
+    path = os.path.join(s.script_dir, "secrets.env")
+    secrets = {}
+    if not os.path.exists(path):
+        print(f"  WARNING: {path} not found — no API secrets will be created")
+        return secrets
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            name = name.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            value = value.replace("\\n", "\n")
+            if name:
+                secrets[name] = value
+    return secrets
 
 
 def ensure_secret(name, value):
@@ -494,8 +597,13 @@ def _run_mattermost_setup_with_retry(s, attempts=6, delay=30):
     return resp
 
 
-def setup(deepseek_api_key):
-    """Full setup: generate env, start stack, configure omniagent."""
+def setup():
+    """Full setup: generate env, start stack, configure omniagent.
+
+    API secrets (deepseek/opencode keys, GH app key) come from secrets.env in
+    the omni-deployer directory (name=value pairs, .env style). No deepseek
+    API key is passed as an argument anymore.
+    """
     s = sett()
     print(f"\n{'=' * 50}")
     print(f"  OmniStack Setup (project={s.project_name})")
@@ -519,13 +627,14 @@ def setup(deepseek_api_key):
     # Start services
     start_services()
 
-    # Configure deepseek provider
-    print("\n[Configuring deepseek provider...]")
-    configure_deepseek_provider()
+    # Configure $secret: references (deepseek, opencode-go, git) in plugins.yml
+    print("\n[Configuring secret refs...]")
+    configure_secret_refs()
 
-    # Create secrets
+    # Create secrets from secrets.env + generated mattermost passwords
     print("\n[Creating secrets...]")
-    ensure_secret("DEEPSEEK_API_KEY", deepseek_api_key)
+    for name, value in load_secrets_env().items():
+        ensure_secret(name, value)
     ensure_secret("MATTERMOST_ACCESS_TOKEN", "")
     ensure_secret("MATTERMOST_ADMIN_PASSWORD", s.mm_admin_pass)
     ensure_secret("MATTERMOST_BOT_PASSWORD", s.mm_bot_pass)
