@@ -1125,6 +1125,16 @@ def _validate_git_status(msg):
     )
 
 
+def _validate_git_run_command(msg):
+    """git_run-command should return git command output (log/diff-style)."""
+    return _validate_not_error(msg) and (
+        "commit" in msg.lower() or "merge" in msg.lower()
+        or "author" in msg.lower() or "diff" in msg.lower()
+        or "oneline" in msg.lower() or "stdout" in msg.lower()
+        or "git log" in msg.lower() or "exit_code" in msg.lower()
+    )
+
+
 def _validate_kanban_list(msg):
     """kanban_list-kanban-tasks should return tasks or empty list."""
     return _validate_not_error(msg) and (
@@ -1238,6 +1248,7 @@ TOOL_VALIDATORS = {
     "fetch_fetch": _validate_fetch,
     "filesystem_read": _validate_filesystem_read,
     "git_status": _validate_git_status,
+    "git_run-command": _validate_git_run_command,
     "kanban_list-kanban-tasks": _validate_kanban_list,
     "metrics_get-metrics": _validate_metrics,
     "prompt_generate": _validate_prompt_generate,
@@ -1291,6 +1302,12 @@ TOOL_DEFS = {
         "test_args": {"repo_dir": "/opt/workspace/omniagent"},
         "success_key": "git",
         "mcp_test_args": {"repo_dir": "/opt/workspace/omniagent"},
+    },
+    "git_run-command": {
+        "plugin": "git",
+        "test_args": {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]},
+        "success_key": "git",
+        "mcp_test_args": {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]},
     },
     "kanban_list-kanban-tasks": {
         "plugin": "kanban",
@@ -1668,6 +1685,7 @@ def run_tests():
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
             ("filesystem_read", {"path": "/opt/workspace/omniagent/README.md"}, "OmniAgent"),
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),
+            ("git_run-command", {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]}, "git"),
             ("kanban_list-kanban-tasks", {}, "kanban"),
             ("metrics_get-metrics", {}, "metrics"),
             ("prompt_generate", {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []}, "prompt"),

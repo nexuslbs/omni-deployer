@@ -79,6 +79,7 @@ ALLOWED_TOOLS = [
     "git_clone-repo",
     "git_commit-and-push",
     "git_create-github-repo",
+    "git_run-command",
     "kanban_list-kanban-tasks",
     "metrics_get-metrics",
     "prompt_generate",
