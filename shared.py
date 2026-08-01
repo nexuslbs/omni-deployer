@@ -488,17 +488,31 @@ def build_dev():
     wait_for_db("postgres", "omniagent", "omniagent", "postgres")
     wait_for_db("mattermost-db", "mmuser", "mattermost", "mattermost-db")
 
-    # Build all binaries via build.py (workspace member auto-discovery)
+    # Build db-migrations binary first (it has NO compile-time sqlx macros, so
+    # it builds fine with SQLX_OFFLINE=false against an empty DB), then run
+    # migrations so the schema exists BEFORE the workspace build. Dev builds
+    # use SQLX_OFFLINE=false (dev overlay), so sqlx validates every query
+    # against the live migrated DB at compile time — no stale .sqlx cache.
+    print("\n=== Building db-migrations binary ===")
+    run_compose_check(
+        "run", "--rm", "omniagent",
+        "cargo", "build", "--release", "-p", "db-migrations",
+        label="build db-migrations",
+    )
+
+    # Run migrations (schema must exist before the workspace build validates queries)
+    print("\n=== Running migrations ===")
+    run_compose_check("run", "--rm", "omniagent", "/target/release/db-migrations", label="migrations")
+
+    # Build all binaries via build.py (workspace member auto-discovery).
+    # SQLX_OFFLINE comes from the compose env (false in dev overlay, true in
+    # base/stable) — no hardcoded flag here.
     print("\n=== Building all binaries (build.py) ===")
     run_compose_check(
-        "run", "--rm", "-e", "SQLX_OFFLINE=true", "omniagent",
+        "run", "--rm", "omniagent",
         "python3", "/app/scripts/build.py",
         label="build all binaries",
     )
-
-    # Run migrations
-    print("\n=== Running migrations ===")
-    run_compose_check("run", "--rm", "omniagent", "/target/release/db-migrations", label="migrations")
 
 
 def start_services():

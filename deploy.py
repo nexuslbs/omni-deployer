@@ -412,35 +412,36 @@ def deploy(mode):
     wait_for_db(compose, "postgres", "omniagent", "omniagent", "postgres")
     wait_for_db(compose, "mattermost-db", "mmuser", "mattermost", "mattermost-db")
 
-    # Step 5 (dev): Build all binaries via build.py
-    # build.py auto-discovers all workspace members from Cargo.toml
-    # and builds everything — omniagent, db-migrations, and all plugin
-    # binaries (platforms + tools). No hardcoded package lists.
+    # Step 5 (dev): Build db-migrations binary, run migrations, THEN build the
+    # workspace. Dev builds use SQLX_OFFLINE=false (dev overlay compose env) so
+    # sqlx validates queries against the live migrated DB at compile time — the
+    # schema must exist before the workspace build. db-migrations has no
+    # compile-time sqlx macros, so it builds fine against an empty DB.
     if mode == "dev":
+        print("\n[deploy] Building db-migrations binary...")
+        run_compose_check(
+            compose, "run", "--rm", "omniagent",
+            "cargo", "build", "--release", "-p", "db-migrations",
+            label="build db-migrations",
+        )
+        print("[deploy] Running migrations...")
+        run_compose_check(
+            compose, "run", "--rm", "omniagent",
+            "/target/release/db-migrations", label="migrations",
+        )
+
         print("\n[deploy] Building all binaries...")
         run_compose_check(
-            compose, "run", "--rm", "-e", "SQLX_OFFLINE=true", "omniagent",
+            compose, "run", "--rm", "omniagent",
             "python3", "/app/scripts/build.py",
             label="build all binaries",
         )
 
-    # Step 6: Run migrations
-    print("\n[deploy] Running migrations...")
+    # Step 6: Run migrations (ci/hybrid: production image has db-migrations)
     if mode in ("ci", "hybrid"):
-        # CI/hybrid: production image has db-migrations at /usr/local/bin/
+        print("\n[deploy] Running migrations...")
         run_compose_check(compose, "run", "--rm", "omniagent",
                           "db-migrations", label="migrations")
-    else:
-        # Dev: binary at /target/release/ (built with CARGO_TARGET_DIR=/target)
-        r = run_compose(compose, "run", "--rm", "omniagent",
-                        "test", "-f", "/target/release/db-migrations")
-        if r.returncode == 0:
-            run_compose_check(compose, "run", "--rm", "omniagent",
-                              "/target/release/db-migrations", label="migrations")
-        else:
-            run_compose_check(compose, "run", "--rm", "omniagent",
-                              "cargo", "run", "--release", "-p", "db-migrations",
-                              label="migrations (cargo)")
 
     # Step 7: Start all services
     print("\n[deploy] Starting all services...")
