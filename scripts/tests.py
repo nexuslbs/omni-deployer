@@ -4627,7 +4627,7 @@ def test_fn_15_settings_hardcoded():
 
     assert "max_tokens" in all_settings, f"missing max_tokens, got keys={list(all_settings.keys())[:5]}..."
     assert "temperature" in all_settings, "missing temperature"
-    assert all_settings["max_tokens"] == "4096", f"max_tokens={all_settings['max_tokens']}"
+    assert all_settings["max_tokens"] == "8192", f"max_tokens={all_settings['max_tokens']}"
     assert all_settings["temperature"] == "0.7", f"temperature={all_settings['temperature']}"
 
     def find_meta(name):

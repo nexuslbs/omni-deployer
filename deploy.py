@@ -434,10 +434,16 @@ def deploy(mode):
         # Rust sources and regenerates the offline .sqlx query cache against
         # the live migrated DB, so committed caches stay fresh for
         # SQLX_OFFLINE=true (stable/CI) builds.
+        # The script lives in the omni-deployer repo (deploy tooling), so it
+        # is bind-mounted read-only into the container; --root /app points it
+        # at the omniagent workspace mounted at /app.
         print("\n[deploy] Running prepare.py (cargo fmt + sqlx prepare)...")
+        prepare_script = os.path.join(SCRIPT_DIR, "scripts", "prepare.py")
         run_compose_check(
-            compose, "run", "--rm", "omniagent",
-            "python3", "/app/scripts/prepare.py",
+            compose, "run", "--rm",
+            "-v", f"{prepare_script}:/tmp/prepare.py:ro",
+            "omniagent",
+            "python3", "/tmp/prepare.py", "--root", "/app",
             label="prepare (fmt + sqlx offline cache)",
         )
 
