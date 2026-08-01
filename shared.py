@@ -379,18 +379,22 @@ def _remove_data_volumes(project_name):
 
 
 # Compose project names of the three omni stack launchers. Only ONE stack
-# may run at a time — all three publish the same host ports
-# (8080 omniagent / 12346 dashboard / 12349 mattermost). Each launcher
-# tears down the other two projects' containers before starting its own.
+# may run at a time — the dev overlay publishes host ports
+# (12346 dashboard / 12349 mattermost; omniagent is expose-only) and several
+# services use fixed container_name entries (omni-cloudflared, omni-cadvisor,
+# omni-vector, omni-loki, omni-grafana, omni-prometheus) which are global to
+# the Docker daemon. Each launcher tears down the other two projects'
+# containers before starting its own.
 OMNI_STACK_PROJECTS = ["omnidev", "omnideploy", "omnistable"]
 
 
 def stop_other_stacks(current_project):
     """Stop + remove containers of the OTHER omni stack projects.
 
-    Only one of omnidev/omnideploy/omnistable can run at a time because they
-    all publish the same host ports. Before starting our own stack, tear down
-    the other projects' containers so the ports are free.
+    Only one of omnidev/omnideploy/omnistable can run at a time because the
+    dev overlay publishes shared host ports and several services use fixed
+    container_name entries. Before starting our own stack, tear down the
+    other projects' containers so the ports/names are free.
 
     Containers are matched by the compose project label
     (com.docker.compose.project), NOT by name prefix, so unrelated containers

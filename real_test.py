@@ -3,8 +3,9 @@
 real_test.py — end-to-end kanban implementation test for omni stacks.
 
 Usage:
-  python3 real_test.py dev       # omnidev: build from host repos (fast feedback)
-  python3 real_test.py stable    # omnistable: GHCR images (static, image-fixed)
+  python3 real_test.py run dev       # omnidev: build from host repos (fast feedback)
+  python3 real_test.py run stable    # omnistable: GHCR images (static, image-fixed)
+  python3 real_test.py verify dev    # wait for task completion + verify deliverable pushed
 
 Flow:
   1. setup  — build/start/configure stack + Mattermost (via shared.setup)
@@ -14,6 +15,10 @@ Flow:
      + profile omni, write the omni profile allowed_tools config, and create
      a Kanban task in Todo status linked to that channel with the
      dev-development template and plan mode enabled.
+  4. verify — (post-task) wait for the kanban task to reach a terminal status,
+     then check the movie-db repo is ACTUALLY pushed (local HEAD == origin,
+     clean tree, no scratch helper files). A "completed" thread is NOT the
+     deliverable — the task body says "commit AND push".
 """
 
 import argparse
@@ -273,6 +278,124 @@ def create_kanban_task(omni_channel_id):
     return task_id
 
 
+# ── Post-task artifact verification (Fix #8) ────────────────────────────────
+# Golden rule: a completed thread is NOT the deliverable. The task body says
+# "commit AND push" — so after the task reaches a terminal status we must
+# verify the repo is actually pushed (local HEAD == origin) and that no
+# scratch helper files (toolbox/, patch containers) leaked into the repo.
+
+TERMINAL_STATUSES = {"review", "done", "blocked"}
+
+
+def wait_kanban_terminal(task_id, timeout_s=1800, poll_s=15):
+    """Poll the kanban task until it leaves todo/ready/running or times out.
+
+    Returns the terminal status string.
+    """
+    print(f"\n[Waiting for kanban task {task_id} to reach a terminal status "
+          f"(timeout {timeout_s}s)...]")
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            r = shared.oc_curl("GET", f"/kanban/tasks/{task_id}")
+            status = (r.get("data") or {}).get("status")
+        except Exception as e:
+            print(f"  (poll error: {e})")
+            status = None
+        if status in TERMINAL_STATUSES:
+            print(f"  Task reached terminal status: {status}")
+            return status
+        if status:
+            print(f"  task status={status} ...")
+        time.sleep(poll_s)
+    raise RuntimeError(f"Kanban task {task_id} did not reach a terminal status "
+                       f"within {timeout_s}s (last status={status})")
+
+
+def verify_artifact_pushed(repo_dir):
+    """Verify the deliverable exists AND is pushed (local HEAD == origin).
+
+    Raises RuntimeError with a specific message when the artifact is missing,
+    unpushed, dirty, or polluted with scratch files.
+    """
+    print(f"\n[Verifying deliverable in {repo_dir}]")
+    if not os.path.isdir(repo_dir):
+        raise RuntimeError(f"Deliverable repo missing: {repo_dir}")
+
+    # 1. Must have commits
+    r = shared.sh(f"git -C {repo_dir} rev-parse --verify HEAD")
+    if r.returncode != 0:
+        raise RuntimeError(f"Repo {repo_dir} has no commits (nothing was implemented)")
+
+    # 2. Must be pushed: no unpushed commits (status -sb shows "ahead N")
+    r = shared.sh(f"git -C {repo_dir} status -sb")
+    if r.returncode != 0:
+        raise RuntimeError(f"git status failed in {repo_dir}")
+    status_line = r.stdout.splitlines()[0] if r.stdout else ""
+    if "ahead" in status_line:
+        raise RuntimeError(
+            f"Deliverable NOT pushed: {repo_dir} has unpushed commits "
+            f"({status_line.strip()}). Task body said 'commit AND push'."
+        )
+    print(f"  OK: repo is pushed ({status_line.strip()})")
+
+    # 3. Must be clean (no uncommitted work)
+    r = shared.sh(f"git -C {repo_dir} status --porcelain")
+    if r.stdout.strip():
+        dirty = r.stdout.strip().splitlines()[:5]
+        raise RuntimeError(f"Repo {repo_dir} has uncommitted changes: {dirty}")
+
+    # 4. Must NOT contain scratch helper dirs (toolbox/, patch/, helper compose)
+    r = shared.sh(f"git -C {repo_dir} ls-files | grep -iE 'toolbox|/patch/|helper' || true")
+    if r.stdout.strip():
+        raise RuntimeError(
+            f"Repo {repo_dir} contains committed scratch helper files: "
+            f"{r.stdout.strip().splitlines()[:5]}"
+        )
+    print(f"  OK: no scratch helper files committed")
+
+    # 5. Must contain the expected project marker (docker-compose.yml at root)
+    if not os.path.isfile(os.path.join(repo_dir, "docker-compose.yml")):
+        raise RuntimeError(f"Repo {repo_dir} missing docker-compose.yml at root")
+    print(f"  OK: deliverable verified ({repo_dir})")
+
+
+def verify(mode):
+    """Post-task verification: wait for the movie-db kanban task to finish,
+    then verify the repo was actually pushed (not just committed)."""
+    print(f"{BORD}")
+    print(f"  REAL TEST VERIFY — mode={mode}")
+    print(f"{BORD}")
+
+    settings = make_settings(mode)
+    shared.init(settings)
+
+    # Find the movie-db task on the kanban board
+    r = shared.oc_curl("GET", "/kanban/tasks")
+    tasks = r.get("data") or []
+    task = next((t for t in tasks if t.get("title") == TASK_TITLE), None)
+    if not task:
+        raise RuntimeError(f"Could not find kanban task '{TASK_TITLE}' on the board")
+    task_id = task["id"]
+    print(f"  Found task {task_id}: current status={task.get('status')}")
+
+    status = wait_kanban_terminal(task_id)
+    if status == "blocked":
+        raise RuntimeError(
+            f"Kanban task {task_id} ended BLOCKED — the deliverable was not "
+            f"completed (final tool result errored or thread failed)."
+        )
+
+    # status is review/done → verify the actual artifact
+    verify_artifact_pushed(os.path.join(WORKSPACE_DIR, "playground", "movie-db"))
+
+    print(f"\n{BORD}")
+    print(f"  ✅ REAL TEST VERIFY PASSED (mode={mode})")
+    print(f"  Task {task_id} ended '{status}' and the movie-db repo is pushed.")
+    print(f"{BORD}")
+    return 0
+
+
 def run(mode):
     print(f"{BORD}")
     print(f"  REAL TEST — mode={mode}")
@@ -312,9 +435,17 @@ def run(mode):
 
 def main():
     parser = argparse.ArgumentParser(description="End-to-end kanban implementation test")
+    parser.add_argument(
+        "command",
+        choices=["run", "verify"],
+        help="run = setup stack + create kanban task; verify = wait for task completion "
+             "and verify the deliverable was pushed",
+    )
     parser.add_argument("mode", choices=["dev", "stable"], help="dev (omnidev, host repos) or stable (omnistable, GHCR images)")
     args = parser.parse_args()
     try:
+        if args.command == "verify":
+            sys.exit(verify(args.mode))
         sys.exit(run(args.mode))
     except Exception as e:
         print(f"\n❌ REAL TEST FAILED: {e}", file=sys.stderr)
