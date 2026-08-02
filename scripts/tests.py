@@ -3524,78 +3524,131 @@ def _compact_call(messages: list, keep_recent: int = 3) -> dict:
     return json.loads(result["content"])
 
 # ── Compact-messages tests ───────────────────────────────────────────
+#
+# Contract (user-mandated, Aug 2026): the tool compacts ONLY when the
+# conversation size exceeds the HARD budget, reducing it TO the soft budget
+# (soft is the reduction target, NOT a trigger). When the size is under the
+# hard budget the tool returns messages=null (no compaction). The tests below
+# set small budgets on the prompt plugin (now that config updates actually
+# reach the plugin) so the tiny synthetic conversations can exercise both
+# sides of the gate.
+
+def _set_prompt_budget(hard, soft):
+    """Set small char budgets on the prompt plugin (strings — config chain
+    forwards them as strings and the plugin parses them leniently)."""
+    resp = api_post_body("/plugins/tools/built-in/prompt/config",
+                         {"config": {"char_budget_hard": str(hard),
+                                     "char_budget_soft": str(soft)}}, timeout=30)
+    assert resp.get("success"), f"budget set failed: {resp}"
+    time.sleep(1.5)  # allow hot reload + reconfigure to apply
+
+def _reset_prompt_budget():
+    resp = api_post_body("/plugins/tools/built-in/prompt/config",
+                         {"config": {}}, timeout=30)
+    assert resp.get("success"), f"budget reset failed: {resp}"
+    time.sleep(1.5)
+
+class _PromptBudget:
+    """Context manager: set small budgets for a test, always restore."""
+    def __init__(self, hard, soft):
+        self.hard, self.soft = hard, soft
+    def __enter__(self):
+        _set_prompt_budget(self.hard, self.soft)
+        return self
+    def __exit__(self, *exc):
+        _reset_prompt_budget()
+        return False
+
+def _make_big_assistant_msg(tool_names, pad_chars=800):
+    """Assistant message with padded content so the conversation exceeds
+    the small hard budget used by the compaction tests."""
+    m = _make_assistant_msg(tool_names)
+    m["content"] = "Let me check that. " + ("x" * pad_chars)
+    return m
+
+def _msgs_size(msgs):
+    return sum(len(m.get("content", "")) for m in msgs)
 
 def test_p7_no_compaction_needed():
-    """Fewer tool-calling messages than keep_recent → no change"""
-    msgs = [_make_user_msg(), _make_assistant_msg(["tool_a"]), _make_tool_msg("tool_a", "call_0"),
-            _make_user_msg("Hi again"), _make_assistant_msg(["tool_b"]), _make_tool_msg("tool_b", "call_0")]
-    resp = _compact_call(msgs, keep_recent=3)
-    assert not resp["was_compacted"], f"Should not compact: {resp['before_count']} ≤ 3"
-    assert resp["before_count"] == resp["after_count"]
-    assert resp["after_count"] == 6
+    """Under the hard budget → no compaction, messages=null"""
+    with _PromptBudget(2000, 1000):
+        msgs = [_make_user_msg(), _make_assistant_msg(["tool_a"]), _make_tool_msg("tool_a", "call_0"),
+                _make_user_msg("Hi again"), _make_assistant_msg(["tool_b"]), _make_tool_msg("tool_b", "call_0")]
+        resp = _compact_call(msgs, keep_recent=3)
+        assert not resp["was_compacted"], f"Should not compact under hard budget: {resp}"
+        assert resp["messages"] is None, f"Should return null messages: {resp}"
+        assert resp["before_count"] == resp["after_count"] == 6
 
 def test_p7_compaction_reduces_count():
-    """More tool-calling messages than keep_recent → compacts oldest"""
-    # 5 assistant+tool pairs, keep_recent=3 → compact 2 pairs (4 messages removed)
-    msgs = []
-    for i in range(5):
-        msgs.append(_make_assistant_msg(["tool_a"]))
-        msgs.append(_make_tool_msg("tool_a", "call_0"))
-    msgs.insert(0, _make_user_msg("Start"))
-    before = len(msgs)  # 11
-
-    resp = _compact_call(msgs, keep_recent=3)
-    assert resp["was_compacted"], "Should have compacted"
-    assert resp["before_count"] == 11
-    # 2 old pairs compacted: each removes the tool msg after the assistant → 2 removed
-    assert resp["after_count"] == 9, f"Expected 9 after compacting 2 pairs, got {resp['after_count']}"
-    # Compaction produces [compact: ...] messages but doesn't delete the assistant msg
+    """Over the hard budget → compacts, reducing size to ≤ soft budget"""
+    with _PromptBudget(2000, 1000):
+        msgs = []
+        for i in range(5):
+            msgs.append(_make_big_assistant_msg(["tool_a"]))
+            msgs.append(_make_tool_msg("tool_a", "call_0"))
+        msgs.insert(0, _make_user_msg("Start"))
+        before = len(msgs)  # 11
+        resp = _compact_call(msgs, keep_recent=3)
+        assert resp["was_compacted"], "Should have compacted (over hard budget)"
+        assert resp["before_count"] == 11
+        assert resp["after_count"] < resp["before_count"], "Count should drop"
+        assert resp["messages"] is not None, "Should return the compacted array"
+        # Soft budget is the reduction target
+        assert _msgs_size(resp["messages"]) <= 1000, \
+            f"Size should be reduced to ≤ soft budget: {_msgs_size(resp['messages'])}"
 
 def test_p7_keep_recent_1():
-    """keep_recent=1 compacts all but the most recent"""
-    msgs = []
-    for i in range(5):
-        msgs.append(_make_assistant_msg(["tool_a"]))
-        msgs.append(_make_tool_msg("tool_a", "call_0"))
-    resp = _compact_call(msgs, keep_recent=1)
-    assert resp["was_compacted"]
-    # 5 pairs → after keep_recent=1: 4 old pairs compacted (4 removed) → 6 remaining
-    assert resp["after_count"] == 6, f"Expected 6 (5 pairs - 4 compact + 1 user? no), got {resp['after_count']}"
+    """keep_recent=1 compacts more aggressively than keep_recent=3"""
+    with _PromptBudget(2000, 1000):
+        msgs = []
+        for i in range(5):
+            msgs.append(_make_big_assistant_msg(["tool_a"]))
+            msgs.append(_make_tool_msg("tool_a", "call_0"))
+        r3 = _compact_call(msgs, keep_recent=3)
+        r1 = _compact_call(msgs, keep_recent=1)
+        assert r3["was_compacted"] and r1["was_compacted"]
+        assert r1["after_count"] <= r3["after_count"], \
+            f"keep_recent=1 should compact at least as much: {r1['after_count']} vs {r3['after_count']}"
 
 def test_p7_zero_tool_calls():
     """Messages with no tool_calls → no compaction"""
-    msgs = [_make_user_msg("A"), _make_user_msg("B"), _make_user_msg("C")]
-    resp = _compact_call(msgs, keep_recent=3)
-    assert not resp["was_compacted"]
-    assert resp["after_count"] == 3
+    with _PromptBudget(2000, 1000):
+        msgs = [_make_user_msg("A"), _make_user_msg("B"), _make_user_msg("C")]
+        resp = _compact_call(msgs, keep_recent=3)
+        assert not resp["was_compacted"]
+        assert resp["after_count"] == 3
 
 def test_p7_tool_names_preserved():
     """Compacted messages still reference the tool names"""
-    msgs = []
-    for i in range(4):
-        msgs.append(_make_assistant_msg(["search_docs", "read_file"]))
-        msgs.append(_make_tool_msg("search_docs", "call_0"))
-        msgs.append(_make_tool_msg("read_file", "call_1"))
-    resp = _compact_call(msgs, keep_recent=2)
-    assert resp["was_compacted"]
-    for msg in resp["messages"]:
-        if msg.get("role") == "assistant" and "compacted" in msg.get("content", ""):
-            assert "search_docs" in msg["content"] or "read_file" in msg["content"], \
-                f"Compacted msg missing tool name: {msg['content']}"
+    with _PromptBudget(2000, 1000):
+        msgs = []
+        for i in range(4):
+            msgs.append(_make_big_assistant_msg(["search_docs", "read_file"]))
+            msgs.append(_make_tool_msg("search_docs", "call_0"))
+            msgs.append(_make_tool_msg("read_file", "call_1"))
+        resp = _compact_call(msgs, keep_recent=2)
+        assert resp["was_compacted"], f"Should compact over hard budget: {resp}"
+        # NOTE: compact_old_assistant_messages writes "[compact: tool()...]"
+        # (compact.rs) — match on "[compact", not "compacted".
+        compacted = [m for m in resp["messages"] if "[compact" in m.get("content", "")]
+        assert compacted, "Expected at least one compacted message"
+        for m in compacted:
+            assert "search_docs" in m["content"] or "read_file" in m["content"], \
+                f"Compacted msg missing tool name: {m['content']}"
 
 def test_p7_compact_multiple_tools():
     """Assistant with multiple tool_calls in one message -> compacted reference shows all tools"""
-    # Use 5 assistant+tool pairs (single tool_call each) with keep_recent=1
-    msgs = [_make_user_msg("Start")]
-    for i in range(5):
-        msgs.append(_make_assistant_msg(["tool_a"]))
-        msgs.append(_make_tool_msg("tool_a", "call_0"))
-    resp = _compact_call(msgs, keep_recent=1)
-    assert resp["was_compacted"], f"Expected compaction: {resp['before_count']} -> {resp['after_count']}"
-    assert resp["after_count"] < resp["before_count"], f"Count did not reduce: {resp}"
-    compacted = [m for m in resp["messages"] if "compacted" in m.get("content", "")]
-    if compacted:
-        assert "tool_a" in compacted[0]["content"], f"Missing tool name: {compacted[0]['content'][:100]}"
+    with _PromptBudget(2000, 1000):
+        msgs = [_make_user_msg("Start")]
+        for i in range(5):
+            msgs.append(_make_big_assistant_msg(["tool_a"]))
+            msgs.append(_make_tool_msg("tool_a", "call_0"))
+        resp = _compact_call(msgs, keep_recent=1)
+        assert resp["was_compacted"], f"Expected compaction: {resp['before_count']} -> {resp['after_count']}"
+        assert resp["after_count"] < resp["before_count"], f"Count did not reduce: {resp}"
+        compacted = [m for m in resp["messages"] if "[compact" in m.get("content", "")]
+        if compacted:
+            assert "tool_a" in compacted[0]["content"], f"Missing tool name: {compacted[0]['content'][:100]}"
 
 def test_p7_missing_messages_field():
     """Missing messages field returns descriptive error"""
@@ -3623,23 +3676,27 @@ def test_p7_missing_messages_field():
 
 def test_p7_empty_messages():
     """Empty messages array → no compaction"""
-    resp = _compact_call([], keep_recent=3)
-    assert not resp["was_compacted"]
-    assert resp["after_count"] == 0
+    with _PromptBudget(2000, 1000):
+        resp = _compact_call([], keep_recent=3)
+        assert not resp["was_compacted"]
+        assert resp["after_count"] == 0
 
 def test_p7_idempotent():
     """Same input produces identical results"""
-    msgs = []
-    for i in range(6):
-        msgs.append(_make_assistant_msg(["tool_x"]))
-        msgs.append(_make_tool_msg("tool_x"))
-    r1 = _compact_call(msgs, keep_recent=2)
-    r2 = _compact_call(msgs, keep_recent=2)
-    assert r1["before_count"] == r2["before_count"]
-    assert r1["after_count"] == r2["after_count"]
-    assert r1["was_compacted"] == r2["was_compacted"]
-    # Verify message count matches
-    assert r1["after_count"] == len(r1["messages"])
+    with _PromptBudget(2000, 1000):
+        msgs = []
+        for i in range(6):
+            msgs.append(_make_big_assistant_msg(["tool_x"]))
+            msgs.append(_make_tool_msg("tool_x"))
+        r1 = _compact_call(msgs, keep_recent=2)
+        r2 = _compact_call(msgs, keep_recent=2)
+        assert r1["before_count"] == r2["before_count"]
+        assert r1["after_count"] == r2["after_count"]
+        assert r1["was_compacted"] == r2["was_compacted"]
+        # Verify message count matches
+        assert r1["after_count"] == len(r1["messages"])
+        assert _msgs_size(r1["messages"]) <= 1000, \
+            f"Idempotent result should be within soft budget: {_msgs_size(r1['messages'])}"
 
 # ── GROUP 12: File Upload via Mattermost + test-tool-caller ──────────
 def test_fn_12_file_upload():
