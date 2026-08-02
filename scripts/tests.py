@@ -3641,6 +3641,45 @@ def test_p7_compact_multiple_tools():
     if compacted:
         assert "tool_a" in compacted[0]["content"], f"Missing tool name: {compacted[0]['content'][:100]}"
 
+def test_p7_progressive_multi_pass():
+    """When one pass can't reach the soft budget, compaction continues with a
+    progressively smaller keep_recent (soft = reduction target). This context
+    needs all 3 passes: 8 pairs x 180k = 1.44M chars. keep=3 leaves 3x180k=540k
+    (> 350k soft), keep=2 leaves 360k (> 350k), keep=1 leaves 180k (<= 350k)."""
+    msgs = _make_big_context(pairs=8, pad_chars=180000)
+    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    resp = _compact_call(msgs, keep_recent=3)
+    assert resp["was_compacted"], f"Should have compacted: {resp}"
+    assert resp["messages"] is not None
+    # Reached the soft budget after progressive passes (no error).
+    assert _msgs_size(resp["messages"]) <= CHAR_SOFT, \
+        f"Size should be reduced to ≤ soft budget: {_msgs_size(resp['messages'])}"
+
+def test_p7_three_pass_cap_error():
+    """After 3 progressively more aggressive passes the size is STILL over the
+    soft budget with material left to compact -> the tool raises an error
+    (is_error=true) instead of looping forever. 4 pairs x 400k = 1.6M chars
+    (kept under the ~2MB HTTP body limit): keep=3 leaves 1.2M, keep=2 leaves
+    800k, keep=1 leaves 400k — all > 350k soft, so the 3-pass cap fires."""
+    msgs = _make_big_context(pairs=4, pad_chars=400000)
+    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    r = urllib.request.urlopen(
+        urllib.request.Request(
+            f"{BASE}/mcp/execute",
+            data=json.dumps({"name": "prompt_compact-messages",
+                             "arguments": {"messages": msgs, "keep_recent": 3}}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        ),
+        timeout=20
+    )
+    result = json.loads(r.read())
+    assert result.get("success"), f"Expected HTTP-level success, got {result}"
+    assert result.get("is_error") is True, f"Expected tool error after 3 passes, got {result}"
+    content = result["content"]
+    assert "Compaction failed" in content, f"Expected compaction failure message, got: {content}"
+    assert "soft budget" in content
+
 def test_p7_missing_messages_field():
     """Missing messages field returns descriptive error"""
     r = urllib.request.urlopen(
@@ -4529,6 +4568,8 @@ if __name__ == "__main__":
         test_p7_missing_messages_field,
         test_p7_empty_messages,
         test_p7_idempotent,
+        test_p7_progressive_multi_pass,
+        test_p7_three_pass_cap_error,
     ]:
         test(fn)
 
