@@ -577,7 +577,7 @@ def deploy(mode):
         # Before each tests.py invocation, clean transient artifacts
         # (plugins.yml, remote.yml) from the bind-mounted omni-stack
         # directory so check_git_clean() never fails on retries.
-        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml 2>/dev/null; true")
+        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; true")
         print(f"\n{'=' * 60}")
         print(f"  INTEGRATION TESTS — PASS {pass_num}")
         print(f"{'=' * 60}")

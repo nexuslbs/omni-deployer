@@ -1657,7 +1657,7 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "plugins.yml"],
+                ["git", "checkout", "HEAD", "--", "plugins.yml", "remote.yml"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             # Remove untracked transient test artifacts (plugins/tools/)
