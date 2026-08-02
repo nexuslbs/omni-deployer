@@ -110,6 +110,10 @@ def main():
 
     subparsers.add_parser("agent", help="Send math question via Mattermost and verify the agent response")
     subparsers.add_parser("test", help="Comprehensive plugin/tool testing")
+    subparsers.add_parser(
+        "prepare",
+        help="Create mm-kanban MM channel, register via $new, patch to opencode-go/deepseek-v4-flash, enable opencode-go provider + all builtin tool MCPs",
+    )
 
     args = parser.parse_args()
 
@@ -121,6 +125,9 @@ def main():
     elif args.command == "test":
         shared._check_container()
         shared.run_tests()
+    elif args.command == "prepare":
+        shared._check_container()
+        shared.prepare()
     else:
         parser.print_help()
         sys.exit(1)

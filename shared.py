@@ -906,6 +906,144 @@ def agent():
         raise RuntimeError("Agent test failed: expected '597' in response")
 
 
+# ── Prepare: kanban channel + provider + builtin MCPs ────────────────────────
+
+def prepare():
+    """Prepare the stack for kanban-driven agent work.
+
+    Steps:
+      1. Create (or reuse) the Mattermost channel 'mm-kanban' in the setup
+         team, add bot/testuser/admin as members.
+      2. Post '$new mm-kanban' as testuser so omniagent registers the channel
+         (resource_identifier = MM channel id).
+      3. PATCH the omniagent channel to use the opencode-go provider plugin
+         with the deepseek-v4-flash model + omni profile.
+      4. Enable the opencode-go provider plugin via API.
+      5. Enable all built-in tool plugin MCPs.
+
+    Returns (omni_channel_id, mm_channel_id).
+    """
+    s = sett()
+    print(f"\n{'=' * 50}")
+    print(f"  Prepare (project={s.project_name})")
+    print(f"{'=' * 50}")
+
+    # 1. Login as admin, resolve team + user ids
+    admin_token = _mm_login("lucasbasquerotto", s.mm_admin_pass)
+    print("  Logged in as admin")
+
+    team_id = _mm_get_team_id(admin_token)
+    if not team_id:
+        raise RuntimeError("Could not find Mattermost team")
+    print(f"  Team ID: {team_id}")
+
+    r = _mm_get("/api/v4/users?per_page=200", admin_token)
+    if r.returncode != 0:
+        raise RuntimeError("Could not list users")
+    users = json.loads(r.stdout)
+    user_ids = {u["username"]: u["id"] for u in users}
+    bot_id = user_ids.get("omnibot")
+    test_id = user_ids.get("testuser")
+    admin_id = user_ids.get("lucasbasquerotto")
+    if not (bot_id and test_id and admin_id):
+        raise RuntimeError(f"Missing users: bot={bot_id} test={test_id} admin={admin_id}")
+    print(f"  Users: bot={bot_id} test={test_id} admin={admin_id}")
+
+    # 2. Find or create the mm-kanban channel
+    r = _mm_get(f"/api/v4/teams/{team_id}/channels", admin_token)
+    channels = json.loads(r.stdout) if r.returncode == 0 else []
+    ch = next((c for c in channels if c.get("name") == "mm-kanban"), None)
+    if ch:
+        mm_channel_id = ch["id"]
+        print(f"  Channel mm-kanban exists: {mm_channel_id}")
+    else:
+        body = json.dumps({
+            "team_id": team_id,
+            "name": "mm-kanban",
+            "display_name": "mm-kanban",
+            "type": "O",
+            "purpose": "Kanban board channel",
+        })
+        r = _mm_post("/api/v4/channels", body, admin_token)
+        if r.returncode != 0:
+            raise RuntimeError(f"Could not create channel: {r.stderr[:200]}")
+        mm_channel_id = json.loads(r.stdout)["id"]
+        print(f"  Channel mm-kanban created: {mm_channel_id}")
+
+    # Add members (201 created / 400 if already member — both fine)
+    for uid, label in [(bot_id, "bot"), (test_id, "testuser"), (admin_id, "admin")]:
+        body = json.dumps({"user_id": uid})
+        _mm_post(f"/api/v4/channels/{mm_channel_id}/members", body, admin_token)
+    print("  Members added: bot, testuser, admin")
+
+    # 3. Post '$new mm-kanban' as testuser (non-bot so the WS event is seen)
+    test_token = _mm_login("testuser", s.mm_test_pass)
+    body = json.dumps({"channel_id": mm_channel_id, "message": "$new mm-kanban"})
+    r = _mm_post("/api/v4/posts", body, test_token)
+    if r.returncode != 0:
+        raise RuntimeError(f"Could not post $new: {r.stderr[:200]}")
+    print("  Posted '$new mm-kanban' as testuser")
+
+    # Wait for omniagent to register the channel
+    omni_ch = None
+    for _ in range(20):
+        try:
+            chans = oc_curl("GET", "/channels").get("data", [])
+            omni_ch = next(
+                (c for c in chans if c.get("platform") == "mattermost"
+                 and c.get("resource_identifier") == mm_channel_id),
+                None,
+            )
+            if omni_ch:
+                break
+        except Exception:
+            pass
+        time.sleep(3)
+    if not omni_ch:
+        raise RuntimeError("omniagent did not register the mm-kanban channel after $new")
+    print(f"  omniagent channel registered: id={omni_ch['id']} name={omni_ch['name']}")
+
+    # 4. PATCH channel -> opencode-go provider + deepseek-v4-flash model + omni profile
+    oc_curl("PATCH", f"/channels/{omni_ch['id']}", {
+        "current_provider": "opencode-go",
+        "current_model": "deepseek-v4-flash",
+        "current_profile": "omni",
+    })
+    print(f"  Channel {omni_ch['id']} -> opencode-go/deepseek-v4-flash, profile=omni")
+
+    # 5. Enable the opencode-go provider plugin via API
+    print("\n[Enabling opencode-go provider plugin...]")
+    try:
+        _api_call(s.use_api, "/api/plugins/providers/built-in/opencode-go/enable", "POST", {})
+        print("  ✓ opencode-go provider enabled")
+    except RuntimeError as e:
+        print(f"  ~ opencode-go enable: {str(e)[:120]}")
+
+    # 6. Enable all built-in tool plugin MCPs
+    print("\n[Enabling all built-in tool plugin MCPs...]")
+    builtin_tool_plugins = [
+        "actions", "cron", "docker", "fetch", "filesystem", "git",
+        "kanban", "memory", "metrics", "plugin-manager", "prompt",
+        "query", "search", "skills", "subtasks",
+    ]
+    for p_name in builtin_tool_plugins:
+        try:
+            _enable_plugin("tools", "built-in", p_name)
+        except Exception as e:
+            print(f"  ! Could not enable {p_name}: {str(e)[:80]}")
+            try:
+                _enable_plugin("tools", "bundled", p_name)
+            except Exception:
+                print(f"  ! Could not enable {p_name} via bundled either")
+
+    print(f"\n{'=' * 50}")
+    print(f"  ✅ PREPARE COMPLETE")
+    print(f"  omniagent channel id : {omni_ch['id']}")
+    print(f"  Mattermost channel id: {mm_channel_id}")
+    print(f"{'=' * 50}")
+    return omni_ch["id"], mm_channel_id
+
+
 # ── Test helpers ──────────────────────────────────────────────────────────────
 
 def _get_profile_path():
