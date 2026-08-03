@@ -5566,6 +5566,135 @@ def test_23_4_remove_remote_plugins():
 
 test(test_23_4_remove_remote_plugins)
 
+# ===========================================================================
+# GROUP 24: regression tests for (1) prompt compaction keeping a content
+# excerpt of drained tool results, and (2) filesystem_read offset/limit
+# char-sliced reads of large files.
+# ===========================================================================
+
+def _g24_mcp_execute(name, args):
+    """POST a tool call to the live MCP executor and return the parsed body."""
+    req = urllib.request.Request(
+        f"{BASE}/mcp/execute",
+        data=json.dumps({"name": name, "arguments": args}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    assert data.get("success"), f"mcp execute {name} failed: {data}"
+    return data
+
+
+def _g24_wait_for_tool(tool_name, timeout=24):
+    """Wait until a tool name shows up in the live MCP tool registry."""
+    for _ in range(timeout):
+        try:
+            req = urllib.request.Request(f"{BASE}/mcp/tools")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                tools = json.loads(r.read().decode("utf-8"))
+            if isinstance(tools, dict) and "tools" in tools:
+                tools = tools["tools"]
+            names = [t.get("name") for t in tools] if isinstance(tools, list) else list(tools.keys())
+            if tool_name in names:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _g24_size(msgs):
+    return sum(len(json.dumps(m)) for m in msgs)
+
+
+def _g24_assistant_msg(i, tool_name="filesystem_read", pad_chars=65000):
+    """Assistant message with a tool call, content padded to pad_chars."""
+    return {
+        "role": "assistant",
+        "content": "x" * pad_chars,
+        "tool_calls": [
+            {
+                "id": f"call_g24_{i}",
+                "type": "function",
+                "function": {"name": tool_name, "arguments": json.dumps({"path": f"/tmp/f{i}.txt"})},
+            }
+        ],
+    }
+
+
+def _g24_tool_msg(tool_name, call_id, i):
+    """Tool-role message whose content carries a distinctive marker."""
+    return {
+        "role": "tool",
+        "name": tool_name,
+        "tool_call_id": call_id,
+        "content": "RESULT_CONTENT_%02d %s" % (i, "y" * 500),
+    }
+
+
+def test_fn_24_compact_keeps_result_excerpt():
+    """GROUP 24: compaction over the hard budget must retain a content-bearing
+    excerpt of the drained tool results (the agent must still know what the
+    tool returned, e.g. file contents, after compaction)."""
+    print("GROUP 24: compact-messages keeps tool-result excerpt")
+    r = api_post_body("/plugins/tools/built-in/prompt/enable", {})
+    assert r.get("success"), f"enable prompt plugin failed: {r}"
+    assert _g24_wait_for_tool("prompt_compact-messages"), "prompt_compact-messages not registered"
+    msgs = [{"role": "user", "content": "read the files and tell me what each contains"}]
+    for i in range(8):
+        msgs.append(_g24_assistant_msg(i))
+        msgs.append(_g24_tool_msg("filesystem_read", f"call_g24_{i}", i))
+    assert _g24_size(msgs) > CHAR_HARD, "context must exceed the hard budget"
+    resp = _g24_mcp_execute("prompt_compact-messages", {"messages": msgs, "keep_recent": 3})
+    parsed = json.loads(resp["content"])
+    assert parsed["was_compacted"], "expected compaction to run"
+    assert parsed["after_count"] < parsed["before_count"], "message count must drop"
+    compacted = parsed["messages"]
+    assert isinstance(compacted, list) and compacted, "compacted messages missing"
+    blob = json.dumps(compacted)
+    assert "[compact" in blob, "compact marker missing"
+    assert "filesystem_read()" in blob, "tool name must be preserved"
+    assert "Result excerpt" in blob, "Result excerpt marker missing"
+    assert "RESULT_CONTENT_00" in blob, "tool-result content excerpt must survive compaction"
+    assert "RESULT_CONTENT_01" in blob, "second tool-result excerpt must survive"
+    print(f"  ✓ compacted {parsed['before_count']} -> {parsed['after_count']} msgs; "
+          f"excerpt markers preserved")
+
+
+def test_fn_24_read_offset_limit():
+    """GROUP 24: filesystem_read offset/limit pages through a >50k file."""
+    print("GROUP 24: filesystem_read offset/limit")
+    r = api_post_body("/plugins/tools/built-in/filesystem/enable", {})
+    assert r.get("success"), f"enable filesystem plugin failed: {r}"
+    assert _g24_wait_for_tool("filesystem_read"), "filesystem_read not registered"
+    big_path = "/opt/workspace/omni-deployer/scripts/.group24_bigfile.txt"
+    big = "ABCDEFGHIJ" * 8000  # 80,000 chars
+    _g24_mcp_execute("filesystem_write", {"path": big_path, "content": big})
+    # No args -> legacy head + truncation note.
+    c1 = _g24_mcp_execute("filesystem_read", {"path": big_path})["content"]
+    assert c1.startswith("ABCDEFGHIJ"), "no-args read must return the head"
+    assert "truncated" in c1, "no-args read of a big file must carry a truncation note"
+    assert "of 80000 total chars" in c1, "response must report the total file size"
+    # offset past the 50k truncation point -> tail is returned.
+    c2 = _g24_mcp_execute(
+        "filesystem_read", {"path": big_path, "offset": 50000, "limit": 50000}
+    )["content"]
+    assert c2.startswith("ABCDEFGHIJ"), "offset read must start at the requested char"
+    assert "showing chars 50000-80000 of 80000 total chars" in c2, f"slice note wrong: {c2[-160:]}"
+    assert "truncated" not in c2, "tail read must not be marked truncated"
+    # Mid-file narrow slice.
+    c3 = _g24_mcp_execute(
+        "filesystem_read", {"path": big_path, "offset": 25000, "limit": 10}
+    )["content"]
+    assert c3.startswith("ABCDEFGHIJ"), "narrow slice must return exactly 10 chars of data"
+    assert "showing chars 25000-25010 of 80000 total chars" in c3, f"slice note wrong: {c3[-200:]}"
+    print("  ✓ head+truncation note, tail page, and mid-file slice all OK")
+
+
+test(test_fn_24_compact_keeps_result_excerpt)
+test(test_fn_24_read_offset_limit)
+
 
 print(f"\n{'=' * 60}")
 print(f"\nTest Timing Summary:")
