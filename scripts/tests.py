@@ -5595,8 +5595,14 @@ def _g24_wait_for_tool(tool_name, timeout=24):
                 tools = json.loads(r.read().decode("utf-8"))
             if isinstance(tools, dict) and "tools" in tools:
                 tools = tools["tools"]
-            names = [t.get("name") for t in tools] if isinstance(tools, list) else list(tools.keys())
-            if tool_name in names:
+            if isinstance(tools, list):
+                names = [
+                    (t.get("full_name") or t.get("name") or "") if isinstance(t, dict) else str(t)
+                    for t in tools
+                ]
+            else:
+                names = list(tools.keys())
+            if any(tool_name in n for n in names):
                 return True
         except Exception:
             pass
