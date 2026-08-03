@@ -654,6 +654,10 @@ tests_fail = 0
 
 def test(fn):
     global tests_run, tests_pass, tests_fail
+    # Allow running a subset via TEST_FILTER=substring (matches fn name)
+    _filter = os.environ.get("TEST_FILTER", "")
+    if _filter and _filter not in fn.__name__:
+        return
     tests_run += 1
     name = fn.__name__.replace("test_", "Test ").replace("_", " ")
     print(f"\n--- {name} ", end="", flush=True)
@@ -4366,6 +4370,104 @@ def test_fn_17_parallel_wait():
             api_post_body(f"/plugins/tools/{source}/{tool_name}/disable", {})
         except Exception:
             pass
+
+# ── GROUP 17B: Parallel docker_compose exec (plugin concurrency) ─────
+def test_fn_17b_parallel_docker_compose():
+    """Call docker_compose exec 50 times in parallel with 30s sleep each.
+
+    ALL plugins must handle any number of concurrent calls (the same contract
+    GROUP 17 proves for test-python / test-js-tool / test-rust-tool). The docker
+    plugin is built on the shared mcp-server-util server loop; before the
+    concurrency fix (Aug 2026) that loop awaited handle_tools_call inline, so a
+    long docker exec blocked every other call to the plugin (serial queue: 50 x
+    30s = 1500s). After the fix each tools/call runs in its own spawned task, so
+    all 50 complete in ~30s wall time.
+
+    Assertion: total elapsed < 40s AND all 50 calls succeed.
+    """
+    import urllib.request, urllib.error, time, json, concurrent.futures, subprocess, os, shutil
+
+    project_dir = "/opt/workspace/bg-parallel-test"
+    compose_path = os.path.join(project_dir, "docker-compose.yml")
+    os.makedirs(project_dir, exist_ok=True)
+    with open(compose_path, "w") as f:
+        f.write("""name: bgparallel
+services:
+  worker:
+    image: alpine:latest
+    command: ["tail", "-f", "/dev/null"]
+""")
+
+    def _dc(*args, timeout=120):
+        # NOTE: always pin the project name with -p so cleanup can NEVER touch
+        # another compose project (a bare `docker compose -f ... down -v
+        # --remove-orphans` resolved against the wrong project wiped the omnidev
+        # stack in Aug 2026). No --remove-orphans either.
+        return subprocess.run(
+            ["docker", "compose", "-p", "bgparallel", "-f", compose_path] + list(args),
+            capture_output=True, text=True, timeout=timeout,
+        )
+
+    try:
+        up = _dc("up", "-d")
+        assert up.returncode == 0, f"docker compose up failed: {up.stderr[:400]}"
+        time.sleep(1)
+
+        N = 50
+        def do_call(seq):
+            t0 = time.time()
+            d = json.dumps({
+                "name": "docker_compose",
+                "arguments": {
+                    "project_dir": project_dir,
+                    "command": "exec",
+                    "service": "worker",
+                    "args": "sleep 30",
+                },
+            }).encode()
+            req = urllib.request.Request(f"{BASE}/mcp/execute", data=d, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            try:
+                # Per-call timeout 120s (NOT 60s): on a loaded host (after G17's
+                # 150 parallel calls, docker daemon + 50 concurrent docker CLI
+                # spawns) a single exec can take >60s even though it completes.
+                # The parallelism assertion is total_elapsed < 40s below; a tight
+                # per-call timeout would mislabel slow-but-successful calls.
+                resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
+                elapsed = time.time() - t0
+                # /mcp/execute returns {"success": true, ...} on success
+                ok = bool(resp.get("success")) and not resp.get("is_error", False)
+                return (seq, elapsed, ok, str(resp)[:100])
+            except Exception as e:
+                return (seq, time.time() - t0, False, str(e))
+
+        total_start = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=N) as executor:
+            futures = {executor.submit(do_call, i): i for i in range(N)}
+            done, not_done = concurrent.futures.wait(futures, timeout=120)
+        total_elapsed = time.time() - total_start
+
+        failed = [f.result() for f in done if not f.result()[2]]
+        print(f"[G17b: {len(done)} done, {len(not_done)} not done, "
+              f"{len(failed)} failed, duration {total_elapsed:.1f}s]")
+
+        assert not not_done, f"{len(not_done)} of {N} parallel docker exec calls did not complete"
+        assert not failed, f"{len(failed)} parallel docker exec calls failed: {failed[:3]}"
+        assert total_elapsed < 40, (
+            f"Duration {total_elapsed:.1f}s should be < 40s for {N} parallel 30s "
+            f"docker exec calls — plugin server loop is serial (calls queued)"
+        )
+        print(f"[G17b PASSED: {N} parallel docker exec completed in {total_elapsed:.1f}s (< 40s)]")
+    finally:
+        try:
+            _dc("down", "-v", timeout=60)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(project_dir, ignore_errors=True)
+        except Exception:
+            pass
+        print("[G17b cleaned up]")
 # ═══════════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════════
@@ -4689,6 +4791,197 @@ print(f"{'=' * 60}")
 test(test_fn_13_non_blocking)
 
 print(f"\n{'=' * 60}")
+print("GROUP 13B: BG task single-execution regression (no re-send)")
+print(f"{'=' * 60}")
+
+def test_fn_13b_bg_task_single_execution():
+    """Regression: a long-running external tool (>5s bg threshold) must
+    execute EXACTLY ONCE and its bg task must resolve reliably.
+
+    Root cause fixed Aug 2026 (main_loop.rs): the executor's fast-path
+    timeout DROPPED the in-flight MCP future (the request was already sent
+    to the plugin) and the bg fallback RE-SENT the same call. Serial MCP
+    plugins (docker_compose — handle_tools_call awaited inline) executed the
+    command TWICE: request #2 queued behind request #1, so the bg task
+    resolved only after the second execution (2x duration, 2x side effects),
+    or never when the agent re-dispatched repeatedly (each retry queued
+    another duplicate, thread 61 burned its 120-iteration budget).
+
+    Signal: `docker_compose exec` that appends a marker line then sleeps 6s
+    (> 5s tool_bg_secs → bg mode). Pre-fix the marker file has 2 lines
+    (command ran twice); post-fix exactly 1.
+    """
+    import urllib.request, urllib.error, time, uuid, subprocess
+    MM = "http://mattermost:8065"
+
+    # Safety: ensure noop provider is in clean HTTP-based state (same as G13)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+    except Exception:
+        pass
+
+    # Self-contained compose project so the docker_compose tool resolves the
+    # project name (from the file's `name:` field) in ANY environment
+    # (omnidev / omnideploy / omnistable). Workspace is writable + docker
+    # CLI is available inside the omniagent container.
+    project_dir = "/opt/workspace/bg-task-test"
+    compose_path = os.path.join(project_dir, "docker-compose.yml")
+    marker_path = "/tmp/bg_once_test.txt"
+    os.makedirs(project_dir, exist_ok=True)
+    with open(compose_path, "w") as f:
+        f.write("""name: bgtask
+services:
+  worker:
+    image: alpine:latest
+    command: ["tail", "-f", "/dev/null"]
+""")
+
+    def _dc(*args, timeout=120):
+        """Run docker compose against the test project (host of the agent).
+        Project name pinned with -p so cleanup can NEVER touch another compose
+        project (a bare down -v --remove-orphans wiped the omnidev stack once)."""
+        return subprocess.run(
+            ["docker", "compose", "-p", "bgtask", "-f", compose_path] + list(args),
+            capture_output=True, text=True, timeout=timeout,
+        )
+
+    try:
+        # Start the worker and clear any stale marker
+        up = _dc("up", "-d")
+        assert up.returncode == 0, f"docker compose up failed: {up.stderr[:400]}"
+        _dc("exec", "-T", "worker", "rm", "-f", marker_path)
+        time.sleep(1)
+
+        # Channel -> noop/test-tool-caller. Resolve the MM "setup" channel via
+        # the Mattermost API (the SAME channel every other test-tool-caller
+        # test uses — G13/G14/G16 resolve ch["name"] == "setup"), then patch
+        # the omniagent channel whose external_id matches that MM channel id.
+        # Matching by external_id (NOT by omniagent channel NAME — names are
+        # derived from the MM channel id, e.g. "mattermost-8nopfj9f", and do
+        # not exist in future runs) guarantees the patched channel is exactly
+        # the one the script lands on.
+        admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
+        admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
+                                           headers={"Content-Type": "application/json"})
+        admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+        team_resp = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"{MM}/api/v4/users/me/teams",
+            headers={"Authorization": f"Bearer {admin_token}"}), timeout=10).read())
+        team_id = next((t["id"] for t in team_resp if t["name"] == "omni"), None)
+        assert team_id, "Cannot find 'omni' team"
+        mm_team_channels = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels",
+            headers={"Authorization": f"Bearer {admin_token}"}), timeout=10).read())
+        mm_channel_id = next((ch["id"] for ch in mm_team_channels if ch["name"] == "setup"), None)
+        assert mm_channel_id, "Cannot find MM 'setup' channel"
+
+        channel_set = False
+        for _ in range(10):
+            try:
+                r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
+                channels = json.loads(r.read()).get("data", [])
+                mm_ch = next((ch for ch in channels
+                              if ch.get("platform") == "mattermost"
+                              and (ch.get("external_id") or ch.get("resource_identifier") or "") == mm_channel_id), None)
+                if mm_ch:
+                    cid = mm_ch["id"]
+                    patch_req = urllib.request.Request(f"{BASE}/channels/{cid}",
+                        data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller", "plan": False}).encode(),
+                        method="PATCH", headers={"Content-Type": "application/json"})
+                    urllib.request.urlopen(patch_req, timeout=10)
+                    time.sleep(1)
+                    rr = urllib.request.urlopen(f"{BASE}/channels/{cid}", timeout=10)
+                    updated = json.loads(rr.read())
+                    upd_model = updated.get("current_model") or (updated.get("data") or {}).get("current_model")
+                    if upd_model == "test-tool-caller":
+                        print(f"[channel {cid} ({mm_ch.get('name')}) set to noop/test-tool-caller for G13b]")
+                        channel_set = True
+                        break
+            except Exception as e:
+                print(f"[WARN] Channel setup attempt failed: {e}")
+            time.sleep(2)
+        assert channel_set, "Could not set channel to noop/test-tool-caller"
+
+        # 3-step script:
+        # 1. docker_compose exec appends a marker + sleeps 6s (>5s → bg task)
+        # 2. builtin_wait-task on the task_id (must resolve, not hang)
+        # 3. docker_compose exec reads the marker line count
+        script = json.dumps([
+            {"name": "long_run", "tool": "docker_compose",
+             "arguments": {"project_dir": project_dir, "command": "exec",
+                           "service": "worker",
+                           "args": f"echo BG_ONCE >> {marker_path} && sleep 6"}},
+            {"name": "wait", "tool": "builtin_wait-task",
+             "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 60}},
+            {"name": "count", "tool": "docker_compose",
+             "arguments": {"project_dir": project_dir, "command": "exec",
+                           "service": "worker",
+                           "args": f"wc -l < {marker_path}"}},
+        ])
+
+        test_pass = "Mattermost_Fresh_Start_1"
+        # Reuse the admin_token + mm_channel_id resolved in the channel-setup
+        # block above: mm_channel_id IS the external_id of the channel we just
+        # patched, so the script is guaranteed to land on the patched channel.
+        test_token = _mm_login(MM, "testuser", test_pass)
+        msg_data = json.dumps({"channel_id": mm_channel_id, "message": script}).encode()
+        msg_req = urllib.request.Request(
+            f"{MM}/api/v4/posts", data=msg_data, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {test_token}"},
+        )
+        urllib.request.urlopen(msg_req, timeout=10)
+        print("[G13b: script sent to Mattermost]")
+
+        # Poll for the "All **3** tool call batch(es) completed." summary
+        deadline = time.time() + 120
+        found = False
+        while time.time() < deadline:
+            time.sleep(4)
+            posts = json.loads(urllib.request.urlopen(
+                urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts",
+                headers={"Authorization": f"Bearer {admin_token}"}), timeout=10).read())
+            for pid, post in posts.get("posts", {}).items():
+                msg = post.get("message", "")
+                if "**3** tool call batch" in msg:
+                    found = True
+                    break
+            if found:
+                break
+        assert found, "No completion message within 120s (bg task may never have resolved)"
+
+        # DETERMINISTIC assertion: the side effect ran exactly once.
+        # Pre-fix the executor re-sent the call → serial docker plugin ran the
+        # command twice → 2 marker lines. Post-fix → 1 line.
+        time.sleep(1)
+        cnt = _dc("exec", "-T", "worker", "sh", "-c", f"wc -l < {marker_path} || true")
+        lines = cnt.stdout.strip()
+        print(f"[G13b: marker line count = {lines!r}]")
+        assert lines == "1", (
+            f"docker_compose exec executed more than once: marker file has "
+            f"{lines!r} line(s), expected exactly 1 (bg task re-send bug)"
+        )
+        print("[G13b PASSED: long external tool executed exactly once and bg task resolved]")
+    finally:
+        # Cleanup: remove the test project + compose file
+        try:
+            _dc("down", "-v", timeout=60)
+        except Exception:
+            pass
+        try:
+            import shutil
+            shutil.rmtree(project_dir, ignore_errors=True)
+        except Exception:
+            pass
+        print("[G13b cleaned up]")
+
+test(test_fn_13b_bg_task_single_execution)
+
+print(f"\n{'=' * 60}")
 print("GROUP 14: Cancel Task via test-tool-caller")
 print(f"{'=' * 60}")
 
@@ -4711,7 +5004,11 @@ def test_fn_15_settings_hardcoded():
 
     assert "max_tokens" in all_settings, f"missing max_tokens, got keys={list(all_settings.keys())[:5]}..."
     assert "temperature" in all_settings, "missing temperature"
-    assert all_settings["max_tokens"] == "8192", f"max_tokens={all_settings['max_tokens']}"
+    # Default max_tokens = 32768 (set in omni-stack/settings.yml). Chosen for
+    # real projects: 8k truncates long tool outputs (docker exec logs, git
+    # diffs, file reads), 16k is a middle ground, 32k avoids truncation for
+    # code-heavy tool calls without practical downside.
+    assert all_settings["max_tokens"] == "32768", f"max_tokens={all_settings['max_tokens']}"
     assert all_settings["temperature"] == "0.7", f"temperature={all_settings['temperature']}"
 
     def find_meta(name):
@@ -4894,6 +5191,12 @@ print("GROUP 17: Parallel wait 3 tools x 50 calls x 30s (concurrent, 30-40s)")
 print(f"{'=' * 60}")
 
 test(test_fn_17_parallel_wait)
+
+print(f"\n{'=' * 60}")
+print("GROUP 17B: Parallel docker_compose exec 50 x 30s (concurrent, <40s)")
+print(f"{'=' * 60}")
+
+test(test_fn_17b_parallel_docker_compose)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 18: Multi-source Platform Plugin Tests (Python, JS, Rust)
