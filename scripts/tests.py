@@ -5409,6 +5409,164 @@ print(f"{'=' * 60}")
 
 test(test_fn_18_platform_multi_source)
 
+#  GROUP 23: Remote plugin import (remote.yml / remote.test.yml)
+# ════════════════════════════════════════════════════════════════════════════════
+print(f"\n{'=' * 60}")
+print("GROUP 23: Remote plugin import (remote.yml / remote.test.yml)")
+print(f"{'=' * 60}")
+
+
+def ensure_remote_plugin_from(url, name, path, plugin_type="tools"):
+    """Import a single plugin from a given remote repo via the install-git API
+    (used for remote.test.yml entries that point at the omni-agent repo)."""
+    api_post_body(
+        "/plugins/install-git",
+        {"url": url, "name": name, "path": path},
+        timeout=180,
+    )
+    print(f"  [imported '{name}' from {url} ({path})]")
+
+
+def _remote_yml_entry(name, plugin_type="tools"):
+    """Return the raw remote.yml entry dict (url/path) for a plugin, or None."""
+    r = sh(f"cat {WORKSPACE}/remote.yml")
+    section = None
+    found = None
+    for line in r.stdout.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0 and stripped.endswith(":"):
+            section = stripped[:-1]
+        elif indent == 2 and section == plugin_type:
+            if stripped.split(":")[0].strip() == name:
+                found = {}
+            elif found is not None:
+                break
+        elif indent == 4 and found is not None:
+            k, _, v = stripped.partition(":")
+            found[k.strip()] = v.strip()
+    return found
+
+
+def test_23_1_import_several_from_remote_yml():
+    """Import SEVERAL plugins at once from the omni-plugins remote.yml:
+    a tools plugin, a platforms plugin and a providers plugin in one pass."""
+    backup_remote_yml()
+    backup_plugins_yml()
+    try:
+        ensure_remote_plugin("test-rust-tool", "tools")
+        ensure_remote_plugin("test-python", "platforms")
+        ensure_remote_plugin("noop", "providers")
+        assert remote_yml_has("test-rust-tool", "tools")
+        assert remote_yml_has("test-python", "platforms")
+        assert remote_yml_has("noop", "providers")
+        restart_agent()
+        plugins = api_get("/plugins")["data"]
+        assert any(p.get("name") == "test-rust-tool" for p in plugins)
+        assert any(p.get("name") == "test-python" for p in plugins)
+        assert any(p.get("name") == "noop" for p in plugins)
+    finally:
+        remove_remote_plugin("test-rust-tool", "tools")
+        remove_remote_plugin("test-python", "platforms")
+        remove_remote_plugin("noop", "providers")
+        restore_plugins_yml()
+        restore_remote_yml()
+        restart_agent()
+
+
+test(test_23_1_import_several_from_remote_yml)
+
+
+def test_23_2_import_from_remote_test_yml():
+    """Import the plugins listed in remote.test.yml — kanban, cron, subtasks,
+    actions — from the omni-agent repository cloned as a remote repo."""
+    backup_remote_yml()
+    backup_plugins_yml()
+    try:
+        entries = {
+            "kanban": "plugins/tools/kanban",
+            "cron": "plugins/tools/cron",
+            "subtasks": "plugins/tools/subtasks",
+            "actions": "plugins/tools/actions",
+        }
+        for name, path in entries.items():
+            ensure_remote_plugin_from("file:///opt/workspace/omniagent", name, path)
+        for name in entries:
+            assert remote_yml_has(name, "tools"), f"{name} missing from remote.yml"
+        restart_agent()
+        plugins = api_get("/plugins")["data"]
+        for name in entries:
+            assert any(
+                p.get("name") == name and p.get("source") == "remote" for p in plugins
+            ), f"{name} not registered as remote"
+    finally:
+        for name in entries:
+            remove_remote_plugin(name, "tools")
+        restore_plugins_yml()
+        restore_remote_yml()
+        restart_agent()
+
+
+test(test_23_2_import_from_remote_test_yml)
+
+
+def test_23_3_override_remote_plugin():
+    """Importing the same plugin name from a different source replaces the
+    existing remote.yml entry."""
+    backup_remote_yml()
+    backup_plugins_yml()
+    try:
+        ensure_remote_plugin("test-python", "tools")
+        assert remote_yml_has("test-python", "tools")
+        # same name, different source URL -> replaces the existing entry
+        ensure_remote_plugin_from(
+            "https://github.com/nexuslbs/omni-plugins.git",
+            "test-python",
+            "tools/test-python",
+        )
+        entry = _remote_yml_entry("test-python", "tools")
+        assert entry is not None, "remote.yml entry missing after override"
+        assert entry.get("url") == "https://github.com/nexuslbs/omni-plugins.git", entry
+    finally:
+        remove_remote_plugin("test-python", "tools")
+        restore_plugins_yml()
+        restore_remote_yml()
+        restart_agent()
+
+
+test(test_23_3_override_remote_plugin)
+
+
+def test_23_4_remove_remote_plugins():
+    """Remove imported plugins using the delete endpoint of the import flow."""
+    backup_remote_yml()
+    backup_plugins_yml()
+    try:
+        ensure_remote_plugin("test-rust-tool", "tools")
+        ensure_remote_plugin("noop", "providers")
+        assert remote_yml_has("test-rust-tool", "tools")
+        assert remote_yml_has("noop", "providers")
+        remove_remote_plugin("test-rust-tool", "tools")
+        remove_remote_plugin("noop", "providers")
+        assert not remote_yml_has("test-rust-tool", "tools")
+        assert not remote_yml_has("noop", "providers")
+        restart_agent()
+        plugins = api_get("/plugins")["data"]
+        assert not any(
+            p.get("source") == "remote" and p.get("name") in ("test-rust-tool", "noop")
+            for p in plugins
+        )
+    finally:
+        restore_plugins_yml()
+        restore_remote_yml()
+        restart_agent()
+
+
+test(test_23_4_remove_remote_plugins)
+
+
 print(f"\n{'=' * 60}")
 print(f"\nTest Timing Summary:")
 print(f"{'─' * 50}")
@@ -6034,6 +6192,7 @@ def test_22_6_kanban_invalid_status():
         print(f"✓ Invalid status: {e}")
 
 test(test_22_6_kanban_invalid_status)
+
 
 print(f"\n{'=' * 60}")
 print("TEST SUMMARY")
