@@ -5701,6 +5701,124 @@ def test_fn_24_read_offset_limit():
 test(test_fn_24_compact_keeps_result_excerpt)
 test(test_fn_24_read_offset_limit)
 
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 25: DB vectorizer + search_wiki
+# ═══════════════════════════════════════════════════════════════════════
+# test_fn_25_db_vectorizer: proves the background message vectorizer
+# (vectorize_messages: true, 5s poll) populates embedding_vec for new
+# messages by itself — no manual seeding — and that query_search-messages
+# then returns the vectorized content via semantic similarity.
+# test_fn_25_search_wiki: google-like keyword search over the wiki tree
+# (recursive .md scan with line-matching previews; no vectorization needed).
+
+def _g25_wait_embedding_vec(conn, thread_id, timeout=45):
+    """Poll until at least one message in the thread has embedding_vec populated."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT count(*) FROM messages WHERE thread_id=%s AND embedding_vec IS NOT NULL",
+            (thread_id,),
+        )
+        n = cur.fetchone()[0]
+        cur.close()
+        if n > 0:
+            return n
+        time.sleep(2)
+    return 0
+
+def test_fn_25_db_vectorizer():
+    """GROUP 25: the DB vectorizer worker populates embedding_vec automatically."""
+    import psycopg2
+    print("GROUP 25: DB vectorizer populates embedding_vec")
+    # Ensure the query plugin is enabled and its tool is registered.
+    r = api_post_body("/plugins/tools/built-in/query/enable", {})
+    assert r.get("success"), f"enable query plugin failed: {r}"
+    assert _g24_wait_for_tool("query_search-messages"), "query_search-messages not registered"
+
+    marker = f"g25vec{uuid.uuid4().hex[:8]}"
+    content = (
+        f"The {marker} zebra rides a quantum trampoline across the nebula "
+        f"while the chrono-synclastic monolith hums in harmonic resonance"
+    )
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    conn.autocommit = True
+    ch_id = th_id = None
+    try:
+        cur = conn.cursor()
+        # cli-platform channel with noop/test-tool-caller (no POST /channels exists)
+        cur.execute(
+            "INSERT INTO channels (name, platform, cause, current_profile, current_model, current_provider) "
+            "VALUES (%s, 'cli', 'system', 'omni', 'test-tool-caller', 'noop') RETURNING id",
+            (f"g25-{marker}",),
+        )
+        ch_id = cur.fetchone()[0]
+        # Terminal thread so the supervisor never processes it
+        cur.execute(
+            "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
+            "VALUES ('completed', 'user', %s, 'omni', true, false) RETURNING id",
+            (ch_id,),
+        )
+        th_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO messages (thread_id, role, content, thread_sequence, msg_type) "
+            "VALUES (%s, 'user', %s, 1, 'message'), (%s, 'agent', %s, 2, 'message')",
+            (th_id, content, th_id, f"agent confirms the {marker} zebra result"),
+        )
+        cur.close()
+
+        # The worker (5s poll) must backfill embedding_vec — the test does NOT seed it.
+        n = _g25_wait_embedding_vec(conn, th_id, timeout=45)
+        assert n > 0, (
+            f"DB vectorizer did not populate embedding_vec within 45s "
+            f"(thread {th_id}, vectorize_messages must be true + 5s poll)"
+        )
+        print(f"  ✓ vectorizer backfilled embedding_vec for {n} message(s) in thread {th_id}")
+
+        # Semantic search must find the distinctive content via the query plugin.
+        resp = _g24_mcp_execute(
+            "query_search-messages",
+            {"query": f"{marker} zebra quantum", "channel_id": ch_id, "limit": 5},
+        )
+        out = resp.get("content") or ""
+        assert marker in out, (
+            f"query_search-messages did not return the vectorized message: {out[:300]}"
+        )
+        print("  ✓ query_search-messages returned the vectorized message by semantic similarity")
+    finally:
+        conn.close()
+
+def test_fn_25_search_wiki():
+    """GROUP 25: search_wiki does google-like keyword search over the wiki tree."""
+    print("GROUP 25: search_wiki google-like keyword search")
+    r = api_post_body("/plugins/tools/built-in/search/enable", {})
+    assert r.get("success"), f"enable search plugin failed: {r}"
+    assert _g24_wait_for_tool("search_wiki"), "search_wiki not registered"
+
+    marker = f"g25wiki{uuid.uuid4().hex[:8]}"
+    page_rel = f"Reference/Group25-{marker}.md"
+    page_path = f"{WORKSPACE}/profiles/omni/wiki/{page_rel}"
+    try:
+        os.makedirs(os.path.dirname(page_path), exist_ok=True)
+        with open(page_path, "w") as f:
+            f.write(
+                f"# Group 25 Test Page\n\n"
+                f"The distinctive {marker} keyword marks this page for "
+                f"wiki search verification.\n"
+            )
+        resp = _g24_mcp_execute("search_wiki", {"query": marker, "limit": 5})
+        out = resp.get("content") or ""
+        assert marker in out, f"search_wiki did not find the test page: {out[:300]}"
+        assert "Group25" in out, f"search_wiki result missing page name: {out[:300]}"
+        print("  ✓ search_wiki returned the page with a google-like preview snippet")
+    finally:
+        if os.path.exists(page_path):
+            os.remove(page_path)
+
+test(test_fn_25_db_vectorizer)
+test(test_fn_25_search_wiki)
+
+
 
 print(f"\n{'=' * 60}")
 print(f"\nTest Timing Summary:")
