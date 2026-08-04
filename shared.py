@@ -1745,9 +1745,13 @@ def run_tests():
             _print_result(f"{tool_name} (enabled)", "PASS")
             passed += 1
         elif result.get("is_error"):
+            # A tool that returns is_error in the enabled+activated state is
+            # BROKEN, not passing. (This leniency once let the query_database
+            # operation-contract regression sail through Phase 1 — it was only
+            # caught by Phase 2's MCP pre-check.)
             content = result.get("content", "")
-            _print_result(f"{tool_name} (enabled)", "PASS", f"Returned result (is_error=True): {content[:200]}")
-            passed += 1
+            _print_result(f"{tool_name} (enabled)", "FAIL", f"Tool returned an error: {content[:200]}")
+            failed += 1
         else:
             _print_result(f"{tool_name} (enabled)", "FAIL", str(result.get("error", "unknown"))[:200])
             failed += 1
