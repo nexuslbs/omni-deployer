@@ -1398,6 +1398,10 @@ TOOL_VALIDATORS = {
     "actions_relevance-indexer": _validate_actions_relevance,
     "plugin-manager_plugin-manager": _validate_plugin_manager_list,
     "query_database": _validate_query_database,
+    "query_search-messages": _validate_query_database,
+    "query_thread-messages": _validate_query_database,
+    "query_channel-prompts": _validate_query_database,
+    "query_channels": _validate_query_database,
     "memory_list-memories": _validate_memory_list,
 }
 
@@ -1509,9 +1513,33 @@ TOOL_DEFS = {
     },
     "query_database": {
         "plugin": "query",
-        "test_args": {"operation": "search_messages", "query": "test", "limit": 1},
-        "success_key": "search",
-        "mcp_test_args": {"operation": "search_messages", "query": "test", "limit": 1},
+        "test_args": {"sql": "SELECT id, name FROM channels ORDER BY id LIMIT 1"},
+        "success_key": "channel",
+        "mcp_test_args": {"sql": "SELECT id, name FROM channels ORDER BY id LIMIT 1"},
+    },
+    "query_search-messages": {
+        "plugin": "query",
+        "test_args": {"query": "test", "limit": 1},
+        "success_key": "found",
+        "mcp_test_args": {"query": "test", "limit": 1},
+    },
+    "query_thread-messages": {
+        "plugin": "query",
+        "test_args": {"thread_id": 1, "limit": 5},
+        "success_key": "found",
+        "mcp_test_args": {"thread_id": 1, "limit": 5},
+    },
+    "query_channel-prompts": {
+        "plugin": "query",
+        "test_args": {"channel_id": 1, "limit": 5},
+        "success_key": "found",
+        "mcp_test_args": {"channel_id": 1, "limit": 5},
+    },
+    "query_channels": {
+        "plugin": "query",
+        "test_args": {"limit": 10},
+        "success_key": "channel",
+        "mcp_test_args": {"limit": 10},
     },
     "memory_list-memories": {
         "plugin": "memory",
@@ -1833,7 +1861,11 @@ def run_tests():
             ("subtasks_list-subtasks", {"thread_id": 1}, "subtask"),
             ("actions_relevance-indexer", {}, "relevance"),
             ("plugin-manager_plugin-manager", {"action": "list"}, "plugin"),
-            ("query_database", {"operation": "search_messages", "query": "test", "limit": 1}, "search"),
+            ("query_database", {"sql": "SELECT id, name FROM channels ORDER BY id LIMIT 1"}, "channel"),
+            ("query_search-messages", {"query": "test", "limit": 1}, "found"),
+            ("query_thread-messages", {"thread_id": 1, "limit": 5}, "found"),
+            ("query_channel-prompts", {"channel_id": 1, "limit": 5}, "found"),
+            ("query_channels", {"limit": 10}, "channel"),
             ("skills_list-skills", {}, "skill"),
             ("memory_list-memories", {}, "memory"),
         ]
