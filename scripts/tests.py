@@ -5711,25 +5711,109 @@ test(test_fn_24_read_offset_limit)
 # test_fn_25_search_wiki: google-like keyword search over the wiki tree
 # (recursive .md scan with line-matching previews; no vectorization needed).
 
-def _g25_wait_embedding_vec(conn, thread_id, timeout=45):
-    """Poll until at least one message in the thread has embedding_vec populated."""
+def _g25_toolbox_name():
+    """Locate the toolbox container of the current compose project.
+
+    The toolbox runs psycopg2 (and PGHOST/PGUSER/PGPASSWORD/PGDATABASE env),
+    so tests that need direct DB access shell into it via docker exec.
+    Discovered via the Docker API label filter — no hardcoded container names
+    (project name differs across dev/hybrid/CI: omnideploy/omnidev/omni).
+    """
+    import urllib.parse
+    try:
+        rc = sh("docker inspect $(hostname) --format '{{index .Config.Labels \"com.docker.compose.project\"}}'")
+        project = rc.stdout.strip()
+    except Exception:
+        project = ""
+    if not project:
+        project = os.environ.get("COMPOSE_PROJECT_NAME", "omnideploy")
+    filters = json.dumps({"label": [f"com.docker.compose.project={project}",
+                                    "com.docker.compose.service=toolbox"]})
+    rc = sh(f"curl -s --unix-socket /var/run/docker.sock "
+            f"'http://localhost/containers/json?filters={urllib.parse.quote(filters)}'")
+    containers = json.loads(rc.stdout or "[]")
+    running = [c for c in containers if c.get("State") == "running"]
+    assert running, f"toolbox container not found (project={project})"
+    return running[0]["Names"][0].lstrip("/")
+
+
+def _g25_toolbox_db(marker, content, timeout=60):
+    """Run the DB insert + vectorizer poll inside the toolbox container.
+
+    The toolbox has psycopg2 and PGHOST/PGUSER/PGPASSWORD/PGDATABASE env vars,
+    so psycopg2.connect() with no args reaches the same postgres. Returns
+    (thread_id, channel_id, backfilled_count).
+    """
+    toolbox = _g25_toolbox_name()
+    script = r'''
+import json, os, time
+import psycopg2
+
+marker = os.environ["G25_MARKER"]
+content = os.environ["G25_CONTENT"]
+conn = psycopg2.connect()  # PGHOST/PGUSER/PGPASSWORD/PGDATABASE from toolbox env
+conn.autocommit = True
+ch_id = th_id = None
+try:
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO channels (name, platform, cause, current_profile, current_model, current_provider) "
+        "VALUES (%s, 'cli', 'system', 'omni', 'test-tool-caller', 'noop') RETURNING id",
+        (f"g25-{marker}",),
+    )
+    ch_id = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
+        "VALUES ('completed', 'user', %s, 'omni', true, false) RETURNING id",
+        (ch_id,),
+    )
+    th_id = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO messages (thread_id, role, content, thread_sequence, msg_type) "
+        "VALUES (%s, 'user', %s, 1, 'message'), (%s, 'agent', %s, 2, 'message')",
+        (th_id, content, th_id, f"agent confirms the {marker} zebra result"),
+    )
+    cur.close()
+
+    # The worker (5s poll) must backfill embedding_vec — the test does NOT seed it.
     t0 = time.time()
-    while time.time() - t0 < timeout:
+    n = 0
+    while time.time() - t0 < 45:
         cur = conn.cursor()
         cur.execute(
             "SELECT count(*) FROM messages WHERE thread_id=%s AND embedding_vec IS NOT NULL",
-            (thread_id,),
+            (th_id,),
         )
         n = cur.fetchone()[0]
         cur.close()
         if n > 0:
-            return n
+            break
         time.sleep(2)
-    return 0
+    print(json.dumps({"thread_id": th_id, "channel_id": ch_id, "count": n}))
+finally:
+    conn.close()
+'''
+    r = subprocess.run(
+        ["docker", "exec", "-e", f"G25_MARKER={marker}", "-e", f"G25_CONTENT={content}",
+         toolbox, "python3", "-c", script],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    assert r.returncode == 0, (
+        f"toolbox DB script failed (rc={r.returncode}): {r.stdout[:300]} {r.stderr[:300]}"
+    )
+    out = r.stdout.strip().splitlines()[-1]
+    data = json.loads(out)
+    return data["thread_id"], data["channel_id"], data["count"]
+
 
 def test_fn_25_db_vectorizer():
-    """GROUP 25: the DB vectorizer worker populates embedding_vec automatically."""
-    import psycopg2
+    """GROUP 25: the DB vectorizer worker populates embedding_vec automatically.
+
+    psycopg2 lives in the toolbox image (not omniagent), so the direct-DB part
+    (insert channel/thread/messages + poll for the worker's backfill) runs via
+    docker exec into the toolbox; the MCP-level assertions run from this
+    (omniagent) container.
+    """
     print("GROUP 25: DB vectorizer populates embedding_vec")
     # Ensure the query plugin is enabled and its tool is registered.
     r = api_post_body("/plugins/tools/built-in/query/enable", {})
@@ -5741,52 +5825,23 @@ def test_fn_25_db_vectorizer():
         f"The {marker} zebra rides a quantum trampoline across the nebula "
         f"while the chrono-synclastic monolith hums in harmonic resonance"
     )
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    conn.autocommit = True
-    ch_id = th_id = None
-    try:
-        cur = conn.cursor()
-        # cli-platform channel with noop/test-tool-caller (no POST /channels exists)
-        cur.execute(
-            "INSERT INTO channels (name, platform, cause, current_profile, current_model, current_provider) "
-            "VALUES (%s, 'cli', 'system', 'omni', 'test-tool-caller', 'noop') RETURNING id",
-            (f"g25-{marker}",),
-        )
-        ch_id = cur.fetchone()[0]
-        # Terminal thread so the supervisor never processes it
-        cur.execute(
-            "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
-            "VALUES ('completed', 'user', %s, 'omni', true, false) RETURNING id",
-            (ch_id,),
-        )
-        th_id = cur.fetchone()[0]
-        cur.execute(
-            "INSERT INTO messages (thread_id, role, content, thread_sequence, msg_type) "
-            "VALUES (%s, 'user', %s, 1, 'message'), (%s, 'agent', %s, 2, 'message')",
-            (th_id, content, th_id, f"agent confirms the {marker} zebra result"),
-        )
-        cur.close()
+    th_id, ch_id, n = _g25_toolbox_db(marker, content)
+    assert n > 0, (
+        f"DB vectorizer did not populate embedding_vec within 45s "
+        f"(thread {th_id}, vectorize_messages must be true + 5s poll)"
+    )
+    print(f"  ✓ vectorizer backfilled embedding_vec for {n} message(s) in thread {th_id}")
 
-        # The worker (5s poll) must backfill embedding_vec — the test does NOT seed it.
-        n = _g25_wait_embedding_vec(conn, th_id, timeout=45)
-        assert n > 0, (
-            f"DB vectorizer did not populate embedding_vec within 45s "
-            f"(thread {th_id}, vectorize_messages must be true + 5s poll)"
-        )
-        print(f"  ✓ vectorizer backfilled embedding_vec for {n} message(s) in thread {th_id}")
-
-        # Semantic search must find the distinctive content via the query plugin.
-        resp = _g24_mcp_execute(
-            "query_search-messages",
-            {"query": f"{marker} zebra quantum", "channel_id": ch_id, "limit": 5},
-        )
-        out = resp.get("content") or ""
-        assert marker in out, (
-            f"query_search-messages did not return the vectorized message: {out[:300]}"
-        )
-        print("  ✓ query_search-messages returned the vectorized message by semantic similarity")
-    finally:
-        conn.close()
+    # Semantic search must find the distinctive content via the query plugin.
+    resp = _g24_mcp_execute(
+        "query_search-messages",
+        {"query": f"{marker} zebra quantum", "channel_id": ch_id, "limit": 5},
+    )
+    out = resp.get("content") or ""
+    assert marker in out, (
+        f"query_search-messages did not return the vectorized message: {out[:300]}"
+    )
+    print("  ✓ query_search-messages returned the vectorized message by semantic similarity")
 
 def test_fn_25_search_wiki():
     """GROUP 25: search_wiki does google-like keyword search over the wiki tree."""
