@@ -388,11 +388,10 @@ def _remove_data_volumes(project_name):
 #   - omnidev    → stops omnideploy (CI/deploy project) only — NEVER omnistable
 #   - omnistable → stops omnideploy only — NEVER omnidev
 #   - omnideploy → stops both launchers (CI wants a clean slate)
-# A handful of fixed container_name entries (omni-cloudflared, omni-cadvisor,
-# omni-vector, omni-loki, omni-grafana, omni-prometheus) are global to the
-# Docker daemon, but they are only started by the launcher that runs them and
-# are pruned/recreated by compose itself, so they do not require cross-stack
-# teardown.
+# No fixed container_name / network name / volume name entries exist in the
+# base compose — all containers (and networks/volumes) are auto-named with the
+# compose project prefix ({project}-{service}-{index}, {project}_{volume}), so
+# omnidev, omnistable, and omnideploy can run side-by-side without colliding.
 OMNI_STACK_PROJECTS = ["omnidev", "omnideploy", "omnistable"]
 
 # Which OTHER projects each launcher stops before starting its own.
