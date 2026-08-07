@@ -378,32 +378,45 @@ def _remove_data_volumes(project_name):
         print(f"  Removed data volumes: {', '.join(removed)}")
 
 
-# Compose project names of the three omni stack launchers. Only ONE stack
-# may run at a time — the dev overlay publishes host ports
-# (12346 dashboard / 12349 mattermost; omniagent is expose-only) and several
-# services use fixed container_name entries (omni-cloudflared, omni-cadvisor,
-# omni-vector, omni-loki, omni-grafana, omni-prometheus) which are global to
-# the Docker daemon. Each launcher tears down the other two projects'
-# containers before starting its own.
+# Compose project names of the three omni stack launchers.
+#
+# omnidev and omnistable can run SIDE-BY-SIDE: the base compose exposes no
+# host ports (dashboard/mattermost host mappings live ONLY in the dev
+# overlay, and omnidev is the only launcher that publishes ports), so the
+# two stacks do not conflict. Each launcher therefore tears down ONLY the
+# projects it actually conflicts with:
+#   - omnidev    → stops omnideploy (CI/deploy project) only — NEVER omnistable
+#   - omnistable → stops omnideploy only — NEVER omnidev
+#   - omnideploy → stops both launchers (CI wants a clean slate)
+# A handful of fixed container_name entries (omni-cloudflared, omni-cadvisor,
+# omni-vector, omni-loki, omni-grafana, omni-prometheus) are global to the
+# Docker daemon, but they are only started by the launcher that runs them and
+# are pruned/recreated by compose itself, so they do not require cross-stack
+# teardown.
 OMNI_STACK_PROJECTS = ["omnidev", "omnideploy", "omnistable"]
+
+# Which OTHER projects each launcher stops before starting its own.
+STOP_TARGETS = {
+    "omnidev": ["omnideploy"],
+    "omnistable": ["omnideploy"],
+    "omnideploy": ["omnidev", "omnistable"],
+}
 
 
 def stop_other_stacks(current_project):
-    """Stop + remove containers of the OTHER omni stack projects.
+    """Stop + remove containers of the projects this launcher conflicts with.
 
-    Only one of omnidev/omnideploy/omnistable can run at a time because the
-    dev overlay publishes shared host ports and several services use fixed
-    container_name entries. Before starting our own stack, tear down the
-    other projects' containers so the ports/names are free.
+    omnidev and omnistable run side-by-side (host ports are dev-overlay-only,
+    so they do not collide), therefore each stops ONLY omnideploy (the
+    deploy/CI project) — never each other. deploy.py (omnideploy) stops both
+    launchers: CI wants a clean slate.
 
     Containers are matched by the compose project label
     (com.docker.compose.project), NOT by name prefix, so unrelated containers
     are never touched. Networks left behind by the removed containers are
     pruned best-effort (only networks not in use by any container).
     """
-    for proj in OMNI_STACK_PROJECTS:
-        if proj == current_project:
-            continue
+    for proj in STOP_TARGETS.get(current_project, []):
         listed = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={proj}"],
             capture_output=True, text=True,
@@ -644,8 +657,9 @@ def setup():
     print(f"  OmniStack Setup (project={s.project_name})")
     print(f"{'=' * 50}")
 
-    # Only one stack can run at a time (shared host ports 8080/12346/12349) —
-    # tear down the other launchers' containers BEFORE starting our own.
+    # omnidev and omnistable run side-by-side (host ports are dev-overlay-only,
+    # so they don't collide). Each launcher stops only the projects it
+    # conflicts with (see STOP_TARGETS) — never each other.
     stop_other_stacks(s.project_name)
 
     # Generate env file

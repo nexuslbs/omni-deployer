@@ -331,11 +331,10 @@ def deploy(mode):
        "sudo git clean -fd -- plugins/tools plugins/platforms plugins/providers 2>/dev/null; "
        "true")
 
-    # Only one stack can run at a time (dev overlay publishes host ports
-    # 12346/12349 + fixed container_name entries) — tear down the other
-    # launchers' containers (omnidev/omnistable) BEFORE starting our own.
-    # deploy.py's project is "omnideploy" (COMPOSE_PROJECT_NAME in omni.env),
-    # which stop_other_stacks() skips.
+    # deploy.py (project "omnideploy") tears down the launcher stacks
+    # (omnidev/omnistable) BEFORE starting its own — CI wants a clean slate.
+    # (omnidev and omnistable do NOT tear down each other: they run
+    # side-by-side since host ports are dev-overlay-only.)
     shared.stop_other_stacks("omnideploy")
 
     generate_env(mode)
