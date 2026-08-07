@@ -390,7 +390,8 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
       1. Already exists at target path
       2. .remote/ directory (for remote→bundled collision tests)
       3. omni-plugins repo (/opt/workspace/omni-plugins/)
-      4. Workspace git checkout (for deleted omni-stack bundled plugins)
+    NOTE: there is NO omni-stack git fallback — omni-stack is a seed repo and
+    tracks zero plugins, so there is nothing to restore from its git history.
     """
     target = f"{WORKSPACE}/plugins/{plugin_type}/{name}"
     if exists(target):
@@ -410,17 +411,9 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
         cp(repo_src, target, recursive=True)
         return
 
-    # Try restoring from omni-stack git (for bundled plugins deleted by tests)
-    subprocess.run(
-        f"cd {WORKSPACE} && git checkout -- plugins/{plugin_type}/{name} 2>&1",
-        shell=True, capture_output=True, text=True
-    )
-    if exists(target):
-        return
-
     raise RuntimeError(
         f"Cannot create bundled plugin '{name}' in {plugin_type}: "
-        f"no source found in .remote/, {REMOTE_REPO}, or git history"
+        f"no source found in .remote/ or {REMOTE_REPO}"
     )
 
 def remove_bundled_plugin(name, plugin_type="tools"):
@@ -2773,16 +2766,16 @@ def test_mm9_e2e():
     """
     import urllib.request, urllib.error, time
     _ensure_mm_platform_binary()
-    # Ensure noop provider exists (GROUP 1 tests may have deleted it)
+    # Ensure noop provider exists (GROUP 1 tests may have deleted it).
+    # Restore from the omni-plugins repo — omni-stack is a seed and tracks no
+    # plugins, so there is no git fallback.
     noop_dir = f"{WORKSPACE}/plugins/providers/noop"
     if not os.path.exists(noop_dir):
         print("[restoring noop provider from backup...]")
         from shutil import copytree
         repo_noop = f"{REMOTE_REPO}/providers/noop"
-        if os.path.exists(repo_noop):
-            copytree(repo_noop, noop_dir, dirs_exist_ok=True)
-        else:
-            sh(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1")
+        assert os.path.exists(repo_noop), f"omni-plugins missing providers/noop"
+        copytree(repo_noop, noop_dir, dirs_exist_ok=True)
         assert os.path.exists(noop_dir), f"Failed to restore noop provider"
     _check_mm_container()
     MM = "http://mattermost:8065"
@@ -3069,10 +3062,6 @@ def test_fn_9b_provider_source_awareness():
         pass
     time.sleep(2)
 
-    # Restore original noop if deleted by tests
-    if not os.path.exists(NOOP_TARGET):
-        subprocess.run(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1", shell=True)
-
     # Copy noop-full from omni-plugins to bundled noop location
     if os.path.exists(NOOP_TARGET):
         shutil.rmtree(NOOP_TARGET)
@@ -3156,11 +3145,11 @@ def test_fn_9b_provider_source_awareness():
     assert found_bundled, "Bundled noop provider did not reply with 'noop-bundled' within 60s"
     print("  [Phase 2 PASS: bundled noop replied correctly]")
 
-    # Cleanup: restore original noop provider
+    # Cleanup: remove test-created bundled noop (omni-stack is a seed — the
+    # real noop provider is built-in in the omniagent image, nothing to restore)
     if os.path.exists(NOOP_TARGET):
         shutil.rmtree(NOOP_TARGET)
-    subprocess.run(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1", shell=True)
-    print("  [restored original noop provider]")
+    print("  [removed test-created bundled noop provider]")
     # Refresh provider metadata so the restored plugin.json's default_base_url
     # (http://noop-provider:9090/v1) is picked up. Without this, PROVIDER_METADATA
     # still holds the noop-full metadata (no default_base_url), causing
@@ -6380,10 +6369,8 @@ def test_21_1_noop_provider_lifecycle():
     if not os.path.exists(noop_dir):
         from shutil import copytree
         repo_noop = f"{REMOTE_REPO}/providers/noop"
-        if os.path.exists(repo_noop):
-            copytree(repo_noop, noop_dir, dirs_exist_ok=True)
-        else:
-            sh(f"cd {WORKSPACE} && git checkout -- plugins/providers/noop 2>&1")
+        assert os.path.exists(repo_noop), f"omni-plugins missing providers/noop"
+        copytree(repo_noop, noop_dir, dirs_exist_ok=True)
         assert os.path.exists(noop_dir), "Failed to restore noop provider"
     print(f"✓ Noop plugin dir exists")
 

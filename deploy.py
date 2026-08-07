@@ -319,14 +319,16 @@ def deploy(mode):
         )
 
     # Repo is verified clean, so it is now safe to remove root-owned,
-    # gitignored build/test residue (target/, .remote/, test-* artifacts)
+    # gitignored build/test residue (target/, .remote/ clones, test-* tools)
     # that the container wrote into the bind mount. `git clean -fdX` removes
-    # ONLY ignored files — tracked files (e.g. the bundled noop provider in
-    # plugins/providers/) are never touched, so nothing needs restoring and
-    # user work can never be discarded. Removing the residue keeps local runs
-    # as fresh as a CI checkout.
+    # ONLY ignored files (`.remote/` clones) and `git clean -fd` removes
+    # untracked test tools — tracked files are never touched, so nothing needs
+    # restoring and user work can never be discarded. omni-stack is a seed and
+    # tracks zero plugins, so there is no bundled plugin to preserve. Removing
+    # the residue keeps local runs as fresh as a CI checkout.
     sh("cd /opt/workspace/omni-stack && "
        "sudo git clean -fdX -- plugins/tools plugins/platforms plugins/providers 2>/dev/null; "
+       "sudo git clean -fd -- plugins/tools plugins/platforms plugins/providers 2>/dev/null; "
        "true")
 
     # Only one stack can run at a time (dev overlay publishes host ports
@@ -582,6 +584,17 @@ def deploy(mode):
         print(f"  INTEGRATION TESTS — PASS {pass_num}")
         print(f"{'=' * 60}")
         run_tests(compose)
+
+    # Clean test-created plugin residue from omni-stack (seed rule: test
+    # artifacts are removed after the run, not gitignored). The same sweep
+    # also runs inside shared.run_tests() below; doing it here too keeps the
+    # bind mount clean even if the shared phase is skipped or fails early.
+    print("\n[Cleaning test-created plugin residue from omni-stack...]")
+    sh("cd /opt/workspace/omni-stack && "
+       "sudo git clean -fdX -- plugins 2>/dev/null; "
+       "sudo git clean -fd -- plugins 2>/dev/null; "
+       "rmdir plugins/tools plugins/platforms plugins/providers plugins 2>/dev/null; "
+       "true")
 
     print(f"\n{'=' * 60}")
     print("  ALL TESTS PASSED")

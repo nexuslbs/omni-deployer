@@ -1566,6 +1566,57 @@ def _check_container():
     print("  Container '" + s.container + "' is running and healthy")
 
 
+def clean_plugin_residue():
+    """Remove test-created plugin residue from the omni-stack bind mount.
+
+    omni-stack is a SEED repo: it tracks zero plugins and ships no plugins/
+    directory. During test runs the container writes plugins into the
+    bind-mounted omni-stack plugins/ dir:
+
+      - `plugins/<type>/.remote/`  — git clones from install-git (gitignored)
+      - bundled test tools (test-python, test-js-tool, ...) copied by tests.py
+
+    These MUST be removed when the run finishes (the seed rule: test artifacts
+    are temporary, not gitignored — a fork adding its own plugins should never
+    be silently ignored). `git clean -fdX` removes ONLY gitignored files
+    (`.remote/` clones); `git clean -fd` removes untracked-but-not-ignored
+    files (test tools). Running both under plugins/ removes exactly the test
+    residue while never touching tracked files (fork plugins would be
+    tracked/committed, so they survive).
+    """
+    s = sett()
+    stack_dir = s.omni_stack_dir
+    plugins_dir = os.path.join(stack_dir, "plugins")
+    if not os.path.isdir(plugins_dir):
+        print("  [plugin residue: no plugins/ dir — nothing to clean]")
+        return
+    # Residue is container-created (root-owned), so use sudo for the sweep.
+    # git clean -fdX: ignored only (.remote clones). git clean -fd: untracked
+    # only (test tools). Both are scoped to plugins/ so tracked fork content
+    # can never be touched.
+    r = sh(
+        f"cd {stack_dir} && "
+        "sudo git clean -fdX -- plugins 2>/dev/null; "
+        "sudo git clean -fd -- plugins 2>/dev/null; "
+        "true"
+    )
+    # Remove the now-empty plugins/ tree so the seed stays pristine
+    sh(
+        f"rmdir {plugins_dir}/tools {plugins_dir}/platforms {plugins_dir}/providers "
+        f"{plugins_dir} 2>/dev/null; true"
+    )
+    # Only warn on untracked/ignored files still present. Tracked (committed)
+    # fork plugins don't appear in `git status --porcelain`, so any `??`
+    # (untracked) or `!!` (ignored) line is genuine residue.
+    r = sh(f"cd {stack_dir} && git status --porcelain --ignored plugins 2>/dev/null | head -5")
+    leftover = [ln for ln in r.stdout.splitlines()
+                if ln.strip() and ln.startswith(("??", "!!"))]
+    if leftover:
+        print(f"  [plugin residue: WARNING — untracked/ignored files remain: {leftover[:2]}]")
+    else:
+        print("  [plugin residue: cleaned (test tools + .remote clones removed)]")
+
+
 def run_tests():
     """Run all tool tests with automatic profile backup/restore.
 
@@ -2039,6 +2090,15 @@ def run_tests():
     print(f"  Failed:  {failed}")
     print(f"  Skipped: {skipped}")
     print(f"  Total assertions: {total_assertions}")
+
+    # ── Post-test cleanup ──
+    # omni-stack is a seed: test-created plugins must be removed after the
+    # run, not gitignored. Run the sweep on BOTH success and failure paths.
+    print("\n[Post-test plugin residue cleanup...]")
+    try:
+        clean_plugin_residue()
+    except Exception as e:
+        print(f"  WARNING: plugin residue cleanup failed: {str(e)[:120]}")
 
     if failed == 0:
         print(f"\n  ✅ ALL TESTS PASSED")
