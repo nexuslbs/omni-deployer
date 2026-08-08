@@ -4462,9 +4462,16 @@ services:
 # ═══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import argparse as _ap
+    _parser = _ap.ArgumentParser(description="Run omniagent integration tests")
+    _parser.add_argument("--group", type=str, default="", help="Only run tests whose function name contains this substring (e.g. '22' or 'test_22_workflow').")
+    _args = _parser.parse_args()
+    if _args.group:
+        os.environ["TEST_FILTER"] = _args.group
+
     # Verify clean git state before making any changes.
     # If a previous run left the repo dirty, fail fast instead of hiding it.
-    check_git_clean()
+    if not _args.group: check_git_clean()
 
     # Mark repo as safe for git (container runs as root, host runs as hermes)
     import subprocess as _git_sp
@@ -5877,7 +5884,7 @@ if test_timings:
     print(f"  Tests run: {tests_run} | Pass: {tests_pass} | Fail: {tests_fail}")
 
 # Discard any unstaged changes: runs even on failure
-discard_all_changes()
+if not _args.group: discard_all_changes()
 
 pass  # sys.exit relocated to end of file so groups 19-25 execute
 # ═══════════════════════════════════════════════════════════════════════
