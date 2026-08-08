@@ -5879,7 +5879,7 @@ if test_timings:
 # Discard any unstaged changes: runs even on failure
 discard_all_changes()
 
-sys.exit(0 if tests_fail == 0 else 1)
+pass  # sys.exit relocated to end of file so groups 19-25 execute
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 19: Platform Plugin Lifecycle (subprocess start/stop verification)
 # ═══════════════════════════════════════════════════════════════════════
@@ -6851,3 +6851,5 @@ print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
 print(f"Passed: see test runner output above")
 
+
+sys.exit(0 if tests_fail == 0 else 1)
