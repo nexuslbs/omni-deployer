@@ -6638,6 +6638,28 @@ def _wf_step_threads(task_id):
     return rows
 
 
+def _wf_history_rows(task_id):
+    """Return workflow kanban_history rows for a task (action='workflow'), oldest first."""
+    import psycopg2
+    rows = []
+    try:
+        with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT action, initial_board, final_board, comment FROM kanban_history "
+                            "WHERE kanban_task_id = %s AND action = 'workflow' ORDER BY id", (task_id,))
+                for r in cur.fetchall():
+                    rows.append({"action": r[0], "initial_board": r[1], "final_board": r[2], "comment": r[3]})
+    except Exception as e:
+        print(f"  [warn] db history lookup failed: {e}")
+    return rows
+
+
+def _wf_history_retry_fired(task_id):
+    """True if kanban_history shows a retry transition (running→running, 'Creating thread')."""
+    return any(r["initial_board"] == "running" and r["final_board"] == "running"
+               for r in _wf_history_rows(task_id))
+
+
 def _wf_settings_get(name):
     sr = get_json("/settings")
     sdata = sr.get("data", sr) if isinstance(sr, dict) else sr
@@ -6740,18 +6762,20 @@ def test_22_workflow_4_fail_thread_running_retry_then_blocked():
         tid = _wf_create_task("wf-fail-running", key, WF_SCRIPT_FAIL_RUNNING, cid)
         tids.append(tid)
         post_json("/kanban/dispatch", {})
-        # wait for the retry: after the first fail the task stays running with a NEW thread
+        # After the first fail the task stays running with a NEW retry thread. The noop
+        # provider's retry completes in <1s, so a live-status poll can MISS the transient
+        # "running" window (observed flake Aug 8: task already 'blocked' when poll saw n>=2).
+        # Assert durable evidence instead: kanban_history records the retry transition
+        # (action='workflow', initial_board='running', final_board='running', comment
+        # "Creating thread #N+1") the moment it fires — no timing sensitivity.
         deadline = time.time() + 60
-        n = 0
+        retry_seen = False
         while time.time() < deadline:
-            threads = _wf_step_threads(tid)
-            n = len(threads)
-            if n >= 2:
+            retry_seen = _wf_history_retry_fired(tid)
+            if retry_seen:
                 break
-            time.sleep(3)
-        assert n >= 2, f"expected a retry thread after first fail, got threads={_wf_step_threads(tid)}"
-        st_now = _wf_task_status(tid).get("status")
-        assert st_now == "running", f"task should still be running after first fail (retry), got {st_now}"
+            time.sleep(1)
+        assert retry_seen, f"expected a retry (running→running) in kanban_history after first fail, got {_wf_history_rows(tid)}"
         # retry limit (retries=1 → 2 attempts) exhausted → blocked
         st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
         assert st == "blocked", f"expected blocked after retry limit, got {st}: {gd}"
