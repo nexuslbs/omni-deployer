@@ -107,7 +107,13 @@ def run_pretests(mode):
         run_compose_check(compose, "build", "omniagent", label="dev image")
 
         def run_cargo(args, label="", extra_env=None):
-            env_flags = ["-e", "SQLX_OFFLINE=true"]
+            # Dev mode NEVER uses SQLX_OFFLINE=true: the dev overlay
+            # (docker-compose.dev.yml) sets SQLX_OFFLINE=false so builds
+            # validate queries against the live migrated DB. Passing
+            # -e SQLX_OFFLINE=true here would defeat the dev overlay and
+            # require a stale committed .sqlx cache. Only CI mode (host
+            # cargo) uses the committed offline cache.
+            env_flags = []
             if extra_env:
                 for k, v in extra_env.items():
                     env_flags += ["-e", f"{k}={v}"]
@@ -347,14 +353,16 @@ def deploy(mode):
         print("[deploy] Removing data volumes...")
         remove_data_volumes()
 
-    # ── Step 0: Pretests ───────────────────────────────────────────
-    # Run fmt, clippy, unit tests, build test binaries BEFORE deploy.
-    # In local mode, runs inside the dev container.
-    # In CI mode, runs directly on the host runner.
-    # In hybrid mode, skipped — production Dockerfile handles them.
-    run_pretests(mode)
+    # Step 1: Stop containers (don't use -v to preserve cargo build cache)
+    print("\n[deploy] Stopping services...")
+    run_compose(compose, "down")
 
-    # Step 0b (hybrid): Build images like CI would
+    # Remove only data volumes, preserving build cache volumes
+    print("[deploy] Removing data volumes...")
+    remove_data_volumes()
+
+    # Step 0b (hybrid): Build images like CI would (production Dockerfile's
+    # builder stage runs fmt/check/clippy/test — the hybrid pretest gate)
     if mode == "hybrid":
         print("\n[deploy] Building omniagent image (production Dockerfile)...")
         r = subprocess.run(
@@ -390,14 +398,6 @@ def deploy(mode):
             print(r.stderr[-1000:] if r.stderr else "")
             raise RuntimeError("toolbox image build failed")
 
-    # Step 1: Stop containers (don't use -v to preserve cargo build cache)
-    print("\n[deploy] Stopping services...")
-    run_compose(compose, "down")
-
-    # Remove only data volumes, preserving build cache volumes
-    print("[deploy] Removing data volumes...")
-    remove_data_volumes()
-
     # Step 2 (dev): Build images
     if mode == "dev":
         print("\n[deploy] Building omniagent image...")
@@ -414,11 +414,12 @@ def deploy(mode):
     wait_for_db(compose, "postgres", "omniagent", "omniagent", "postgres")
     wait_for_db(compose, "mattermost-db", "mmuser", "mattermost", "mattermost-db")
 
-    # Step 5 (dev): Build db-migrations binary, run migrations, THEN build the
-    # workspace. Dev builds use SQLX_OFFLINE=false (dev overlay compose env) so
-    # sqlx validates queries against the live migrated DB at compile time — the
-    # schema must exist before the workspace build. db-migrations has no
-    # compile-time sqlx macros, so it builds fine against an empty DB.
+    # Step 5 (dev): Build db-migrations binary, run migrations, THEN run
+    # pretests. Dev builds use SQLX_OFFLINE=false (dev overlay compose env) so
+    # sqlx validates queries against the live migrated DB at compile time —
+    # the schema must exist before any workspace build/check/clippy/test.
+    # db-migrations has no compile-time sqlx macros, so it builds fine against
+    # an empty DB.
     if mode == "dev":
         print("\n[deploy] Building db-migrations binary...")
         run_compose_check(
@@ -432,6 +433,13 @@ def deploy(mode):
             "/target/release/db-migrations", label="migrations",
         )
 
+    # Step 0: Pretests — AFTER the DB is migrated (dev) so SQLX_OFFLINE=false
+    # validates against the live schema. In dev mode cargo runs inside the dev
+    # container; in CI mode cargo runs on the host (uses committed .sqlx cache).
+    run_pretests(mode)
+
+    # Step 5b (dev): prepare.py + build all binaries (after pretests)
+    if mode == "dev":
         # prepare.py: cargo fmt + cargo sqlx prepare --workspace — formats the
         # Rust sources and regenerates the offline .sqlx query cache against
         # the live migrated DB, so committed caches stay fresh for
