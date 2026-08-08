@@ -220,7 +220,7 @@ def read_plugins_yml():
         if not stripped or stripped.startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
-        if in_config and indent <= 6:
+        if in_config and indent < 6:
             if config_lines:
                 config_str = "\n".join(config_lines)
                 entry["config"] = config_str
@@ -6842,8 +6842,10 @@ def test_22_workflow_7_clear_executions_on_review():
         tids = [t_true, t_false]
         post_json("/kanban/dispatch", {})
         st1, _ = _wf_wait_status(t_true, {"review", "blocked", "done"}, timeout=120)
-        st2, _ = _wf_wait_status(t_false, {"review", "blocked", "done"}, timeout=120)
         assert st1 == "review", f"clear_executions_on_review=true should end in review, got {st1}"
+        # Dispatcher fires ONE task per invocation — dispatch again for t_false.
+        post_json("/kanban/dispatch", {})
+        st2, _ = _wf_wait_status(t_false, {"review", "blocked", "done"}, timeout=120)
         assert st2 == "blocked", f"clear_executions_on_review=false should end in blocked, got {st2}"
     finally:
         _wf_remove_test_python()
