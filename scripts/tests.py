@@ -6489,9 +6489,365 @@ def test_22_6_kanban_invalid_status():
 test(test_22_6_kanban_invalid_status)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 22: Workflow Implementation (R7)
+#  Executor/tester/reviewer combos, builtin_fail-thread transitions,
+#  interruption reruns, retry-exhaustion → blocked, clear_executions_on_review,
+#  D9 dependency gate.
+#  NOTE: workflow role provider/model are metadata (resolved at PUT); step
+#  threads run with the CHANNEL's provider/model, so the mattermost channel is
+#  temporarily patched to noop/test-tool-caller and restored after each test.
+#  threads.workflow_id / threads.workflow_step are not exposed by the /threads
+#  API — they are read back via psycopg2 (harness runs inside the omniagent
+#  container where DATABASE_URL is present).
+# ═══════════════════════════════════════════════════════════════════════
+print(f"\n{'=' * 60}")
+print("GROUP 22: Workflow Implementation (R7) — combos, fail-thread, interruption, retries, clear_executions_on_review, D9")
+print("=" * 60)
+
+WF_SCRIPT_OK = json.dumps([{"name": "ok", "tool": "test-python_lorem", "arguments": {"seconds": 1}}])
+WF_SCRIPT_FAIL_RUNNING = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "running"}}])
+WF_SCRIPT_FAIL_TESTING = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "testing"}}])
+WF_SCRIPT_4STEPS = json.dumps([{"name": f"s{i}", "tool": "test-python_lorem", "arguments": {"seconds": 1}} for i in range(4)])
+
+
+def _wf_channel_patch():
+    """Find the mattermost channel and patch it to noop/test-tool-caller. Returns (channel_id, original_config)."""
+    channels = get_data("/channels")
+    cid, orig = None, None
+    for c in channels:
+        if c.get("platform") == "mattermost" and not c.get("archived"):
+            cid, orig = c["id"], {"current_provider": c.get("current_provider"),
+                                  "current_model": c.get("current_model"),
+                                  "plan": c.get("plan")}
+            break
+    assert cid is not None, "no mattermost channel available for workflow tests"
+    req = urllib.request.Request(f"{BASE}/channels/{cid}",
+                                 data=json.dumps({"current_provider": "noop",
+                                                  "current_model": "test-tool-caller",
+                                                  "plan": False}).encode(),
+                                 method="PATCH",
+                                 headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=10)
+    ch = get_json(f"/channels/{cid}")
+    ch = ch.get("data", ch) if isinstance(ch, dict) else ch
+    assert ch.get("current_model") == "test-tool-caller", f"channel patch failed: {ch}"
+    return cid, orig
+
+
+def _wf_channel_restore(cid, orig):
+    if cid and orig is not None:
+        try:
+            req = urllib.request.Request(f"{BASE}/channels/{cid}",
+                                         data=json.dumps(orig).encode(),
+                                         method="PATCH",
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as e:
+            print(f"  [warn] channel restore failed: {e}")
+
+
+def _wf_cleanup(keys, task_ids):
+    for t in task_ids:
+        try:
+            delete_json(f"/kanban/tasks/{t}", raise_on_error=False)
+        except Exception:
+            pass
+    for k in keys:
+        try:
+            delete_json(f"/workflows/{k}", raise_on_error=False)
+        except Exception:
+            pass
+
+
+def _wf_create_task(title, key, script, cid):
+    r = post_json("/kanban/tasks", {"title": title, "status": "todo",
+                                    "workflow_id": key, "channel_id": cid, "body": script})
+    d = r.get("data", r) if isinstance(r, dict) else r
+    assert d.get("id"), f"task create failed: {d}"
+    return d["id"]
+
+
+def _wf_task_status(task_id):
+    r = get_json(f"/kanban/tasks/{task_id}")
+    d = r.get("data", r) if isinstance(r, dict) else r
+    return d
+
+
+def _wf_wait_status(task_id, want, timeout=120, step=3):
+    """Poll until task status is in `want`; returns (status, task_json)."""
+    deadline = time.time() + timeout
+    gd = {}
+    while time.time() < deadline:
+        gd = _wf_task_status(task_id)
+        if gd.get("status") in want:
+            return gd.get("status"), gd
+        time.sleep(step)
+    return gd.get("status"), gd
+
+
+def _wf_step_threads(task_id):
+    """Read step threads for a task from the DB (workflow_id/workflow_step are not exposed via /threads)."""
+    import psycopg2
+    rows = []
+    try:
+        with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, workflow_id, workflow_step, provider, model, status "
+                            "FROM threads WHERE task_id = %s AND task_type = 'kanban' ORDER BY id", (task_id,))
+                for r in cur.fetchall():
+                    rows.append({"id": r[0], "workflow_id": r[1], "workflow_step": r[2],
+                                 "provider": r[3], "model": r[4], "status": r[5]})
+    except Exception as e:
+        print(f"  [warn] db thread lookup failed: {e}")
+    return rows
+
+
+def _wf_settings_get(name):
+    sr = get_json("/settings")
+    sdata = sr.get("data", sr) if isinstance(sr, dict) else sr
+    cats = sdata.get("categories", []) if isinstance(sdata, dict) else []
+    for c in cats:
+        for s in c.get("settings", []):
+            if s.get("name") == name:
+                return s.get("value")
+    return None
+
+
+def test_22_workflow_1_executor_only():
+    """Executor-only workflow: todo → running → review; step thread carries workflow_id + workflow_step='running'."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_exec_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf-exec-only", key, WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done", "testing"}, timeout=120)
+        assert st == "review", f"expected review after executor success, got {st}: {gd}"
+        threads = _wf_step_threads(tid)
+        assert threads, "no step threads found for task"
+        t = threads[0]
+        assert t["workflow_id"] == key, f"thread workflow_id={t['workflow_id']}, expected {key}"
+        assert t["workflow_step"] == "running", f"thread workflow_step={t['workflow_step']}, expected running"
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_2_executor_tester():
+    """Executor+tester: running → testing (tester pass) → review (no reviewer). Step threads carry running + testing."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_exec_tester_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
+                                                 "tester": {"provider": "noop", "model": "test-tool-caller",
+                                                            "template": "wf_tester.md"}}})
+        tid = _wf_create_task("wf-exec-tester", key, WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=180)
+        assert st == "review", f"expected review after tester pass, got {st}: {gd}"
+        threads = _wf_step_threads(tid)
+        steps = {t["workflow_step"] for t in threads}
+        assert "running" in steps and "testing" in steps, f"expected running+testing step threads, got {threads}"
+        assert all(t["workflow_id"] == key for t in threads), f"workflow_id mismatch: {threads}"
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_3_executor_tester_reviewer():
+    """Executor+tester+reviewer: running → testing → review → done (reviewer approves)."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_full_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
+                                                 "tester": {"provider": "noop", "model": "test-tool-caller",
+                                                            "template": "wf_tester.md"},
+                                                 "reviewer": {"provider": "noop", "model": "test-tool-caller",
+                                                              "template": "wf_reviewer.md"}}})
+        tid = _wf_create_task("wf-full", key, WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"done", "blocked"}, timeout=240)
+        assert st == "done", f"expected done after reviewer approve, got {st}: {gd}"
+        threads = _wf_step_threads(tid)
+        steps = {t["workflow_step"] for t in threads}
+        assert steps == {"running", "testing", "review"}, f"expected running/testing/review step threads, got {threads}"
+        assert all(t["workflow_id"] == key for t in threads), f"workflow_id mismatch: {threads}"
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_4_fail_thread_running_retry_then_blocked():
+    """builtin_fail-thread with workflow_step='running': first failure → retry (task stays running, new thread), then retry-limit → blocked."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_fail_run_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf-fail-running", key, WF_SCRIPT_FAIL_RUNNING, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        # wait for the retry: after the first fail the task stays running with a NEW thread
+        deadline = time.time() + 60
+        n = 0
+        while time.time() < deadline:
+            threads = _wf_step_threads(tid)
+            n = len(threads)
+            if n >= 2:
+                break
+            time.sleep(3)
+        assert n >= 2, f"expected a retry thread after first fail, got threads={_wf_step_threads(tid)}"
+        st_now = _wf_task_status(tid).get("status")
+        assert st_now == "running", f"task should still be running after first fail (retry), got {st_now}"
+        # retry limit (retries=1 → 2 attempts) exhausted → blocked
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
+        assert st == "blocked", f"expected blocked after retry limit, got {st}: {gd}"
+        threads = _wf_step_threads(tid)
+        assert all(t["workflow_step"] == "running" for t in threads), f"expected running-step threads only, got {threads}"
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_5_fail_thread_testing_no_tester_blocked():
+    """builtin_fail-thread with workflow_step='testing' from the executor with NO tester role → blocked (fail matrix F2)."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_fail_test_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf-fail-testing", key, WF_SCRIPT_FAIL_TESTING, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
+        assert st == "blocked", f"expected blocked (no tester role), got {st}: {gd}"
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_6_interruption_rerun():
+    """Lower max_iterations_no_plan so the executor thread is interrupted → I1 rerun (consumes a retry) → retry-limit → blocked. Settings restored."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_interrupt_" + uuid.uuid4().hex[:8]
+    tids = []
+    old_iter = _wf_settings_get("max_iterations_no_plan")
+    old_plan = _wf_settings_get("max_iterations_plan")
+    assert old_iter is not None, "max_iterations_no_plan not found in settings"
+    try:
+        put_json("/settings", {"updates": [{"name": "max_iterations_no_plan", "value": "2"},
+                                           {"name": "max_iterations_plan", "value": "2"}]})
+        assert str(_wf_settings_get("max_iterations_no_plan")) == "2", "settings update did not apply"
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf-interrupt", key, WF_SCRIPT_4STEPS, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        # run 1 is interrupted → rerun: a second thread appears while the task stays running
+        deadline = time.time() + 60
+        n = 0
+        while time.time() < deadline:
+            n = len(_wf_step_threads(tid))
+            if n >= 2:
+                break
+            time.sleep(3)
+        assert n >= 2, f"expected interrupted rerun (≥2 threads), got {_wf_step_threads(tid)}"
+        # retry limit reached → blocked
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=150)
+        assert st == "blocked", f"expected blocked after interrupted reruns exhausted retries, got {st}: {gd}"
+    finally:
+        try:
+            put_json("/settings", {"updates": [{"name": "max_iterations_no_plan", "value": str(old_iter)}]})
+            if old_plan is not None:
+                put_json("/settings", {"updates": [{"name": "max_iterations_plan", "value": str(old_plan)}]})
+        except Exception as e:
+            print(f"  [warn] settings restore failed: {e}")
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_7_clear_executions_on_review():
+    """clear_executions_on_review=true → retry-limit lands in review; false → blocked. Both variants asserted."""
+    cid, orig = _wf_channel_patch()
+    key_t = "wf_test_clear_t_" + uuid.uuid4().hex[:8]
+    key_f = "wf_test_clear_f_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key_t}", {"retries": 0, "plan_mode": "off", "clear_executions_on_review": True,
+                                         "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        put_json(f"/workflows/{key_f}", {"retries": 0, "plan_mode": "off", "clear_executions_on_review": False,
+                                         "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        t_true = _wf_create_task("wf-clear-true", key_t, WF_SCRIPT_FAIL_RUNNING, cid)
+        t_false = _wf_create_task("wf-clear-false", key_f, WF_SCRIPT_FAIL_RUNNING, cid)
+        tids = [t_true, t_false]
+        post_json("/kanban/dispatch", {})
+        st1, _ = _wf_wait_status(t_true, {"review", "blocked", "done"}, timeout=120)
+        st2, _ = _wf_wait_status(t_false, {"review", "blocked", "done"}, timeout=120)
+        assert st1 == "review", f"clear_executions_on_review=true should end in review, got {st1}"
+        assert st2 == "blocked", f"clear_executions_on_review=false should end in blocked, got {st2}"
+    finally:
+        _wf_cleanup([key_t, key_f], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_22_workflow_8_d9_dependency_gate():
+    """D9: a todo task whose dependency is in `review` must NOT be dispatched; after the dep moves to `done` it is."""
+    cid, orig = _wf_channel_patch()
+    key = "wf_test_d9_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        a_id = _wf_create_task("wf-d9-a", key, WF_SCRIPT_OK, cid)
+        b_id = _wf_create_task("wf-d9-b", key, WF_SCRIPT_OK, cid)
+        tids = [a_id, b_id]
+        # B depends on A
+        post_json(f"/kanban/tasks/{b_id}/dependencies", {"depends_on_id": a_id})
+        post_json("/kanban/dispatch", {})
+        # A runs to review; B must NOT be dispatched while A is in review
+        st_a, _ = _wf_wait_status(a_id, {"review", "blocked", "done"}, timeout=120)
+        assert st_a == "review", f"A expected review, got {st_a}"
+        time.sleep(3)
+        b_status = _wf_task_status(b_id).get("status")
+        assert b_status == "todo", f"B must stay todo while A is in review, got {b_status}"
+        assert not _wf_step_threads(b_id), "B must have no step threads while A is in review"
+        # move A to done → dispatch promotes B
+        put_json(f"/kanban/tasks/{a_id}", {"status": "done"})
+        post_json("/kanban/dispatch", {})
+        st_b, gd_b = _wf_wait_status(b_id, {"review", "blocked", "done", "running", "testing"}, timeout=120)
+        assert st_b != "todo", "B must be dispatched after A is done"
+        threads_b = _wf_step_threads(b_id)
+        assert threads_b, "B must have a step thread after dispatch"
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+test(test_22_workflow_1_executor_only)
+test(test_22_workflow_2_executor_tester)
+test(test_22_workflow_3_executor_tester_reviewer)
+test(test_22_workflow_4_fail_thread_running_retry_then_blocked)
+test(test_22_workflow_5_fail_thread_testing_no_tester_blocked)
+test(test_22_workflow_6_interruption_rerun)
+test(test_22_workflow_7_clear_executions_on_review)
+test(test_22_workflow_8_d9_dependency_gate)
+
+
 print(f"\n{'=' * 60}")
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
-print(f"Groups 20-22: API CRUD, Noop Provider, Edge Cases — completed")
+print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
 print(f"Passed: see test runner output above")
 
