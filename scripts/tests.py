@@ -6518,6 +6518,34 @@ WF_SCRIPT_FAIL_TESTING = json.dumps([{"name": "fail", "tool": "builtin_fail-thre
 WF_SCRIPT_4STEPS = json.dumps([{"name": f"s{i}", "tool": "test-python_lorem", "arguments": {"seconds": 1}} for i in range(4)])
 
 
+def _wf_ensure_test_python():
+    """Enable the bundled test-python tool so WF_SCRIPT_OK (test-python_lorem) executes.
+    Mirrors G12's enable sequence; GROUP 22 scripts call test-python_lorem and fail with
+    'Unknown tool' if it is not registered."""
+    ensure_bundled_plugin("test-python", "tools")
+    yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
+    api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+    for attempt in range(15):
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
+            tools_data = json.loads(r.read())
+            tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
+            if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "") for t in tools):
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    raise AssertionError("test-python_lorem did not register after enable")
+
+
+def _wf_remove_test_python():
+    try:
+        remove_bundled_plugin("test-python", "tools")
+    except Exception:
+        pass
+    yaml_del("tools", "test-python")
+
+
 def _wf_channel_patch():
     """Find the mattermost channel and patch it to noop/test-tool-caller. Returns (channel_id, original_config)."""
     channels = get_data("/channels")
@@ -6624,6 +6652,7 @@ def _wf_settings_get(name):
 def test_22_workflow_1_executor_only():
     """Executor-only workflow: todo → running → review; step thread carries workflow_id + workflow_step='running'."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_exec_" + uuid.uuid4().hex[:8]
     tids = []
     try:
@@ -6640,6 +6669,7 @@ def test_22_workflow_1_executor_only():
         assert t["workflow_id"] == key, f"thread workflow_id={t['workflow_id']}, expected {key}"
         assert t["workflow_step"] == "running", f"thread workflow_step={t['workflow_step']}, expected running"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
@@ -6647,6 +6677,7 @@ def test_22_workflow_1_executor_only():
 def test_22_workflow_2_executor_tester():
     """Executor+tester: running → testing (tester pass) → review (no reviewer). Step threads carry running + testing."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_exec_tester_" + uuid.uuid4().hex[:8]
     tids = []
     try:
@@ -6664,6 +6695,7 @@ def test_22_workflow_2_executor_tester():
         assert "running" in steps and "testing" in steps, f"expected running+testing step threads, got {threads}"
         assert all(t["workflow_id"] == key for t in threads), f"workflow_id mismatch: {threads}"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
@@ -6671,6 +6703,7 @@ def test_22_workflow_2_executor_tester():
 def test_22_workflow_3_executor_tester_reviewer():
     """Executor+tester+reviewer: running → testing → review → done (reviewer approves)."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_full_" + uuid.uuid4().hex[:8]
     tids = []
     try:
@@ -6690,6 +6723,7 @@ def test_22_workflow_3_executor_tester_reviewer():
         assert steps == {"running", "testing", "review"}, f"expected running/testing/review step threads, got {threads}"
         assert all(t["workflow_id"] == key for t in threads), f"workflow_id mismatch: {threads}"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
@@ -6697,6 +6731,7 @@ def test_22_workflow_3_executor_tester_reviewer():
 def test_22_workflow_4_fail_thread_running_retry_then_blocked():
     """builtin_fail-thread with workflow_step='running': first failure → retry (task stays running, new thread), then retry-limit → blocked."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_fail_run_" + uuid.uuid4().hex[:8]
     tids = []
     try:
@@ -6723,6 +6758,7 @@ def test_22_workflow_4_fail_thread_running_retry_then_blocked():
         threads = _wf_step_threads(tid)
         assert all(t["workflow_step"] == "running" for t in threads), f"expected running-step threads only, got {threads}"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
@@ -6730,6 +6766,7 @@ def test_22_workflow_4_fail_thread_running_retry_then_blocked():
 def test_22_workflow_5_fail_thread_testing_no_tester_blocked():
     """builtin_fail-thread with workflow_step='testing' from the executor with NO tester role → blocked (fail matrix F2)."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_fail_test_" + uuid.uuid4().hex[:8]
     tids = []
     try:
@@ -6741,6 +6778,7 @@ def test_22_workflow_5_fail_thread_testing_no_tester_blocked():
         st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
         assert st == "blocked", f"expected blocked (no tester role), got {st}: {gd}"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
@@ -6748,6 +6786,7 @@ def test_22_workflow_5_fail_thread_testing_no_tester_blocked():
 def test_22_workflow_6_interruption_rerun():
     """Lower max_iterations_no_plan so the executor thread is interrupted → I1 rerun (consumes a retry) → retry-limit → blocked. Settings restored."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_interrupt_" + uuid.uuid4().hex[:8]
     tids = []
     old_iter = _wf_settings_get("max_iterations_no_plan")
@@ -6775,6 +6814,7 @@ def test_22_workflow_6_interruption_rerun():
         st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=150)
         assert st == "blocked", f"expected blocked after interrupted reruns exhausted retries, got {st}: {gd}"
     finally:
+        _wf_remove_test_python()
         try:
             put_json("/settings", {"updates": [{"name": "max_iterations_no_plan", "value": str(old_iter)}]})
             if old_plan is not None:
@@ -6788,6 +6828,7 @@ def test_22_workflow_6_interruption_rerun():
 def test_22_workflow_7_clear_executions_on_review():
     """clear_executions_on_review=true → retry-limit lands in review; false → blocked. Both variants asserted."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key_t = "wf_test_clear_t_" + uuid.uuid4().hex[:8]
     key_f = "wf_test_clear_f_" + uuid.uuid4().hex[:8]
     tids = []
@@ -6805,6 +6846,7 @@ def test_22_workflow_7_clear_executions_on_review():
         assert st1 == "review", f"clear_executions_on_review=true should end in review, got {st1}"
         assert st2 == "blocked", f"clear_executions_on_review=false should end in blocked, got {st2}"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key_t, key_f], tids)
         _wf_channel_restore(cid, orig)
 
@@ -6812,6 +6854,7 @@ def test_22_workflow_7_clear_executions_on_review():
 def test_22_workflow_8_d9_dependency_gate():
     """D9: a todo task whose dependency is in `review` must NOT be dispatched; after the dep moves to `done` it is."""
     cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
     key = "wf_test_d9_" + uuid.uuid4().hex[:8]
     tids = []
     try:
@@ -6838,6 +6881,7 @@ def test_22_workflow_8_d9_dependency_gate():
         threads_b = _wf_step_threads(b_id)
         assert threads_b, "B must have a step thread after dispatch"
     finally:
+        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
