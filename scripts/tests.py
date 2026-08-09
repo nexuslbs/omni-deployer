@@ -3717,6 +3717,53 @@ def test_p7_idempotent():
     assert _msgs_size(r1["messages"]) <= CHAR_SOFT, \
         f"Idempotent result should be within soft budget: {_msgs_size(r1['messages'])}"
 
+
+
+def _wf_channel_patch():
+    """Return the DEDICATED workflow-test channel (omniagent id 35, MM 'wf-test',
+    resource_identifier faownqu7nb8t9q7nhn7q867too) — PERMANENTLY configured with
+    current_provider=noop and current_model=test-tool-caller, so workflow tests run
+    here WITHOUT patching or restoring any channel.
+
+    INCIDENT 2026-08-09: this function used to patch any idle mattermost channel to
+    noop/test-tool-caller and restore it afterwards; a failed restore left the LIVE
+    kanban channel (id 4) on noop/test-tool-caller and the next kanban dispatch ran
+    on the noop provider and FALSELY marked a task (R7-D) done. NEVER patch a
+    channel for tests — fail loudly if the dedicated channel is missing.
+    Returns (channel_id, None) — _wf_channel_restore is a no-op for orig=None."""
+    cid = _wf_dedicated_channel()
+    return cid, None
+
+
+def _wf_dedicated_channel():
+    """Look up the DEDICATED wf-test omniagent channel (id 35, MM 'wf-test') by
+    resource_identifier/name and assert it is permanently noop/test-tool-caller.
+    Fails loudly if missing or misconfigured — never falls back to patching any
+    other channel. Returns the channel id."""
+    r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
+    channels = json.loads(r.read()).get("data", [])
+    ch = next((c for c in channels
+               if c.get("id") == 35
+               or c.get("resource_identifier") == "faownqu7nb8t9q7nhn7q867too"
+               or c.get("name") == "mattermost-faownqu7"), None)
+    assert ch is not None, (
+        "DEDICATED wf-test channel NOT found (omniagent id 35, name "
+        "'mattermost-faownqu7', resource_identifier 'faownqu7nb8t9q7nhn7q867too'). "
+        "Integration/workflow tests MUST run on the dedicated test channel — "
+        "refusing to patch any other channel (2026-08-09 incident: a patched "
+        "channel left the kanban channel on noop and falsely completed a task). "
+        "Create/reconfigure the 'wf-test' Mattermost channel (team omni) before "
+        "running workflow tests."
+    )
+    assert ch.get("current_provider") == "noop" and ch.get("current_model") == "test-tool-caller", (
+        f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
+        f"current_provider={ch.get('current_provider')!r}, "
+        f"current_model={ch.get('current_model')!r} — expected noop/test-tool-caller. "
+        "Refusing to patch it or any other channel."
+    )
+    return ch["id"]
+
+
 # ── GROUP 12: File Upload via Mattermost + test-tool-caller ──────────
 def test_fn_12_file_upload():
     """Upload a file, send JSON script to use builtin_read-attached-file, verify content is read.
@@ -6468,51 +6515,6 @@ def _wf_remove_test_python():
     except Exception:
         pass
     yaml_del("tools", "test-python")
-
-
-def _wf_channel_patch():
-    """Return the DEDICATED workflow-test channel (omniagent id 35, MM 'wf-test',
-    resource_identifier faownqu7nb8t9q7nhn7q867too) — PERMANENTLY configured with
-    current_provider=noop and current_model=test-tool-caller, so workflow tests run
-    here WITHOUT patching or restoring any channel.
-
-    INCIDENT 2026-08-09: this function used to patch any idle mattermost channel to
-    noop/test-tool-caller and restore it afterwards; a failed restore left the LIVE
-    kanban channel (id 4) on noop/test-tool-caller and the next kanban dispatch ran
-    on the noop provider and FALSELY marked a task (R7-D) done. NEVER patch a
-    channel for tests — fail loudly if the dedicated channel is missing.
-    Returns (channel_id, None) — _wf_channel_restore is a no-op for orig=None."""
-    cid = _wf_dedicated_channel()
-    return cid, None
-
-
-def _wf_dedicated_channel():
-    """Look up the DEDICATED wf-test omniagent channel (id 35, MM 'wf-test') by
-    resource_identifier/name and assert it is permanently noop/test-tool-caller.
-    Fails loudly if missing or misconfigured — never falls back to patching any
-    other channel. Returns the channel id."""
-    r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-    channels = json.loads(r.read()).get("data", [])
-    ch = next((c for c in channels
-               if c.get("id") == 35
-               or c.get("resource_identifier") == "faownqu7nb8t9q7nhn7q867too"
-               or c.get("name") == "mattermost-faownqu7"), None)
-    assert ch is not None, (
-        "DEDICATED wf-test channel NOT found (omniagent id 35, name "
-        "'mattermost-faownqu7', resource_identifier 'faownqu7nb8t9q7nhn7q867too'). "
-        "Integration/workflow tests MUST run on the dedicated test channel — "
-        "refusing to patch any other channel (2026-08-09 incident: a patched "
-        "channel left the kanban channel on noop and falsely completed a task). "
-        "Create/reconfigure the 'wf-test' Mattermost channel (team omni) before "
-        "running workflow tests."
-    )
-    assert ch.get("current_provider") == "noop" and ch.get("current_model") == "test-tool-caller", (
-        f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
-        f"current_provider={ch.get('current_provider')!r}, "
-        f"current_model={ch.get('current_model')!r} — expected noop/test-tool-caller. "
-        "Refusing to patch it or any other channel."
-    )
-    return ch["id"]
 
 
 def _wf_channel_restore(cid, orig):
