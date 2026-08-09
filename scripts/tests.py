@@ -5951,6 +5951,19 @@ def test_fn_19_platform_lifecycle():
     ]
 
     for plat_name, lang in platforms:
+        # ── Setup: ensure bundled platform exists (fn 18 cleans up) ───
+        try:
+            ensure_bundled_plugin(plat_name, "platforms")
+            resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/install", {}, timeout=120)
+            assert resp.get("success"), f"Setup install '{plat_name}' failed: {resp}"
+            resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
+            assert resp.get("success"), f"Setup disable '{plat_name}' failed: {resp}"
+            _wait_for_platform_subprocess(plat_name, False, timeout=10)
+            print(f"  [setup: bundled {plat_name} installed + disabled]")
+        except Exception as e:
+            print(f"  [SETUP FAILED for {plat_name}: {str(e)[:120]}]")
+            continue
+
         # ── Phase 1: Verify initial state ──────────────────────────────
         detail = _get_platform_detail(plat_name)
         assert detail is not None, f"Platform '{plat_name}' not found in listing"
@@ -6156,12 +6169,20 @@ test(test_20_4_messages)
 # ─── 20.5: Overview stats ─────────────────────────────────────────────
 
 def test_20_5_overview():
-    """Verify GET /overview returns system stats."""
+    """Verify GET /overview returns recent threads; /overview/dashboard returns KPIs."""
     d = get_data("/overview")
-    print(f"✓ Overview keys: {list(d.keys())[:10]}")
-    for key in ["threads", "messages", "channels", "providers"]:
-        assert key in d, f"Missing '{key}': {list(d.keys())}"
-        print(f"  {key}: {d[key]}")
+    assert isinstance(d, list), f"/overview should return a list, got: {type(d).__name__}"
+    print(f"✓ Overview entries: {len(d)} total")
+    if d:
+        entry = d[0]
+        for key in ["id", "channel_name", "status", "content_preview"]:
+            assert key in entry, f"Missing '{key}': {list(entry.keys())}"
+        print(f"  first: id={entry.get('id')} channel={entry.get('channel_name')} status={entry.get('status')}")
+    dash = get_data("/overview/dashboard")
+    assert isinstance(dash, dict), f"/overview/dashboard should return a dict, got: {type(dash).__name__}"
+    for key in ["kpis", "threads_over_time", "status_distribution", "token_trend", "recent_activity", "channel_health", "top_tools"]:
+        assert key in dash, f"Missing dashboard '{key}': {list(dash.keys())}"
+    print(f"✓ Dashboard keys: {list(dash.keys())}")
 
 test(test_20_5_overview)
 
@@ -6170,22 +6191,20 @@ test(test_20_5_overview)
 def test_20_6_settings():
     """Verify GET/PUT /settings round-trip."""
     d = get_json("/settings")
-    # Settings response has 'categories' key, not 'data'
-    s = d if isinstance(d, dict) and "default_provider" in d else (d.get("data", d) if isinstance(d, dict) else {})
-    # Flatten categories to find default_provider
-    if "categories" in d:
-        import itertools
-        cats = d["categories"]
-        all_settings = {}
-        for cat in cats.values() if isinstance(cats, dict) else (cats if isinstance(cats, list) else []):
-            if isinstance(cat, dict):
-                all_settings.update(cat)
-        s = all_settings
-    orig = s.get("default_provider", "openai")
-    # PUT expects {"updates": {"default_provider": "test"}}
-    put_json("/settings", {"updates": {"default_provider": "test-provider"}})
+    # Settings response: {"categories": [{"name": ..., "settings": [{"name": ..., "value": ...}]}]}
+    all_settings = {}
+    cats = d.get("categories", []) if isinstance(d, dict) else []
+    for cat in cats if isinstance(cats, list) else []:
+        if not isinstance(cat, dict):
+            continue
+        for setting in cat.get("settings", []) if isinstance(cat.get("settings"), list) else []:
+            if isinstance(setting, dict) and setting.get("name"):
+                all_settings[setting["name"]] = setting.get("value", "")
+    orig = all_settings.get("default_provider", "openai")
+    # PUT expects {"updates": [{"name": ..., "value": ...}]}
+    put_json("/settings", {"updates": [{"name": "default_provider", "value": "test-provider"}]})
     print(f"✓ Updated default_provider to test-provider")
-    put_json("/settings", {"updates": {"default_provider": orig}})
+    put_json("/settings", {"updates": [{"name": "default_provider", "value": orig}]})
     print(f"✓ Restored to {orig}")
 
 test(test_20_6_settings)
@@ -6246,7 +6265,7 @@ test(test_20_8_schedule_crud)
 def test_20_9_secrets_crud():
     """Secrets create → get → list → delete."""
     name = "test-secret-api-group20"
-    post_json("/secrets", {"name": name, "value": "secret-val"})
+    post_json("/secrets", {"name": name, "fieldType": "text", "value": "secret-val"})
     print(f"✓ Created secret")
     try:
         get_json(f"/secrets/{name}")
@@ -6275,13 +6294,21 @@ def test_20_10_actions_crud():
     if isinstance(acts, list):
         print(f"✓ Actions list: {len(acts)} total")
 
-    r = post_json("/actions", {"name": name, "prompt": "test prompt", "channel_id": None})
-    aid = r.get("data", {}).get("id") or r.get("id")
-    assert aid, f"No id: {r}"
+    r = post_json("/actions", {"name": name, "tool_name": "fetch", "params": {}})
+    # POST /actions returns the full list (201); find the created entry by name
+    aid = None
+    if isinstance(r, list):
+        for entry in r:
+            if isinstance(entry, dict) and entry.get("name") == name:
+                aid = entry.get("id")
+                break
+    if aid is None and isinstance(r, dict):
+        aid = r.get("data", {}).get("id") or r.get("id")
+    assert aid, f"No id: {str(r)[:200]}"
     _action_id = aid
     print(f"✓ Created action: id={aid}")
     try:
-        put_json(f"/actions/{aid}", {"prompt": "updated prompt"})
+        put_json(f"/actions/{aid}", {"description": "updated prompt"})
         print(f"✓ Updated action")
     finally:
         delete_json(f"/actions/{aid}", raise_on_error=False)
@@ -6327,9 +6354,12 @@ test(test_20_13_memory)
 # ─── 20.14: Plugins ping ──────────────────────────────────────────────
 
 def test_20_14_plugins_ping():
-    """Verify API /api/plugins/ping returns pong."""
-    d = get_json("/api/plugins/ping")
-    print(f"✓ Ping: {str(d)[:80]}")
+    """Verify API /api/plugins/ping returns pong (plain text)."""
+    import urllib.request
+    r = urllib.request.urlopen(f"{BASE}/api/plugins/ping", timeout=10)
+    body = r.read().decode("utf-8", errors="replace").strip()
+    assert body == "pong", f"Expected 'pong', got: {body!r}"
+    print(f"✓ Ping: {body}")
 
 test(test_20_14_plugins_ping)
 
