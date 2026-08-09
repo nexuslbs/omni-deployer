@@ -3752,22 +3752,13 @@ def test_fn_12_file_upload():
     mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
     assert mm_channel_id, "Cannot find 'setup' channel"
 
-    # Patch omniagent channel to noop/test-tool-caller
-    import time as _g12t
-    for _ in range(15):
-        r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-        chs = json.loads(r.read()).get("data", [])
-        mm_ch = next((ch for ch in chs if ch.get("platform") == "mattermost"), None)
-        if mm_ch:
-            cid = mm_ch["id"]
-            patch_req = urllib.request.Request(f"{BASE}/channels/{cid}",
-                data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller", "plan": False}).encode(),
-                method="PATCH", headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(patch_req, timeout=10)
-            print(f"  [channel {cid} patched to noop/test-tool-caller]")
-            break
-        _g12t.sleep(2)
-    _g12t.sleep(3)
+    # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+    # noop/test-tool-caller) — NEVER patch any channel (2026-08-09 incident:
+    # a never-restored patch left the kanban channel on noop and a task was
+    # falsely marked done).
+    cid = _wf_dedicated_channel()
+    print(f"  [using dedicated wf-test channel {cid} for GROUP 12]")
+    time.sleep(3)
 
     # Upload a small text file via Mattermost API (as testuser, so file_ids link properly)
     test_pass = "Mattermost_Fresh_Start_1"
@@ -3894,35 +3885,11 @@ def test_fn_13_non_blocking():
         mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
         assert mm_channel_id
 
-        # Ensure channel uses noop provider with test-tool-caller model
-        channel_set = False
-        for _ in range(10):
-            try:
-                r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-                channels = json.loads(r.read()).get("data", [])
-                mm_ch = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
-                if mm_ch:
-                    cid = mm_ch["id"]
-                    patch_req = urllib.request.Request(f"{BASE}/channels/{cid}",
-                        data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller", "plan": False}).encode(),
-                        method="PATCH", headers={"Content-Type": "application/json"})
-                    urllib.request.urlopen(patch_req, timeout=10)
-                    # Verify the PATCH took effect
-                    time.sleep(1)
-                    rr = urllib.request.urlopen(f"{BASE}/channels/{cid}", timeout=10)
-                    updated = json.loads(rr.read())
-                    upd_model = updated.get("current_model") or (updated.get("data") or {}).get("current_model")
-                    if upd_model == "test-tool-caller":
-                        print(f"[channel {cid} set to noop/test-tool-caller]")
-                        channel_set = True
-                        break
-                    else:
-                        print(f"[WARN] PATCH returned 200 but current_model is '{upd_model}', retrying...")
-            except Exception as e:
-                print(f"[WARN] Channel setup attempt failed: {e}")
-            time.sleep(2)
-
-        assert channel_set, "Could not set channel to noop/test-tool-caller. Ensure: 1) noop provider is enabled, 2) test-tool-caller is in allowed_values, 3) channel exists"
+        # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+        # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
+        # incident: a never-restored patch left the kanban channel on noop
+        # and a task was falsely marked done).
+        cid = _wf_dedicated_channel()
 
         # 4-step script (lorem=6s to exceed 5s short_timeout and trigger background mode):
         # 1. test-python_lorem(6) named "long_run" → returns {task_id, status:processing}
@@ -4035,35 +4002,11 @@ def test_fn_14_cancel_task():
         mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
         assert mm_channel_id
 
-        # Ensure channel uses noop provider with test-tool-caller model
-        channel_set = False
-        for _ in range(10):
-            try:
-                r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-                channels = json.loads(r.read()).get("data", [])
-                mm_ch = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
-                if mm_ch:
-                    cid = mm_ch["id"]
-                    patch_req = urllib.request.Request(f"{BASE}/channels/{cid}",
-                        data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller", "plan": False}).encode(),
-                        method="PATCH", headers={"Content-Type": "application/json"})
-                    urllib.request.urlopen(patch_req, timeout=10)
-                    # Verify the PATCH took effect
-                    time.sleep(1)
-                    rr = urllib.request.urlopen(f"{BASE}/channels/{cid}", timeout=10)
-                    updated = json.loads(rr.read())
-                    upd_model = updated.get("current_model") or (updated.get("data") or {}).get("current_model")
-                    if upd_model == "test-tool-caller":
-                        print(f"[channel {cid} set to noop/test-tool-caller]")
-                        channel_set = True
-                        break
-                    else:
-                        print(f"[WARN] PATCH returned 200 but current_model is '{upd_model}', retrying...")
-            except Exception as e:
-                print(f"[WARN] Channel setup attempt failed: {e}")
-            time.sleep(2)
-
-        assert channel_set, "Could not set channel to noop/test-tool-caller. Ensure: 1) noop provider is enabled, 2) test-tool-caller is in allowed_values, 3) channel exists"
+        # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+        # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
+        # incident: a never-restored patch left the kanban channel on noop
+        # and a task was falsely marked done).
+        cid = _wf_dedicated_channel()
 
         # 4-step cancel script with read-task-logs:
         # 1. lorem(30) starts a long bg task
@@ -4169,28 +4112,9 @@ def test_fn_16_tool_message_formats():
     cid = mm_channel["id"]
     mm_channel_ext = mm_channel.get("external_id") or mm_channel.get("resource_identifier") or ""
 
-    # Set to noop/test-tool-caller, no planning
-    channel_set = False
-    for _ in range(10):
-        try:
-            patch_data = json.dumps({
-                "current_provider": "noop", "current_model": "test-tool-caller", "plan": False,
-            }).encode()
-            req = urllib.request.Request(
-                f"{BASE}/channels/{cid}", data=patch_data, method="PATCH",
-                headers={"Content-Type": "application/json"})
-            rr = urllib.request.urlopen(req, timeout=10)
-            updated = json.loads(rr.read())
-            upd_model = updated.get("current_model") or (
-                updated.get("data") or {}).get("current_model")
-            if upd_model == "test-tool-caller":
-                print(f"[channel {cid} set to noop/test-tool-caller]")
-                channel_set = True
-                break
-        except Exception:
-            pass
-        time.sleep(2)
-    assert channel_set, "Could not set channel to noop/test-tool-caller"
+    # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+    # noop/test-tool-caller) — NEVER patch any channel.
+    cid = _wf_dedicated_channel()
 
     # 2-step single-tool script via Mattermost
     script = json.dumps([
@@ -4760,23 +4684,13 @@ if __name__ == "__main__":
     mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
     assert mm_channel_id, "Cannot find 'setup' channel"
 
-    # Patch omniagent channel to noop/test-tool-caller
-    import time as _g12t
-    for _ in range(15):
-        r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-        chs = json.loads(r.read()).get("data", [])
-        mm_ch = next((ch for ch in chs if ch.get("platform") == "mattermost"), None)
-        if mm_ch:
-            cid = mm_ch["id"]
-            patch_req = urllib.request.Request(f"{BASE}/channels/{cid}",
-                data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller", "plan": False}).encode(),
-                method="PATCH", headers={"Content-Type": "application/json"})
-            patch_resp = urllib.request.urlopen(patch_req, timeout=10)
-            assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
-            print(f"  [channel {cid} patched to noop/test-tool-caller for G12]")
-            break
-        _g12t.sleep(2)
-    _g12t.sleep(3)
+    # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+    # noop/test-tool-caller) — NEVER patch any channel (2026-08-09 incident:
+    # a never-restored patch left the kanban channel on noop and a task was
+    # falsely marked done).
+    cid = _wf_dedicated_channel()
+    print(f"  [using dedicated wf-test channel {cid} for GROUP 12]")
+    time.sleep(3)
     print(f"  [G12 setup complete]")
 
 test(test_fn_12_file_upload)
@@ -4877,32 +4791,11 @@ services:
         mm_channel_id = next((ch["id"] for ch in mm_team_channels if ch["name"] == "setup"), None)
         assert mm_channel_id, "Cannot find MM 'setup' channel"
 
-        channel_set = False
-        for _ in range(10):
-            try:
-                r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-                channels = json.loads(r.read()).get("data", [])
-                mm_ch = next((ch for ch in channels
-                              if ch.get("platform") == "mattermost"
-                              and (ch.get("external_id") or ch.get("resource_identifier") or "") == mm_channel_id), None)
-                if mm_ch:
-                    cid = mm_ch["id"]
-                    patch_req = urllib.request.Request(f"{BASE}/channels/{cid}",
-                        data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller", "plan": False}).encode(),
-                        method="PATCH", headers={"Content-Type": "application/json"})
-                    urllib.request.urlopen(patch_req, timeout=10)
-                    time.sleep(1)
-                    rr = urllib.request.urlopen(f"{BASE}/channels/{cid}", timeout=10)
-                    updated = json.loads(rr.read())
-                    upd_model = updated.get("current_model") or (updated.get("data") or {}).get("current_model")
-                    if upd_model == "test-tool-caller":
-                        print(f"[channel {cid} ({mm_ch.get('name')}) set to noop/test-tool-caller for G13b]")
-                        channel_set = True
-                        break
-            except Exception as e:
-                print(f"[WARN] Channel setup attempt failed: {e}")
-            time.sleep(2)
-        assert channel_set, "Could not set channel to noop/test-tool-caller"
+        # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+        # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
+        # incident: a never-restored patch left the kanban channel on noop
+        # and a task was falsely marked done).
+        cid = _wf_dedicated_channel()
 
         # 3-step script:
         # 1. docker_compose exec appends a marker + sleeps 6s (>5s → bg task)
@@ -6578,57 +6471,48 @@ def _wf_remove_test_python():
 
 
 def _wf_channel_patch():
-    """Find a mattermost channel whose per-channel handler is FREE (no processing/pending
-    threads) and patch it to noop/test-tool-caller. Running workflow tests on the channel
-    that hosts the test-runner thread itself can never advance: the channel handler is
-    single-threaded and busy driving the runner, so its pending step threads starve there.
-    Prefer unconfigured (no provider) channels to avoid disrupting live agents.
-    Returns (channel_id, original_config)."""
-    active = set()
-    try:
-        import psycopg2
-        with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT channel_id FROM threads "
-                            "WHERE status IN ('processing', 'pending') AND channel_id IS NOT NULL")
-                active = {r[0] for r in cur.fetchall()}
-    except Exception as e:
-        print(f"  [warn] could not query active thread channels: {e}")
-    channels = get_data("/channels")
-    cid, orig = None, None
-    for c in channels:
-        if c.get("platform") == "mattermost" and not c.get("archived") \
-                and c["id"] not in active and not c.get("current_provider"):
-            cid, orig = c["id"], {"current_provider": c.get("current_provider"),
-                                  "current_model": c.get("current_model"),
-                                  "plan": c.get("plan")}
-            break
-    if cid is None:  # fallback: any idle mattermost channel (configured but free)
-        for c in channels:
-            if c.get("platform") == "mattermost" and not c.get("archived") and c["id"] not in active:
-                cid, orig = c["id"], {"current_provider": c.get("current_provider"),
-                                      "current_model": c.get("current_model"),
-                                      "plan": c.get("plan")}
-                break
-    if cid is None:  # last resort: any mattermost channel
-        for c in channels:
-            if c.get("platform") == "mattermost" and not c.get("archived"):
-                cid, orig = c["id"], {"current_provider": c.get("current_provider"),
-                                      "current_model": c.get("current_model"),
-                                      "plan": c.get("plan")}
-                break
-    assert cid is not None, "no mattermost channel available for workflow tests"
-    req = urllib.request.Request(f"{BASE}/channels/{cid}",
-                                 data=json.dumps({"current_provider": "noop",
-                                                  "current_model": "test-tool-caller",
-                                                  "plan": False}).encode(),
-                                 method="PATCH",
-                                 headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=10)
-    ch = get_json(f"/channels/{cid}")
-    ch = ch.get("data", ch) if isinstance(ch, dict) else ch
-    assert ch.get("current_model") == "test-tool-caller", f"channel patch failed: {ch}"
-    return cid, orig
+    """Return the DEDICATED workflow-test channel (omniagent id 35, MM 'wf-test',
+    resource_identifier faownqu7nb8t9q7nhn7q867too) — PERMANENTLY configured with
+    current_provider=noop and current_model=test-tool-caller, so workflow tests run
+    here WITHOUT patching or restoring any channel.
+
+    INCIDENT 2026-08-09: this function used to patch any idle mattermost channel to
+    noop/test-tool-caller and restore it afterwards; a failed restore left the LIVE
+    kanban channel (id 4) on noop/test-tool-caller and the next kanban dispatch ran
+    on the noop provider and FALSELY marked a task (R7-D) done. NEVER patch a
+    channel for tests — fail loudly if the dedicated channel is missing.
+    Returns (channel_id, None) — _wf_channel_restore is a no-op for orig=None."""
+    cid = _wf_dedicated_channel()
+    return cid, None
+
+
+def _wf_dedicated_channel():
+    """Look up the DEDICATED wf-test omniagent channel (id 35, MM 'wf-test') by
+    resource_identifier/name and assert it is permanently noop/test-tool-caller.
+    Fails loudly if missing or misconfigured — never falls back to patching any
+    other channel. Returns the channel id."""
+    r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
+    channels = json.loads(r.read()).get("data", [])
+    ch = next((c for c in channels
+               if c.get("id") == 35
+               or c.get("resource_identifier") == "faownqu7nb8t9q7nhn7q867too"
+               or c.get("name") == "mattermost-faownqu7"), None)
+    assert ch is not None, (
+        "DEDICATED wf-test channel NOT found (omniagent id 35, name "
+        "'mattermost-faownqu7', resource_identifier 'faownqu7nb8t9q7nhn7q867too'). "
+        "Integration/workflow tests MUST run on the dedicated test channel — "
+        "refusing to patch any other channel (2026-08-09 incident: a patched "
+        "channel left the kanban channel on noop and falsely completed a task). "
+        "Create/reconfigure the 'wf-test' Mattermost channel (team omni) before "
+        "running workflow tests."
+    )
+    assert ch.get("current_provider") == "noop" and ch.get("current_model") == "test-tool-caller", (
+        f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
+        f"current_provider={ch.get('current_provider')!r}, "
+        f"current_model={ch.get('current_model')!r} — expected noop/test-tool-caller. "
+        "Refusing to patch it or any other channel."
+    )
+    return ch["id"]
 
 
 def _wf_channel_restore(cid, orig):
