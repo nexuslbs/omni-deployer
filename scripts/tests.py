@@ -3720,10 +3720,11 @@ def test_p7_idempotent():
 
 
 def _wf_channel_patch():
-    """Return the DEDICATED workflow-test channel (omniagent id 35, MM 'wf-test',
-    resource_identifier faownqu7nb8t9q7nhn7q867too) — PERMANENTLY configured with
+    """Return the DEDICATED workflow-test channel (omniagent 'mattermost-test-channel',
+    Mattermost 'test-channel' in team 'omni') — PERMANENTLY configured with
     current_provider=noop and current_model=test-tool-caller, so workflow tests run
-    here WITHOUT patching or restoring any channel.
+    here WITHOUT patching or restoring any channel. The channel is resolved BY NAME
+    (never by id — ids change on a fresh setup) and BOOTSTRAPPED if missing.
 
     INCIDENT 2026-08-09: this function used to patch any idle mattermost channel to
     noop/test-tool-caller and restore it afterwards; a failed restore left the LIVE
@@ -3735,26 +3736,111 @@ def _wf_channel_patch():
     return cid, None
 
 
-def _wf_dedicated_channel():
-    """Look up the DEDICATED wf-test omniagent channel (id 35, MM 'wf-test') by
-    resource_identifier/name and assert it is permanently noop/test-tool-caller.
-    Fails loudly if missing or misconfigured — never falls back to patching any
-    other channel. Returns the channel id."""
-    r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
-    channels = json.loads(r.read()).get("data", [])
-    ch = next((c for c in channels
-               if c.get("id") == 35
-               or c.get("resource_identifier") == "faownqu7nb8t9q7nhn7q867too"
-               or c.get("name") == "mattermost-faownqu7"), None)
-    assert ch is not None, (
-        "DEDICATED wf-test channel NOT found (omniagent id 35, name "
-        "'mattermost-faownqu7', resource_identifier 'faownqu7nb8t9q7nhn7q867too'). "
-        "Integration/workflow tests MUST run on the dedicated test channel — "
-        "refusing to patch any other channel (2026-08-09 incident: a patched "
-        "channel left the kanban channel on noop and falsely completed a task). "
-        "Create/reconfigure the 'wf-test' Mattermost channel (team omni) before "
-        "running workflow tests."
+def _wf_bootstrap_test_channel():
+    """Create the DEDICATED workflow-test channel from scratch.
+
+    1. Create the Mattermost channel 'test-channel' in team 'omni' (MM admin API).
+    2. Add members omnibot + admin.
+    3. Post '$new test-channel' so omniagent's poller creates the omniagent channel.
+    4. Rename the omniagent channel to 'mattermost-test-channel'.
+    5. PATCH current_provider=noop / current_model=test-tool-caller (permanent).
+    Returns the omniagent channel dict. Fails loudly — never patches another channel.
+    """
+    import time
+    MM = "http://mattermost:8065"
+    admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
+    admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
+                                       headers={"Content-Type": "application/json"})
+    admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+    assert admin_token, "MM admin login failed — cannot bootstrap the wf-test channel"
+    auth = {"Authorization": "Bearer " + admin_token}
+
+    teams = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/users/me/teams", headers=auth), timeout=10).read())
+    team_id = next((t["id"] for t in teams if t["name"] == "omni"), None)
+    assert team_id, ("Cannot find Mattermost team 'omni' — is the mattermost platform "
+                     "set up? (run GROUP 9/mm9 first)")
+
+    channels = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels", headers=auth), timeout=10).read())
+    mm_ch = next((c for c in channels if c["name"] == "test-channel"), None)
+    if mm_ch is None:
+        body = json.dumps({"team_id": team_id, "name": "test-channel",
+                           "display_name": "Workflow Test Channel", "type": "O"}).encode()
+        mm_ch = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"{MM}/api/v4/channels", data=body, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+            timeout=10).read())
+    mm_channel_id = mm_ch["id"]
+    print(f"[wf-test: Mattermost channel 'test-channel' ready ({mm_channel_id[:16]}...)]")
+
+    users = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"{MM}/api/v4/users?per_page=200", headers=auth), timeout=10).read())
+    wanted = {u["username"]: u["id"] for u in users if u.get("username") in ("omnibot", "lucasbasquerotto")}
+    assert "omnibot" in wanted, "Cannot find MM user 'omnibot' — is the bot set up?"
+    for uname, uid in wanted.items():
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"{MM}/api/v4/channels/{mm_channel_id}/members",
+                data=json.dumps({"user_id": uid}).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+                timeout=10).read()
+        except urllib.error.HTTPError as e:
+            if e.code != 400:  # 400 = already a member
+                raise
+        print(f"[wf-test: member {uname} ensured]")
+
+    urllib.request.urlopen(urllib.request.Request(
+        f"{MM}/api/v4/posts",
+        data=json.dumps({"channel_id": mm_channel_id, "message": "$new test-channel"}).encode(),
+        method="POST", headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+        timeout=10).read()
+    print("[wf-test: posted '$new test-channel' — waiting for omniagent to create the channel...]")
+
+    new_ch = None
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        time.sleep(3)
+        allch = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+        new_ch = next((c for c in allch if c.get("platform") == "mattermost"
+                       and c.get("resource_identifier") == mm_channel_id), None)
+        if new_ch is not None:
+            break
+    assert new_ch is not None, (
+        "OmniAgent did not create a channel for Mattermost 'test-channel' within 60s "
+        "after '$new test-channel' — is the mattermost platform plugin enabled and "
+        "polling? Refusing to fall back to any other channel."
     )
+
+    cid = new_ch["id"]
+    urllib.request.urlopen(urllib.request.Request(
+        f"{BASE}/channels/{cid}",
+        data=json.dumps({"name": "mattermost-test-channel"}).encode(),
+        method="PATCH", headers={"Content-Type": "application/json"}), timeout=10).read()
+    urllib.request.urlopen(urllib.request.Request(
+        f"{BASE}/channels/{cid}",
+        data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller"}).encode(),
+        method="PATCH", headers={"Content-Type": "application/json"}), timeout=10).read()
+    print(f"[wf-test: omniagent channel {cid} bootstrapped as 'mattermost-test-channel' "
+          "(noop/test-tool-caller)]")
+    allch = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+    return next(c for c in allch if c.get("id") == cid)
+
+
+def _wf_dedicated_channel():
+    """Look up the DEDICATED wf-test omniagent channel BY NAME ('mattermost-test-channel',
+    platform=mattermost) and assert it is permanently noop/test-tool-caller. If it does
+    not exist yet, bootstrap it from the Mattermost admin API. Channel ids are NOT
+    stable across setups, so this NEVER hardcodes an id — it always resolves by name.
+    Fails loudly if missing or misconfigured — never falls back to patching any other
+    channel. Returns the channel id."""
+    channels = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+    ch = next((c for c in channels
+               if c.get("platform") == "mattermost"
+               and c.get("name") == "mattermost-test-channel"), None)
+    if ch is None:
+        print("[wf-test: dedicated channel 'mattermost-test-channel' NOT found — bootstrapping]")
+        ch = _wf_bootstrap_test_channel()
     assert ch.get("current_provider") == "noop" and ch.get("current_model") == "test-tool-caller", (
         f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
         f"current_provider={ch.get('current_provider')!r}, "
@@ -3799,7 +3885,7 @@ def test_fn_12_file_upload():
     mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
     assert mm_channel_id, "Cannot find 'setup' channel"
 
-    # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+    # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
     # noop/test-tool-caller) — NEVER patch any channel (2026-08-09 incident:
     # a never-restored patch left the kanban channel on noop and a task was
     # falsely marked done).
@@ -3932,7 +4018,7 @@ def test_fn_13_non_blocking():
         mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
         assert mm_channel_id
 
-        # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+        # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
         # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
@@ -4049,7 +4135,7 @@ def test_fn_14_cancel_task():
         mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
         assert mm_channel_id
 
-        # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+        # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
         # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
@@ -4159,7 +4245,7 @@ def test_fn_16_tool_message_formats():
     cid = mm_channel["id"]
     mm_channel_ext = mm_channel.get("external_id") or mm_channel.get("resource_identifier") or ""
 
-    # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+    # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
     # noop/test-tool-caller) — NEVER patch any channel.
     cid = _wf_dedicated_channel()
 
@@ -4731,7 +4817,7 @@ if __name__ == "__main__":
     mm_channel_id = next((ch["id"] for ch in channels if ch["name"] == "setup"), None)
     assert mm_channel_id, "Cannot find 'setup' channel"
 
-    # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+    # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
     # noop/test-tool-caller) — NEVER patch any channel (2026-08-09 incident:
     # a never-restored patch left the kanban channel on noop and a task was
     # falsely marked done).
@@ -4838,7 +4924,7 @@ services:
         mm_channel_id = next((ch["id"] for ch in mm_team_channels if ch["name"] == "setup"), None)
         assert mm_channel_id, "Cannot find MM 'setup' channel"
 
-        # Use the DEDICATED wf-test channel (omniagent id 35, permanently
+        # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
         # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
