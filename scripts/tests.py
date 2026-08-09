@@ -6578,15 +6578,45 @@ def _wf_remove_test_python():
 
 
 def _wf_channel_patch():
-    """Find the mattermost channel and patch it to noop/test-tool-caller. Returns (channel_id, original_config)."""
+    """Find a mattermost channel whose per-channel handler is FREE (no processing/pending
+    threads) and patch it to noop/test-tool-caller. Running workflow tests on the channel
+    that hosts the test-runner thread itself can never advance: the channel handler is
+    single-threaded and busy driving the runner, so its pending step threads starve there.
+    Prefer unconfigured (no provider) channels to avoid disrupting live agents.
+    Returns (channel_id, original_config)."""
+    active = set()
+    try:
+        import psycopg2
+        with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT channel_id FROM threads "
+                            "WHERE status IN ('processing', 'pending') AND channel_id IS NOT NULL")
+                active = {r[0] for r in cur.fetchall()}
+    except Exception as e:
+        print(f"  [warn] could not query active thread channels: {e}")
     channels = get_data("/channels")
     cid, orig = None, None
     for c in channels:
-        if c.get("platform") == "mattermost" and not c.get("archived"):
+        if c.get("platform") == "mattermost" and not c.get("archived") \
+                and c["id"] not in active and not c.get("current_provider"):
             cid, orig = c["id"], {"current_provider": c.get("current_provider"),
                                   "current_model": c.get("current_model"),
                                   "plan": c.get("plan")}
             break
+    if cid is None:  # fallback: any idle mattermost channel (configured but free)
+        for c in channels:
+            if c.get("platform") == "mattermost" and not c.get("archived") and c["id"] not in active:
+                cid, orig = c["id"], {"current_provider": c.get("current_provider"),
+                                      "current_model": c.get("current_model"),
+                                      "plan": c.get("plan")}
+                break
+    if cid is None:  # last resort: any mattermost channel
+        for c in channels:
+            if c.get("platform") == "mattermost" and not c.get("archived"):
+                cid, orig = c["id"], {"current_provider": c.get("current_provider"),
+                                      "current_model": c.get("current_model"),
+                                      "plan": c.get("plan")}
+                break
     assert cid is not None, "no mattermost channel available for workflow tests"
     req = urllib.request.Request(f"{BASE}/channels/{cid}",
                                  data=json.dumps({"current_provider": "noop",
