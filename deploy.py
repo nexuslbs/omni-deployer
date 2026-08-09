@@ -584,9 +584,10 @@ def deploy(mode):
     # Step 10: Python integration tests (2 passes, no retry — tests must be robust)
     for pass_num in [1, 2]:
         # Before each tests.py invocation, clean transient artifacts
-        # (plugins.yml, remote.yml) from the bind-mounted omni-stack
-        # directory so check_git_clean() never fails on retries.
-        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml 2>/dev/null; true")
+        # (plugins.yml, remote.yml, actions.yml, settings.yml) from the
+        # bind-mounted omni-stack directory so check_git_clean() never
+        # fails on retries.
+        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml actions.yml settings.yml 2>/dev/null; true")
         print(f"\n{'=' * 60}")
         print(f"  INTEGRATION TESTS — PASS {pass_num}")
         print(f"{'=' * 60}")
@@ -601,6 +602,7 @@ def deploy(mode):
        "sudo git clean -fdX -- plugins 2>/dev/null; "
        "sudo git clean -fd -- plugins 2>/dev/null; "
        "rmdir plugins/tools plugins/platforms plugins/providers plugins 2>/dev/null; "
+       "sudo rm -f workflows.yml; "
        "true")
 
     print(f"\n{'=' * 60}")
@@ -625,6 +627,20 @@ def deploy(mode):
     )
     shared.init(shared_settings)
     shared.run_tests()
+
+    # Final seed restore: the tree was verified clean at step 0.5, so every
+    # tracked change present now is test-created. Revert the config files the
+    # tests persist into the bind mount (via API PUTs and plugin toggling) so
+    # the next deploy run's pre-flight check passes. The wiki index is also
+    # reverted: the builtin relevance_indexer action may rewrite it during
+    # test agent activity. Untracked test artifacts (workflows.yml, plugins/)
+    # were already swept above/in shared.run_tests().
+    print("\n[Restoring omni-stack tracked config to HEAD...]")
+    sh("cd /opt/workspace/omni-stack && "
+       "sudo git checkout HEAD -- actions.yml plugins.yml settings.yml "
+       "profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "true")
+
     print(f"\n{'=' * 60}")
     print("  ALL TESTS PASSED (including shared tool tests)")
     print(f"{'=' * 60}")
