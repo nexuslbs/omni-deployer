@@ -1,0 +1,177 @@
+API healthy at http://localhost:8080
+
+============================================================
+GROUP 1: Original Remove API tests (idempotent)
+============================================================
+
+============================================================
+GROUP 2: Source-aware Remove API tests
+============================================================
+
+============================================================
+GROUP 3: File upload tests
+============================================================
+
+============================================================
+GROUP 4: Source-required validation tests
+============================================================
+
+============================================================
+GROUP 5: Dashboard page loading tests
+============================================================
+
+============================================================
+GROUP 6: Comprehensive Plugin Action Tests
+============================================================
+
+============================================================
+GROUP 7: Memory Edit/Upload Tests
+============================================================
+
+============================================================
+
+============================================================
+
+============================================================
+GROUP 9 -- Mattermost + Noop E2E Integration Test
+============================================================
+GROUP 8: Add/Install-Git Tests
+============================================================
+
+============================================================
+GROUP 10: Disabled Plugin Visibility Regression Tests
+============================================================
+
+============================================================
+
+GROUP 11: Prompt Plugin Tests
+============================================================
+  ✓ Prompt plugin enabled for GROUP 11
+  ✓ Prompt plugin disabled after GROUP 11
+  [verifying prompt_generate error when prompt is disabled]
+  ✓ prompt_generate correctly returns error when prompt plugin is disabled
+
+============================================================
+GROUP 12: File Upload via Mattermost + test-tool-caller
+============================================================
+  ✓ Prompt plugin enabled for G12
+  [setup complete: {"success": true, "team_id": "fy7qqswwcfritnwwbswnb463fo", "team_name": "omni", "channel_id": "nijxq]
+  [channel 4 patched to noop/test-tool-caller for G12]
+  [G12 setup complete]
+
+============================================================
+GROUP 13: Non-Blocking Tasks via test-tool-caller
+============================================================
+
+============================================================
+GROUP 13B: BG task single-execution regression (no re-send)
+============================================================
+
+============================================================
+GROUP 14: Cancel Task via test-tool-caller
+============================================================
+
+============================================================
+
+============================================================
+GROUP 15: Settings API (lower_snake_case)
+============================================================
+
+============================================================
+GROUP 16: Tool/multi-tool/tool-result message format verification
+============================================================
+
+============================================================
+GROUP 17: Parallel wait 3 tools x 50 calls x 30s (concurrent, 30-40s)
+============================================================
+
+============================================================
+GROUP 17B: Parallel docker_compose exec 50 x 30s (concurrent, <40s)
+============================================================
+
+============================================================
+GROUP 18: Multi-source Platform Plugin Tests (Python, JS, Rust)
+============================================================
+
+============================================================
+GROUP 23: Remote plugin import (remote.yml / remote.test.yml)
+============================================================
+
+============================================================
+
+Test Timing Summary:
+──────────────────────────────────────────────────
+
+============================================================
+GROUP 19: Platform Plugin Lifecycle (subprocess start/stop)
+============================================================
+
+============================================================
+GROUP 20: API CRUD Integration Tests
+============================================================
+
+============================================================
+GROUP 21: Noop Provider & Executor Verification
+============================================================
+
+============================================================
+GROUP 22: Edge Cases & Error Handling
+============================================================
+
+============================================================
+GROUP 22: Workflow Implementation (R7) — combos, fail-thread, interruption, retries, clear_executions_on_review, D9
+============================================================
+
+--- Test 22 workflow 1 executor only ✓ PASS (3.3s)
+
+--- Test 22 workflow 2 executor tester ✓ PASS (3.3s)
+
+--- Test 22 workflow 3 executor tester reviewer ✓ PASS (6.4s)
+
+--- Test 22 workflow 4 fail thread running retry then blocked ✗ FAIL (60.6s): expected a retry (running→running) in kanban_history after first fail, got [{'action': 'workflow', 'initial_board': 'running', 'final_board': 'review', 'comment': 'Tester passed (thread #419). Task in review (manual review — no reviewer role).'}]
+Traceback (most recent call last):
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 659, in test
+    fn()
+    ~~^^
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 6839, in test_22_workflow_4_fail_thread_running_retry_then_blocked
+    assert retry_seen, f"expected a retry (running→running) in kanban_history after first fail, got {_wf_history_rows(tid)}"
+           ^^^^^^^^^^
+AssertionError: expected a retry (running→running) in kanban_history after first fail, got [{'action': 'workflow', 'initial_board': 'running', 'final_board': 'review', 'comment': 'Tester passed (thread #419). Task in review (manual review — no reviewer role).'}]
+
+--- Test 22 workflow 5 fail thread testing no tester blocked ✗ FAIL (3.4s): expected blocked (no tester role), got review: {'id': 'task_18ca373d9afe8051', 'title': 'wf-fail-testing', 'body': '[{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "testing"}}]', 'status': 'review', 'priority': 0, 'position': 4, 'assignee': '', 'channel_id': 5, 'profile': None, 'archived': False, 'template': None, 'plan': False, 'planning_mode': None, 'workflow_id': 'wf_test_fail_test_813816b1', 'created_at': '2026-08-09T18:42:19Z', 'updated_at': '2026-08-09T18:42:20Z'}
+Traceback (most recent call last):
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 659, in test
+    fn()
+    ~~^^
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 6864, in test_22_workflow_5_fail_thread_testing_no_tester_blocked
+    assert st == "blocked", f"expected blocked (no tester role), got {st}: {gd}"
+           ^^^^^^^^^^^^^^^
+AssertionError: expected blocked (no tester role), got review: {'id': 'task_18ca373d9afe8051', 'title': 'wf-fail-testing', 'body': '[{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "testing"}}]', 'status': 'review', 'priority': 0, 'position': 4, 'assignee': '', 'channel_id': 5, 'profile': None, 'archived': False, 'template': None, 'plan': False, 'planning_mode': None, 'workflow_id': 'wf_test_fail_test_813816b1', 'created_at': '2026-08-09T18:42:19Z', 'updated_at': '2026-08-09T18:42:20Z'}
+
+--- Test 22 workflow 6 interruption rerun ✗ FAIL (60.9s): expected interrupted rerun (≥2 threads), got [{'id': 421, 'workflow_id': 'wf_test_interrupt_080e1deb', 'workflow_step': 'running', 'provider': 'noop', 'model': 'test-tool-caller', 'status': 'completed'}]
+Traceback (most recent call last):
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 659, in test
+    fn()
+    ~~^^
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 6897, in test_22_workflow_6_interruption_rerun
+    assert n >= 2, f"expected interrupted rerun (≥2 threads), got {_wf_step_threads(tid)}"
+           ^^^^^^
+AssertionError: expected interrupted rerun (≥2 threads), got [{'id': 421, 'workflow_id': 'wf_test_interrupt_080e1deb', 'workflow_step': 'running', 'provider': 'noop', 'model': 'test-tool-caller', 'status': 'completed'}]
+
+--- Test 22 workflow 7 clear executions on review ✗ FAIL (6.5s): clear_executions_on_review=false should end in blocked, got review
+Traceback (most recent call last):
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 659, in test
+    fn()
+    ~~^^
+  File "/opt/workspace/omni-deployer/scripts/tests.py", line 6934, in test_22_workflow_7_clear_executions_on_review
+    assert st2 == "blocked", f"clear_executions_on_review=false should end in blocked, got {st2}"
+           ^^^^^^^^^^^^^^^^
+AssertionError: clear_executions_on_review=false should end in blocked, got review
+
+--- Test 22 workflow 8 d9 dependency gate ✓ PASS (9.5s)
+
+============================================================
+TEST SUMMARY
+============================================================
+Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed
+Passed: see test runner output above
