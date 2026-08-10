@@ -46,6 +46,18 @@ def sh(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
 
+def ensure_git_safe_dirs():
+    """git refuses to operate on repos owned by another user (dubious
+    ownership) — when deploy.py runs under sudo, `git clean`/`git checkout`
+    on the hermes-owned workspace repos fail silently unless the repos are
+    whitelisted. Register them so the sweep and final restore actually run."""
+    for d in [OMNI_STACK_DIR, SCRIPT_DIR, OMNIAGENT_DIR]:
+        sh(f"sudo git config --global --add safe.directory {d} 2>/dev/null; true")
+
+
+ensure_git_safe_dirs()
+
+
 def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
     if mode == "dev":
@@ -641,6 +653,18 @@ def deploy(mode):
        "sudo git checkout HEAD -- actions.yml plugins.yml settings.yml "
        "workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
+
+    # Fail loudly if the restore did not actually work (e.g. git dubious
+    # ownership under sudo, which the 2>/dev/null above would otherwise
+    # swallow and leave a dirty tree that blocks the NEXT run's Step 0.5).
+    r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
+    dirty = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
+    if dirty:
+        raise RuntimeError(
+            "omni-stack not clean after test restore — Step 0.5 would fail "
+            f"on the next run. Dirty entries:\n" + "\n".join(dirty[:10])
+        )
+    print("  ✓ omni-stack clean after restore")
 
     print(f"\n{'=' * 60}")
     print("  ALL TESTS PASSED (including shared tool tests)")
