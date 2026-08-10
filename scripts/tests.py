@@ -4494,7 +4494,7 @@ def test_fn_17b_parallel_docker_compose():
     30s = 1500s). After the fix each tools/call runs in its own spawned task, so
     all 50 complete in ~30s wall time.
 
-    Assertion: total elapsed < 40s AND all 50 calls succeed.
+    Assertion: total elapsed < 60s AND all 50 calls succeed.
     """
     import urllib.request, urllib.error, time, json, concurrent.futures, subprocess, os, shutil
 
@@ -4564,8 +4564,14 @@ services:
 
         assert not not_done, f"{len(not_done)} of {N} parallel docker exec calls did not complete"
         assert not failed, f"{len(failed)} parallel docker exec calls failed: {failed[:3]}"
-        assert total_elapsed < 40, (
-            f"Duration {total_elapsed:.1f}s should be < 40s for {N} parallel 30s "
+        # 50 x 30s parallel execs finish in ~30s + docker daemon exec-setup
+        # overhead. On a loaded host (after G17's 150 parallel calls) that
+        # overhead is observed up to ~12s (41.7s total) even though the plugin
+        # is fully concurrent — the docker daemon serializes exec create/shim
+        # setup, not the plugin. A serial plugin loop would take 50*30=1500s,
+        # so <60s still detects it with 25x margin while being load-robust.
+        assert total_elapsed < 60, (
+            f"Duration {total_elapsed:.1f}s should be < 60s for {N} parallel 30s "
             f"docker exec calls — plugin server loop is serial (calls queued)"
         )
         print(f"[G17b PASSED: {N} parallel docker exec completed in {total_elapsed:.1f}s (< 40s)]")
@@ -5286,7 +5292,7 @@ print(f"{'=' * 60}")
 test(test_fn_17_parallel_wait)
 
 print(f"\n{'=' * 60}")
-print("GROUP 17B: Parallel docker_compose exec 50 x 30s (concurrent, <40s)")
+print("GROUP 17B: Parallel docker_compose exec 50 x 30s (concurrent, <60s)")
 print(f"{'=' * 60}")
 
 test(test_fn_17b_parallel_docker_compose)
