@@ -7029,6 +7029,88 @@ test(test_22_workflow_5_fail_thread_testing_no_tester_blocked)
 test(test_22_workflow_6_interruption_rerun)
 test(test_22_workflow_7_clear_executions_on_review)
 test(test_22_workflow_8_d9_dependency_gate)
+#  GROUP 26: Plain kanban task (NO workflow_id) - fail-tool -> blocked; clean completion -> review (R8-N)
+print(f"\n{'=' * 60}")
+print("GROUP 26: Plain kanban task (no workflow_id) - fail-tool -> blocked; clean completion -> review (R8-N)")
+print(f"{'=' * 60}")
+
+
+def _p_create_plain_task(title, script, cid):
+    # Create a PLAIN kanban task (NO workflow_id) in the dedicated wf-test channel.
+    # Mirrors _wf_create_task but omits workflow_id: the engine must run it without
+    # any workflow semantics (R8-N plain-task path).
+    r = post_json("/kanban/tasks", {"title": title, "status": "todo",
+                                    "channel_id": cid, "body": script})
+    d = r.get("data", r) if isinstance(r, dict) else r
+    assert d.get("id"), f"plain task create failed: {d}"
+    return d["id"]
+
+
+def test_26_plain_kanban_terminal_fail_thread_blocked():
+    # GROUP 26-A: plain kanban task (no workflow_id) + fail-tool -> 'blocked' (R8-N fix 4c355fd).
+    # Before 4c355fd the task was left zombie in 'running' with zero live threads.
+    # A visible fail must land the task on 'blocked' so a human sees it.
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = f"g26a-{int(time.time())}"
+    tids = []
+    try:
+        tid = _p_create_plain_task(f"G26-A plain fail->blocked {key}", WF_SCRIPT_FAIL_RUNNING, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=180)
+        assert st == "blocked", f"A: plain fail task must land on 'blocked', got '{st}' (gd={gd})"
+        assert gd.get("workflow_id") is None, f"A: plain task must have no workflow_id, got {gd.get('workflow_id')!r}"
+        assert gd.get("thread_status") in (None, ""), f"A: zombie thread_status {gd.get('thread_status')!r}"
+        rows = _wf_history_rows(tid)
+        assert rows, f"A: no workflow history rows for task {tid}"
+        assert rows[-1]["final_board"] == "blocked", f"A: last workflow row must end on 'blocked', got {rows[-1]}"
+        thr = _wf_step_threads(tid)
+        assert thr, f"A: no step threads for task {tid}"
+        assert all(t["workflow_id"] is None for t in thr), f"A: plain-task threads must have NULL workflow_id: {thr}"
+        assert all(t["status"] != "running" for t in thr), f"A: thread left zombie in 'running': {thr}"
+        print(f"A PASS: task={tid} status={gd.get('status')} workflow_id={gd.get('workflow_id')!r} thread_status={gd.get('thread_status')!r}")
+        print(f"A PASS: last_workflow_row={rows[-1]}")
+        print(f"A PASS: threads={thr}")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_26_plain_kanban_terminal_clean_completion_review():
+    # GROUP 26-B: plain kanban task (no workflow_id), clean completion -> 'review' (manual review by design).
+    # A plain task has no reviewer role: it must stop at 'review' for a human, NEVER auto-done.
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = f"g26b-{int(time.time())}"
+    tids = []
+    try:
+        tid = _p_create_plain_task(f"G26-B plain clean->review {key}", WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=180)
+        assert st == "review", f"B: plain clean task must land on 'review', got '{st}' (gd={gd})"
+        assert gd.get("workflow_id") is None, f"B: plain task must have no workflow_id, got {gd.get('workflow_id')!r}"
+        rows = _wf_history_rows(tid)
+        assert rows, f"B: no workflow history rows for task {tid}"
+        assert rows[-1]["final_board"] == "review", f"B: last workflow row must end on 'review', got {rows[-1]}"
+        assert "manual review" in (rows[-1]["comment"] or ""), f"B: last row comment must mention manual review, got {rows[-1].get('comment')!r}"
+        thr = _wf_step_threads(tid)
+        assert thr, f"B: no step threads for task {tid}"
+        assert all(t["workflow_id"] is None for t in thr), f"B: plain-task threads must have NULL workflow_id: {thr}"
+        assert all(t["status"] == "completed" for t in thr), f"B: thread statuses must be 'completed': {thr}"
+        print(f"B PASS: task={tid} status={gd.get('status')} workflow_id={gd.get('workflow_id')!r}")
+        print(f"B PASS: last_workflow_row={rows[-1]}")
+        print(f"B PASS: threads={thr}")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+test(test_26_plain_kanban_terminal_fail_thread_blocked)
+test(test_26_plain_kanban_terminal_clean_completion_review)
 
 
 print(f"\n{'=' * 60}")
