@@ -3612,9 +3612,9 @@ def test_p7_tool_names_preserved():
     assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
     resp = _compact_call(msgs, keep_recent=2)
     assert resp["was_compacted"], f"Should compact over hard budget: {resp}"
-    # NOTE: compact_old_assistant_messages writes "[compact: tool()...]"
-    # (compact.rs) — match on "[compact", not "compacted".
-    compacted = [m for m in resp["messages"] if "[compact" in m.get("content", "")]
+    # NOTE: compact_old_assistant_messages writes "[context compacted: ...]"
+    # (compact.rs) — match on "[context compacted", not "compacted".
+    compacted = [m for m in resp["messages"] if "[context compacted" in m.get("content", "")]
     assert compacted, "Expected at least one compacted message"
     for m in compacted:
         assert "search_docs" in m["content"] or "read_file" in m["content"], \
@@ -3631,7 +3631,7 @@ def test_p7_compact_multiple_tools():
     resp = _compact_call(msgs, keep_recent=1)
     assert resp["was_compacted"], f"Expected compaction: {resp['before_count']} -> {resp['after_count']}"
     assert resp["after_count"] < resp["before_count"], f"Count did not reduce: {resp}"
-    compacted = [m for m in resp["messages"] if "[compact" in m.get("content", "")]
+    compacted = [m for m in resp["messages"] if "[context compacted" in m.get("content", "")]
     if compacted:
         assert "tool_a" in compacted[0]["content"], f"Missing tool name: {compacted[0]['content'][:100]}"
 
@@ -3776,7 +3776,8 @@ def _wf_bootstrap_test_channel():
 
     users = json.loads(urllib.request.urlopen(urllib.request.Request(
         f"{MM}/api/v4/users?per_page=200", headers=auth), timeout=10).read())
-    wanted = {u["username"]: u["id"] for u in users if u.get("username") in ("omnibot", "lucasbasquerotto")}
+    wanted = {u["username"]: u["id"] for u in users
+              if u.get("username") in ("omnibot", "lucasbasquerotto", "testuser")}
     assert "omnibot" in wanted, "Cannot find MM user 'omnibot' — is the bot set up?"
     for uname, uid in wanted.items():
         try:
@@ -3850,6 +3851,57 @@ def _wf_dedicated_channel():
     return ch["id"]
 
 
+def _wf_dedicated_mm_channel_id():
+    """Return the Mattermost channel id whose posts land on the DEDICATED
+    wf-test channel ('mattermost-test-channel', omniagent id from
+    _wf_dedicated_channel). The omniagent channel's external_id /
+    resource_identifier IS the MM channel id — scripts MUST be posted there
+    (the MM 'setup' channel maps to the echo model and never executes them)."""
+    channels = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+    ch = next((c for c in channels
+               if c.get("platform") == "mattermost"
+               and c.get("name") == "mattermost-test-channel"), None)
+    assert ch is not None, "dedicated wf-test channel 'mattermost-test-channel' not found"
+    mm_id = ch.get("external_id") or ch.get("resource_identifier")
+    assert mm_id, f"dedicated channel {ch.get('id')} has no external_id/resource_identifier"
+    # Idempotently ensure the harness users (incl. testuser, who posts the
+    # scripts) are members — a channel bootstrapped by an older run may be
+    # missing testuser, and bootstrap only runs when the channel is absent.
+    try:
+        _wf_ensure_mm_members(mm_id)
+    except Exception as e:
+        print(f"  [wf-test: member ensure skipped ({e})]")
+    return mm_id
+
+
+def _wf_ensure_mm_members(mm_channel_id):
+    """Ensure omnibot/lucasbasquerotto/testuser are members of the given MM
+    channel (idempotent — 400 = already a member). Used so the dedicated
+    wf-test channel accepts posts from testuser on ANY run, not just fresh
+    bootstraps."""
+    import json as _json
+    MM = "http://mattermost:8065"
+    admin_data = _json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
+    admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
+                                       headers={"Content-Type": "application/json"})
+    admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+    auth = {"Authorization": "Bearer " + admin_token}
+    users = _json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"{MM}/api/v4/users?per_page=200", headers=auth), timeout=10).read())
+    wanted = {u["username"]: u["id"] for u in users
+              if u.get("username") in ("omnibot", "lucasbasquerotto", "testuser")}
+    for uname, uid in wanted.items():
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"{MM}/api/v4/channels/{mm_channel_id}/members",
+                data=_json.dumps({"user_id": uid}).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+                timeout=10).read()
+        except urllib.error.HTTPError as e:
+            if e.code != 400:  # 400 = already a member
+                raise
+
+
 # ── GROUP 12: File Upload via Mattermost + test-tool-caller ──────────
 def test_fn_12_file_upload():
     """Upload a file, send JSON script to use builtin_read-attached-file, verify content is read.
@@ -3891,6 +3943,9 @@ def test_fn_12_file_upload():
     # falsely marked done).
     cid = _wf_dedicated_channel()
     print(f"  [using dedicated wf-test channel {cid} for GROUP 12]")
+    # Post/poll the DEDICATED channel's MM id (external_id == MM channel id),
+    # NOT the 'setup' channel (echo model never executes scripts).
+    mm_channel_id = _wf_dedicated_mm_channel_id()
     time.sleep(3)
 
     # Upload a small text file via Mattermost API (as testuser, so file_ids link properly)
@@ -4023,6 +4078,9 @@ def test_fn_13_non_blocking():
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
         cid = _wf_dedicated_channel()
+        # Post/poll the DEDICATED channel's MM id, NOT the 'setup' channel
+        # (echo model never executes the 4-step script).
+        mm_channel_id = _wf_dedicated_mm_channel_id()
 
         # 4-step script (lorem=6s to exceed 5s short_timeout and trigger background mode):
         # 1. test-python_lorem(6) named "long_run" → returns {task_id, status:processing}
@@ -4140,6 +4198,9 @@ def test_fn_14_cancel_task():
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
         cid = _wf_dedicated_channel()
+        # Post/poll the DEDICATED channel's MM id, NOT the 'setup' channel
+        # (echo model never executes the cancel script).
+        mm_channel_id = _wf_dedicated_mm_channel_id()
 
         # 4-step cancel script with read-task-logs:
         # 1. lorem(30) starts a long bg task
@@ -4248,6 +4309,9 @@ def test_fn_16_tool_message_formats():
     # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
     # noop/test-tool-caller) — NEVER patch any channel.
     cid = _wf_dedicated_channel()
+    # Post/poll the DEDICATED channel's MM id, NOT the setup channel's
+    # external_id (echo model never executes the 2-step script).
+    mm_channel_ext = _wf_dedicated_mm_channel_id()
 
     # 2-step single-tool script via Mattermost
     script = json.dumps([
@@ -4823,6 +4887,9 @@ if __name__ == "__main__":
     # falsely marked done).
     cid = _wf_dedicated_channel()
     print(f"  [using dedicated wf-test channel {cid} for GROUP 12]")
+    # Post/poll the DEDICATED channel's MM id (external_id == MM channel id),
+    # NOT the 'setup' channel (echo model never executes scripts).
+    mm_channel_id = _wf_dedicated_mm_channel_id()
     time.sleep(3)
     print(f"  [G12 setup complete]")
 
@@ -4929,6 +4996,9 @@ services:
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
         cid = _wf_dedicated_channel()
+        # Post/poll the DEDICATED channel's MM id, NOT the 'setup' channel
+        # (echo model never executes the docker_compose script).
+        mm_channel_id = _wf_dedicated_mm_channel_id()
 
         # 3-step script:
         # 1. docker_compose exec appends a marker + sleeps 6s (>5s → bg task)
@@ -5682,9 +5752,9 @@ def test_fn_24_compact_keeps_result_excerpt():
     compacted = parsed["messages"]
     assert isinstance(compacted, list) and compacted, "compacted messages missing"
     blob = json.dumps(compacted)
-    assert "[compact" in blob, "compact marker missing"
-    assert "filesystem_read()" in blob, "tool name must be preserved"
-    assert "Result excerpt" in blob, "Result excerpt marker missing"
+    assert "[context compacted" in blob, "compact marker missing"
+    assert "filesystem_read" in blob, "tool name must be preserved"
+    assert "results excerpt" in blob, "results excerpt marker missing"
     assert "RESULT_CONTENT_00" in blob, "tool-result content excerpt must survive compaction"
     assert "RESULT_CONTENT_01" in blob, "second tool-result excerpt must survive"
     print(f"  ✓ compacted {parsed['before_count']} -> {parsed['after_count']} msgs; "
