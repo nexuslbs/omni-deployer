@@ -633,12 +633,13 @@ def deploy(mode):
     # tests persist into the bind mount (via API PUTs and plugin toggling) so
     # the next deploy run's pre-flight check passes. The wiki index is also
     # reverted: the builtin relevance_indexer action may rewrite it during
-    # test agent activity. Untracked test artifacts (workflows.yml, plugins/)
-    # were already swept above/in shared.run_tests().
+    # test agent activity. workflows.yml is TRACKED in omni-stack (omniagent
+    # reads it as the workflow config) — the sweep above rm -f's it, so it
+    # MUST be restored here or the next run's Step 0.5 fails on a dirty tree.
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- actions.yml plugins.yml settings.yml "
-       "profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
     print(f"\n{'=' * 60}")
