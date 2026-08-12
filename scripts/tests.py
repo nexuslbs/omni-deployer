@@ -7444,26 +7444,44 @@ def test_27_hooks_infinite_loop_protection():
                                 count=1, mode="agentic", prompt="G27-TRIG", profile="omni")
     pre_trig = _h27_pre_threads("G27-TRIG")
     try:
+        # Drain the EXECUTOR backlog: cron threads from earlier tests fail
+        # asynchronously and their error messages can land during THIS test,
+        # moving the SQL ground truth independently of the observer. Wait until
+        # the cron channel (id 2) has no pending/processing threads left.
+        _h27_quiesce(lambda: _h27_sql(
+            "SELECT COUNT(*) FROM threads WHERE channel_id = 2 AND status IN ('pending','processing')"
+        )[0][0] == 0, stable_secs=6, timeout=90)
+        # Drain the EVENT pipeline: events fired by earlier tests' threads may
+        # still be queued; wait until the observer counter is stable so the
+        # baseline snapshot is exact.
+        _h27_quiesce(lambda: (_h27_counter_key(hid_obs, "global", "global") or 0),
+                     stable_secs=6, timeout=90)
         base, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM messages")[0]
+        obs_base = _h27_counter_key(hid_obs, "global", "global") or 0
         cid = _h27_run_cron("loop")
         ok = _h27_wait_until(lambda: _h27_nonhook_ground(base) >= 1, timeout=25)
         assert ok, f"cron run produced no non-hook messages (base={base})"
         ground_n = _h27_quiesce(lambda: _h27_nonhook_ground(base))
         assert ground_n >= 1, f"no non-hook messages after quiescence (base={base})"
-        # observer must converge to the ground truth (async event pipeline)
-        ok = _h27_wait_until(lambda: _h27_counter_key(hid_obs, "global", "global") == _h27_nonhook_ground(base), timeout=30)
-        assert ok, f"observer must equal non-hook messages exactly: obs={_h27_counter_key(hid_obs, 'global', 'global')} ground={_h27_nonhook_ground(base)}"
-        o1 = _h27_counter_key(hid_obs, "global", "global")
+
+        def _obs_ground_equal():
+            return (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base == _h27_nonhook_ground(base)
+
+        # observer DELTA must converge to the ground truth AND stay equal for
+        # stable_secs (async pipeline caught up, no events still in flight)
+        ok = _h27_quiesce(_obs_ground_equal, stable_secs=6, timeout=90)
+        o1 = (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base
+        assert ok, f"observer must equal non-hook messages exactly: obs_delta={o1} ground={_h27_nonhook_ground(base)}"
         # trigger hook fired: hook-caused threads exist with the trigger prompt (new-only)
         ok = _h27_wait_until(lambda: _h27_new_threads("G27-TRIG", pre_trig) >= 1, timeout=25)
         assert ok, "thread_started count=1 hook must have triggered"
         # manual fire: another hook-caused thread; its messages must NOT move the observer
         st, resp = _h27_api("POST", f"/hooks/{hid_trig}/fire", {})
         assert st == 200, f"POST /hooks/{hid_trig}/fire -> {st}: {resp}"
-        time.sleep(8)
-        o2 = _h27_counter_key(hid_obs, "global", "global")
+        ok = _h27_quiesce(_obs_ground_equal, stable_secs=6, timeout=60)
+        o2 = (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base
         ground_after = _h27_nonhook_ground(base)
-        assert o2 == ground_after, f"after fire: obs={o2} ground={ground_after}"
+        assert ok and o2 == ground_after, f"after fire: obs_delta={o2} ground={ground_after}"
         assert ground_after == ground_n, \
             f"manual fire must not create non-hook messages: {ground_n} -> {ground_after}"
         # hook-caused thread identity (infinite-loop protection markers)
