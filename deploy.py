@@ -537,35 +537,6 @@ def deploy(mode):
 
     time.sleep(3)
 
-    # Step 8a-prime: Seed API secrets from secrets.env (provider keys).
-    # shared.setup() normally does this (load_secrets_env + ensure_secret),
-    # but deploy.py's flow only calls shared.run_tests() — so without this
-    # step the omniagent secret store has NO DEEPSEEK/OPENCODE/GITHUB_APP
-    # keys, $secret: refs in plugins.yml resolve to nothing, and any test
-    # that drives a real LLM call (e.g. kanban executor threads) 401s.
-    # Ensure the shared module is initialized with the same settings used
-    # by the shared tool tests, then create every secret from secrets.env.
-    print("[deploy] Seeding API secrets from secrets.env...")
-    deploy_shared_settings = shared.Settings(
-        env_path=OMNI_ENV_PATH,
-        compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
-        dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml") if mode == "dev" else None,
-        project_name="omnideploy",
-        container="omnideploy-omniagent-1",
-        setup_channel="setup",
-        omni_stack_dir=OMNI_STACK_DIR,
-        workspace_dir=WORKSPACE_DIR,
-        script_dir=SCRIPT_DIR,
-        use_api=False,
-    )
-    shared.init(deploy_shared_settings)
-    secrets_env = shared.load_secrets_env()
-    if not secrets_env:
-        print("  [WARNING] secrets.env empty/missing — provider keys will NOT be seeded")
-    for name, value in secrets_env.items():
-        shared.ensure_secret(name, value)
-    print(f"  Seeded {len(secrets_env)} secret(s) from secrets.env")
-
     # Step 8a: Register remote noop provider (needs omniagent running)
     # so remote.yml has the entry needed by test_fn_9b (provider source-awareness).
     print("[deploy] Registering remote noop provider...")
