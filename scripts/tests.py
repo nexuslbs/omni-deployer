@@ -1647,7 +1647,7 @@ def check_git_clean():
         # settings.yml, plugins/tools/). If these are the *only* dirty files,
         # revert/remove them silently and proceed; any other dirtiness is
         # unexpected and still raises.
-        known_artifacts = {"plugins.yml", "remote.yml", "actions.yml", "settings.yml", "plugins/tools/"}
+        known_artifacts = {"plugins.yml", "remote.yml", "actions.yml", "settings.yml", "workflows.yml", "plugins/tools/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
@@ -1655,7 +1655,7 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "plugins.yml", "remote.yml", "actions.yml", "settings.yml"],
+                ["git", "checkout", "HEAD", "--", "plugins.yml", "remote.yml", "actions.yml", "settings.yml", "workflows.yml"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             # Remove untracked transient test artifacts (plugins/tools/)
