@@ -327,14 +327,47 @@ def deploy(mode):
     # or compose edit). Instead, fail fast and let the user discard, stage,
     # or commit their changes first. This check must run before generate_env()
     # because that function writes remote.yml back to the tracked file.
+    #
+    # EXCEPTION — known test residue: a run that dies mid-tests (OOM, SIGKILL,
+    # Ctrl-C) never reaches the final "restore tracked config to HEAD" step,
+    # leaving the bind mount dirty and blocking the NEXT run's Step 0.5.
+    # The files below are exactly the ones deploy.py itself restores at the
+    # end of a successful run (see "Final seed restore"), and untracked
+    # plugins/ entries are test-created plugin residue that the post-clean
+    # already removes. Auto-restoring ONLY that known set is safe: it cannot
+    # touch user edits, which are anything NOT in the known set.
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
-    if r.stdout.strip():
-        raise RuntimeError(
-            "Uncommitted changes detected in omni-stack. deploy.py will NOT "
-            "discard them automatically — discard, stage, or commit them "
-            "first, then re-run deploy.\n\n"
-            + r.stdout
-        )
+    dirty_lines = r.stdout.splitlines()
+    if dirty_lines:
+        KNOWN_RESIDUE = {
+            "actions.yml", "plugins.yml", "settings.yml", "workflows.yml",
+            "remote.yml", "profiles/omni/wiki/relevant-index.md",
+        }
+        tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
+        untracked = [ln[3:].strip() for ln in dirty_lines if ln.startswith("??")]
+        unexpected = [ln for ln in tracked_dirty if ln.split(None, 1)[-1] not in KNOWN_RESIDUE]
+        if unexpected:
+            raise RuntimeError(
+                "Uncommitted changes detected in omni-stack. deploy.py will NOT "
+                "discard them automatically — discard, stage, or commit them "
+                "first, then re-run deploy.\n\n"
+                + "\n".join(unexpected)
+            )
+        print("[deploy] Detected known test residue in omni-stack — auto-restoring...")
+        for f in sorted(KNOWN_RESIDUE):
+            sh(f"cd /opt/workspace/omni-stack && sudo git checkout HEAD -- {f} 2>/dev/null; true")
+        # Untracked plugins/ residue is test-created (seed tracks zero plugins);
+        # the same sweep the post-clean runs, so a fresh run starts like CI.
+        for u in untracked:
+            if u.startswith("plugins"):
+                sh(f"cd /opt/workspace/omni-stack && sudo rm -rf -- {u} 2>/dev/null; true")
+        r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
+        if r.stdout.strip():
+            raise RuntimeError(
+                "omni-stack still dirty after known-residue restore. "
+                f"Refusing to continue:\n{r.stdout}"
+            )
+        print("  ✓ omni-stack clean after residue restore")
 
     # Repo is verified clean, so it is now safe to remove root-owned,
     # gitignored build/test residue (target/, .remote/ clones, test-* tools)
