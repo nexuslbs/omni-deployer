@@ -3649,12 +3649,15 @@ def test_p7_progressive_multi_pass():
     assert _msgs_size(resp["messages"]) <= CHAR_SOFT, \
         f"Size should be reduced to ≤ soft budget: {_msgs_size(resp['messages'])}"
 
-def test_p7_three_pass_cap_error():
+def test_p7_three_pass_cap_partial_result():
     """After 3 progressively more aggressive passes the size is STILL over the
-    soft budget with material left to compact -> the tool raises an error
-    (is_error=true) instead of looping forever. 4 pairs x 400k = 1.6M chars
-    (kept under the ~2MB HTTP body limit): keep=3 leaves 1.2M, keep=2 leaves
-    800k, keep=1 leaves 400k — all > 350k soft, so the 3-pass cap fires."""
+    soft budget with material left to compact -> the tool returns the PARTIAL
+    result (is_error=false, was_compacted=true) instead of erroring or looping
+    forever. The caller applies the partial reduction, which gets the size under
+    the HARD trigger budget (500k), so later iterations stop re-triggering
+    compaction. 4 pairs x 400k = 1.6M chars (kept under the ~2MB HTTP body
+    limit): keep=3 leaves 1.2M, keep=2 leaves 800k, keep=1 leaves 400k — all >
+    350k soft, so the 3-pass cap fires and returns the partial result."""
     msgs = _make_big_context(pairs=4, pad_chars=400000)
     assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
     r = urllib.request.urlopen(
@@ -3669,10 +3672,22 @@ def test_p7_three_pass_cap_error():
     )
     result = json.loads(r.read())
     assert result.get("success"), f"Expected HTTP-level success, got {result}"
-    assert result.get("is_error") is True, f"Expected tool error after 3 passes, got {result}"
-    content = result["content"]
-    assert "Compaction failed" in content, f"Expected compaction failure message, got: {content}"
-    assert "soft budget" in content
+    assert result.get("is_error") is False, \
+        f"Expected partial result (not error) after 3 passes, got {result}"
+    content = json.loads(result["content"])
+    assert content.get("was_compacted") is True, \
+        f"Expected compaction to have made progress: {content}"
+    assert content["before_count"] > content["after_count"], \
+        f"Expected message count to reduce: {content}"
+    assert content.get("messages") is not None, \
+        f"Expected compacted messages array (partial result applied): {content}"
+    # The partial reduction must get the size under the HARD trigger budget
+    # (char_budget_hard=500k) even if still over the SOFT target (350k).
+    after_size = _msgs_size(content["messages"])
+    assert after_size < _msgs_size(msgs), \
+        f"Partial result must be smaller than input: {after_size} vs {_msgs_size(msgs)}"
+    assert after_size <= CHAR_HARD, \
+        f"Partial result must be under the hard trigger budget: {after_size} > {CHAR_HARD}"
 
 def test_p7_missing_messages_field():
     """Missing messages field returns descriptive error"""
@@ -4795,7 +4810,7 @@ if __name__ == "__main__":
         test_p7_empty_messages,
         test_p7_idempotent,
         test_p7_progressive_multi_pass,
-        test_p7_three_pass_cap_error,
+        test_p7_three_pass_cap_partial_result,
     ]:
         test(fn)
 
