@@ -7127,8 +7127,452 @@ def test_26_plain_kanban_terminal_clean_completion_review():
 test(test_26_plain_kanban_terminal_fail_thread_blocked)
 test(test_26_plain_kanban_terminal_clean_completion_review)
 
-
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 27: Event-driven Hooks system (omniagent 9797aa6)
+#  thread_started / thread_finished / new_message — counter trigger/reset,
+#  scope filtering (channel/profile), infinite-loop protection, both
+#  execution modes (agentic + actions.yml action), error isolation.
+# ═══════════════════════════════════════════════════════════════════════
 print(f"\n{'=' * 60}")
+print("GROUP 27: Event-driven Hooks (thread_started / thread_finished / new_message)")
+print(f"{'=' * 60}")
+
+
+def _h27_sql(q, params=None):
+    """Run SQL against the omniagent app DB (psycopg2; tests run inside the omniagent container)."""
+    import psycopg2
+    conn = psycopg2.connect(os.environ.get(
+        "DATABASE_URL",
+        "postgres://omniagent:5dd29b09f6cf06d529e246e10eb002f7bbe5f15568578080@postgres:5432/omniagent"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(q, params)
+            if cur.description:
+                return cur.fetchall()
+            conn.commit()
+            return []
+    finally:
+        conn.close()
+
+
+def _h27_api(method, path, body=None):
+    """Raw HTTP helper returning (status, parsed json). Hooks handlers return error JSON, not HTTPError."""
+    import urllib.request, urllib.error
+    req = urllib.request.Request(f"{BASE}{path}", method=method)
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, data=data, timeout=30) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw.strip() else {})
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {}
+    except Exception as e:
+        return -1, {"err": str(e)}
+
+
+def _h27_create_hook(**kw):
+    st, resp = _h27_api("POST", "/hooks", kw)
+    assert st == 200, f"POST /hooks {kw} -> {st}: {resp}"
+    d = resp.get("data", resp)
+    assert d.get("id"), f"POST /hooks returned no id: {resp}"
+    return d["id"]
+
+
+def _h27_counter(hid):
+    st, resp = _h27_api("GET", f"/hooks/{hid}")
+    assert st == 200, f"GET /hooks/{hid} -> {st}: {resp}"
+    return resp.get("data", resp).get("counter", {})
+
+
+def _h27_counter_key(hid, scope, key):
+    """Counter value for scope+key, or None when the hook has no counter for that key yet."""
+    c = _h27_counter(hid)
+    if scope == "channel":
+        return c.get("channel", {}).get(key)
+    if scope == "profile":
+        return c.get("profile", {}).get(key)
+    return c.get("global")
+
+
+def _h27_obs_ge(hid, scope, key, n):
+    """True when the (never-triggering) observer counter for scope+key is >= n (None counts as 0)."""
+    v = _h27_counter_key(hid, scope, key)
+    return (v if v is not None else 0) >= n
+
+
+def _h27_cleanup():
+    """Remove g27 test hooks and cron jobs. Hook-caused threads are intentionally
+    LEFT in place: messages are append-only by design (DB trigger) so threads
+    referenced by messages cannot be deleted (FK). Leftover hook threads are
+    inert (no hooks reference them, cause='system')."""
+    _h27_sql("DELETE FROM hooks WHERE name LIKE 'g27-%'")
+    _h27_sql("DELETE FROM cron_jobs WHERE name LIKE 'g27-%'")
+
+
+def _h27_run_cron(tag):
+    """Create a far-future cron job, run it once via the app path, then DELETE the job
+    so the scheduler cannot re-fire it on the next tick (a manual run leaves the job
+    due; a second firing would create extra threads and pollute ground truth).
+    Creates a real thread in channel 'cron' (create_thread_with_cause ->
+    thread_started) whose seq-0 cause message fires new_message."""
+    name = f"g27-{tag}-{int(time.time() * 1000)}"
+    st, resp = _h27_api("POST", "/schedule", {
+        "name": name, "schedule": "0 0 1 1 *", "prompt": f"g27 {tag} run",
+        "mode": "agentic", "profile": "omni", "channel_id": 2})
+    assert st == 200, f"POST /schedule -> {st}: {resp}"
+    d = resp.get("data", resp)
+    assert d.get("id"), f"POST /schedule returned no id: {resp}"
+    st, resp = _h27_api("POST", f"/schedule/{d['id']}/run", {})
+    assert st == 200, f"POST /schedule/{d['id']}/run -> {st}: {resp}"
+    _h27_sql("DELETE FROM cron_jobs WHERE id = %s", (d["id"],))
+    return d["id"]
+
+
+def _h27_wait_until(cond, timeout=25, step=2):
+    """Poll cond() until truthy; returns True if satisfied within timeout."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if cond():
+            return True
+        time.sleep(step)
+    return False
+
+
+def _h27_quiesce(ground, stable_secs=6, timeout=90):
+    """Wait until the ground-truth message count is stable (two consecutive
+    identical readings stable_secs apart), then return the stable value.
+    Ensures the cron thread finished processing before counters are read."""
+    last = None
+    stable_since = None
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        v = ground()
+        if v == last:
+            if stable_since is None:
+                stable_since = time.time()
+            elif time.time() - stable_since >= stable_secs:
+                return v
+        else:
+            stable_since = None
+        last = v
+        time.sleep(2)
+    return last
+
+
+def _h27_logs(needle):
+    """Best-effort log check. The dev stack logs via journald which DROPS messages
+    under burst load (verified: threads created while 'discover' spam flooded the
+    journal have NO log lines), so a missing needle is NOT proof of absence.
+    Assertions must use DB/API counter evidence; log lines are supplemental only."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["docker", "logs", "omnidev-omniagent-1", "--since", "4m"],
+            capture_output=True, text=True, timeout=25)
+        return needle in (out.stdout + out.stderr)
+    except Exception:
+        return False
+
+
+def _h27_nonhook_ground(base):
+    """Count non-hook messages inserted after base (SQL ground truth)."""
+    return _h27_sql("SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id "
+                    "WHERE m.id > %s AND t.hook_caused = false", (base,))[0][0]
+
+
+def _h27_pre_threads(content):
+    """MAX thread id of hook-caused threads whose seq-0 message content equals `content`
+    (0 when none). Used to count only threads created DURING the current test run."""
+    return _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads WHERE hook_caused = true AND id IN "
+                    "(SELECT thread_id FROM messages WHERE content = %s)", (content,))[0][0]
+
+
+def _h27_new_threads(content, pre):
+    """Count hook-caused threads with content `content` created after thread id `pre`."""
+    return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true AND id > %s AND id IN "
+                    "(SELECT thread_id FROM messages WHERE content = %s)", (pre, content))[0][0]
+
+
+def _h27_wait_http(path, timeout=120, step=2):
+    """Poll an HTTP GET until it returns 200 (the dev omniagent can be transiently
+    unresponsive for tens of seconds while hook-agent LLM sessions spawn MCP
+    subprocesses). Returns (status, body, last_error)."""
+    st, body = -1, {"err": "no attempt"}
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        st, body = _h27_api("GET", path)
+        if st == 200:
+            return st, body, None
+        time.sleep(step)
+    return st, body, str(body)[:160]
+
+
+def _h27_get_raw(path):
+    """GET returning (status, raw text) without JSON parsing (e.g. /health returns 'ok')."""
+    import urllib.request, urllib.error
+    req = urllib.request.Request(f"{BASE}{path}", method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.read().decode("utf-8", "replace").strip()
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, e.read().decode("utf-8", "replace").strip()
+        except Exception:
+            return e.code, ""
+    except Exception as e:
+        return -1, str(e)
+
+
+def _h27_wait_http_raw(path, timeout=60, step=2):
+    """Poll a plain-text GET until it returns HTTP 200. Returns (status, body, last_error)."""
+    st, body = -1, "no attempt"
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        st, body = _h27_get_raw(path)
+        if st == 200:
+            return st, body, None
+        time.sleep(step)
+    return st, body, str(body)[:160]
+
+
+def test_27_hooks_counter_trigger_reset():
+    """GROUP 27-A: new_message events increment the counter; count=1 triggers+resets every event,
+    count=3 triggers every 3rd event (increment -> trigger -> reset, SQL ground truth)."""
+    _h27_cleanup()
+    hid_once = _h27_create_hook(name="g27-once", event="new_message", scope="global",
+                                count=1, mode="agentic", prompt="G27-ONCE", profile="omni")
+    hid_cnt3 = _h27_create_hook(name="g27-cnt3", event="new_message", scope="global",
+                                count=3, mode="agentic", prompt="G27-CNT3", profile="omni")
+    pre_once = _h27_pre_threads("G27-ONCE")
+    pre_cnt3 = _h27_pre_threads("G27-CNT3")
+    try:
+        base, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM messages")[0]
+        cid = _h27_run_cron("cnt")
+        ok = _h27_wait_until(lambda: _h27_nonhook_ground(base) >= 1, timeout=25)
+        assert ok, f"cron run produced no non-hook messages (base={base})"
+        ground_n = _h27_quiesce(lambda: _h27_nonhook_ground(base))
+        assert ground_n >= 1, f"no non-hook messages after quiescence (base={base})"
+        c1 = _h27_counter(hid_once)
+        c3 = _h27_counter(hid_cnt3)
+        # count=1: trigger+reset on EVERY event -> counter always 0 after quiesce
+        assert c1.get("global") == 0, f"count=1 must trigger+reset on every event: {c1}"
+        # count=3: counter cycles 0->1->2->0; at quiesce it is N%3 in 0..2
+        assert c3.get("global") in (0, 1, 2), \
+            f"count=3 counter must never sit at/above threshold after quiesce: {c3}"
+        # every non-hook message fires the count=1 hook once (async pipeline -> wait);
+        # only NEW hook threads (id > pre) count — leftover threads from prior runs are inert
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-ONCE", pre_once) >= ground_n, timeout=30)
+        assert ok, f"count=1 must fire once per event: once={_h27_new_threads('G27-ONCE', pre_once)} ground={_h27_nonhook_ground(base)}"
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-CNT3", pre_cnt3) >= ground_n // 3, timeout=30)
+        assert ok, f"count=3 must fire every 3rd event: cnt3={_h27_new_threads('G27-CNT3', pre_cnt3)} want={ground_n // 3}"
+        print(f"PASS: ground={ground_n} once_triggers={_h27_new_threads('G27-ONCE', pre_once)} cnt3_triggers={_h27_new_threads('G27-CNT3', pre_cnt3)} "
+              f"counter_once={c1.get('global')} counter_cnt3={c3.get('global')}")
+    finally:
+        _h27_cleanup()
+
+
+def test_27_hooks_scope_channel_profile():
+    """GROUP 27-B: channel scope (target by name) and profile scope (target by name) — matching
+    events trigger the scoped counter+reset, mismatched events are ignored. Action mode executes
+    an actions.yml action (a3 = builtin_read-attached-file; its params error on the missing
+    file_id, but reaching the tool proves the registry executed it).
+    Evidence is DB/API-based (journald drops log lines under load):
+      - channel/profile observer hooks (count=100000, never trigger) count the thread_started
+        events that actually reached the scope;
+      - the count=1 hooks reset to 0 on every event — a hook that never triggered would sit
+        at the observer's count. The action-execution log line is best-effort evidence only."""
+    _h27_cleanup()
+    hid_obs_c = _h27_create_hook(name="g27-obs-c", event="thread_started", scope="channel",
+                                 target="cron", count=100000, mode="agentic", prompt="G27-OBS-C")
+    hid_chan = _h27_create_hook(name="g27-chan", event="thread_started", scope="channel",
+                                target="cron", count=1, mode="action", action_id="a3")
+    hid_chan_o = _h27_create_hook(name="g27-chan-o", event="thread_started", scope="channel",
+                                  target="zzz-not-a-channel", count=1, mode="agentic", prompt="G27-NOPE")
+    hid_obs_p = _h27_create_hook(name="g27-obs-p", event="thread_started", scope="profile",
+                                 target="omni", count=100000, mode="agentic", prompt="G27-OBS-P")
+    hid_prof = _h27_create_hook(name="g27-prof", event="thread_started", scope="profile",
+                                target="omni", count=1, mode="agentic", prompt="G27-PROF", profile="omni")
+    hid_prof_o = _h27_create_hook(name="g27-prof-o", event="thread_started", scope="profile",
+                                  target="zzz-not-a-profile", count=1, mode="agentic", prompt="G27-NOPE2")
+    pre_prof = _h27_pre_threads("G27-PROF")
+    try:
+        cid = _h27_run_cron("scope")
+        # at least one thread_started event must reach the channel-cron observer
+        ok = _h27_wait_until(lambda: _h27_obs_ge(hid_obs_c, "channel", "cron", 1), timeout=30)
+        assert ok, f"no thread_started event observed in channel 'cron': {_h27_counter(hid_obs_c)}"
+        obs_c = _h27_counter_key(hid_obs_c, "channel", "cron")
+        # count=1 channel action hook: key present (processed >= 1 event) and value 0
+        # (trigger+reset ran). A hook that never triggered would show the observer's count.
+        ok = _h27_wait_until(lambda: _h27_counter_key(hid_chan, "channel", "cron") == 0, timeout=30)
+        assert ok, f"channel action hook must trigger+reset (count=1): {_h27_counter(hid_chan)}"
+        if _h27_logs("[hooks] action hook 'g27-chan'"):
+            print("  evidence: '[hooks] action hook g27-chan' log line found (action registry executed)")
+        # profile observer + count=1 profile hook (agentic) + hook thread spawned (new-only)
+        ok = _h27_wait_until(lambda: _h27_obs_ge(hid_obs_p, "profile", "omni", 1), timeout=30)
+        assert ok, f"no thread_started event observed for profile 'omni': {_h27_counter(hid_obs_p)}"
+        ok = _h27_wait_until(lambda: _h27_counter_key(hid_prof, "profile", "omni") == 0, timeout=30)
+        assert ok, f"profile omni hook must trigger+reset (count=1): {_h27_counter(hid_prof)}"
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-PROF", pre_prof) >= 1, timeout=30)
+        assert ok, "profile-scoped agentic hook must spawn a hook-caused thread"
+        # mismatched hooks must stay untouched (global 0, no scope key at all)
+        c_chan_o = _h27_counter(hid_chan_o)
+        assert c_chan_o.get("global") == 0 and "cron" not in c_chan_o.get("channel", {}), \
+            f"mismatched channel hook must stay untouched: {c_chan_o}"
+        c_prof_o = _h27_counter(hid_prof_o)
+        assert c_prof_o.get("global") == 0 and "omni" not in c_prof_o.get("profile", {}), \
+            f"mismatched profile hook must stay untouched: {c_prof_o}"
+        print(f"PASS: chan_events={obs_c} chan_counter={_h27_counter_key(hid_chan, 'channel', 'cron')} "
+              f"profile_events={_h27_counter_key(hid_obs_p, 'profile', 'omni')} "
+              f"prof_counter={_h27_counter_key(hid_prof, 'profile', 'omni')} prof_threads={_h27_new_threads('G27-PROF', pre_prof)}")
+    finally:
+        _h27_cleanup()
+
+
+def test_27_hooks_infinite_loop_protection():
+    """GROUP 27-C: hook-caused threads/messages never re-trigger events. Observer counter must
+    EXACTLY equal the SQL ground truth of non-hook messages; manual fire must not cascade."""
+    _h27_cleanup()
+    hid_obs = _h27_create_hook(name="g27-obs", event="new_message", scope="global",
+                               count=100000, mode="agentic", prompt="G27-OBS", profile="omni")
+    hid_trig = _h27_create_hook(name="g27-trig", event="thread_started", scope="global",
+                                count=1, mode="agentic", prompt="G27-TRIG", profile="omni")
+    pre_trig = _h27_pre_threads("G27-TRIG")
+    try:
+        base, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM messages")[0]
+        cid = _h27_run_cron("loop")
+        ok = _h27_wait_until(lambda: _h27_nonhook_ground(base) >= 1, timeout=25)
+        assert ok, f"cron run produced no non-hook messages (base={base})"
+        ground_n = _h27_quiesce(lambda: _h27_nonhook_ground(base))
+        assert ground_n >= 1, f"no non-hook messages after quiescence (base={base})"
+        # observer must converge to the ground truth (async event pipeline)
+        ok = _h27_wait_until(lambda: _h27_counter_key(hid_obs, "global", "global") == _h27_nonhook_ground(base), timeout=30)
+        assert ok, f"observer must equal non-hook messages exactly: obs={_h27_counter_key(hid_obs, 'global', 'global')} ground={_h27_nonhook_ground(base)}"
+        o1 = _h27_counter_key(hid_obs, "global", "global")
+        # trigger hook fired: hook-caused threads exist with the trigger prompt (new-only)
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-TRIG", pre_trig) >= 1, timeout=25)
+        assert ok, "thread_started count=1 hook must have triggered"
+        # manual fire: another hook-caused thread; its messages must NOT move the observer
+        st, resp = _h27_api("POST", f"/hooks/{hid_trig}/fire", {})
+        assert st == 200, f"POST /hooks/{hid_trig}/fire -> {st}: {resp}"
+        time.sleep(8)
+        o2 = _h27_counter_key(hid_obs, "global", "global")
+        ground_after = _h27_nonhook_ground(base)
+        assert o2 == ground_after, f"after fire: obs={o2} ground={ground_after}"
+        assert ground_after == ground_n, \
+            f"manual fire must not create non-hook messages: {ground_n} -> {ground_after}"
+        # hook-caused thread identity (infinite-loop protection markers)
+        hc, = _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true")[0]
+        assert hc >= 2, f"expected >= 2 hook threads (trigger + manual fire), got {hc}"
+        causes = _h27_sql("SELECT DISTINCT cause FROM threads WHERE hook_caused = true")
+        assert ("system",) in causes, f"hook threads must have cause='system': {causes}"
+        mtype, = _h27_sql("SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id "
+                          "WHERE t.hook_caused = true AND m.thread_sequence = 0 AND m.msg_type = 'hook'")[0]
+        assert mtype >= 2, f"hook seq-0 messages must be msg_type='hook': {mtype}"
+        print(f"PASS: ground={ground_n} obs_before={o1} obs_after_fire={o2} "
+              f"hook_threads={hc} trig_threads={_h27_new_threads('G27-TRIG', pre_trig)}")
+    finally:
+        _h27_cleanup()
+
+
+def test_27_hooks_error_isolation():
+    """GROUP 27-D: failing hooks (bad action_id / bad profile) are isolated — counter still resets
+    (threshold reached), /health + /channels stay alive, message processing continues. Trigger
+    evidence is DB/API-based (observer + reset semantics + hook-caused thread carrying the bad
+    profile); the exact error text is logged but journald may drop lines under load (best-effort).
+    Liveness probes are patient: the dev omniagent can be transiently unresponsive for tens of
+    seconds while hook-agent LLM sessions spawn MCP subprocesses."""
+    _h27_cleanup()
+    hid_obs_e = _h27_create_hook(name="g27-obs-e", event="new_message", scope="global",
+                                 count=100000, mode="agentic", prompt="G27-OBS-E")
+    hid_badact = _h27_create_hook(name="g27-badact", event="new_message", scope="global",
+                                  count=2, mode="action", action_id="no-such-action-xyz")
+    hid_obs_t = _h27_create_hook(name="g27-obs-t", event="thread_started", scope="global",
+                                 count=100000, mode="agentic", prompt="G27-OBS-T")
+    hid_badprof = _h27_create_hook(name="g27-badprof", event="thread_started", scope="global",
+                                   count=2, mode="agentic", prompt="G27-BADPROF",
+                                   profile="no-such-profile-xyz")
+    pre_badprof = _h27_pre_threads("G27-BADPROF")
+    try:
+        base, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM messages")[0]
+        cid = _h27_run_cron("err")
+        # need >= 2 new_message events to take badact to threshold (count=2)
+        ok = _h27_wait_until(lambda: _h27_obs_ge(hid_obs_e, "global", "global", 2), timeout=40)
+        assert ok, f"expected >=2 new_message events to trigger badact twice, got {_h27_counter(hid_obs_e)}"
+        _h27_quiesce(lambda: _h27_nonhook_ground(base))
+        cb = _h27_counter_key(hid_badact, "global", "global")
+        assert cb < 2, f"bad-action hook must reset after reaching threshold despite failure: {cb}"
+        # badprof needs a 2nd thread_started -> run a second cron job; agentic mode with a bad
+        # profile still spawns the hook thread (profile stored on thread), proving the trigger ran
+        ok = _h27_wait_until(lambda: _h27_obs_ge(hid_obs_t, "global", "global", 1), timeout=30)
+        assert ok, f"expected >=1 thread_started event, got {_h27_counter(hid_obs_t)}"
+        cid2 = _h27_run_cron("err2")
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-BADPROF", pre_badprof) >= 1, timeout=40)
+        assert ok, "bad-profile agentic hook must still spawn a hook-caused thread (trigger ran)"
+        _h27_quiesce(lambda: _h27_nonhook_ground(base))
+        cp = _h27_counter_key(hid_badprof, "global", "global")
+        assert cp < 2, f"bad-profile hook must reset after reaching threshold despite failure: {cp}"
+        if _h27_logs("Action 'no-such-action-xyz' not found"):
+            print("  evidence: 'Action no-such-action-xyz not found' log line found (error isolation)")
+        # main agent loop unaffected (/health returns plain text 'ok'; /channels returns JSON)
+        st, _, err = _h27_wait_http_raw("/health", timeout=60)
+        assert st == 200, f"/health -> {st} ({err})"
+        st2, b2, err2 = _h27_wait_http("/channels", timeout=60)
+        assert st2 == 200 and b2.get("success") is True, f"/channels -> {st2} {str(b2)[:120]} ({err2})"
+        # message processing still works after hook failures
+        n = _h27_nonhook_ground(base)
+        assert n >= 3, f"message loop must keep producing messages after hook failures: {n}"
+        print(f"PASS: badact_counter={cb} badprof_counter={cp} badprof_threads={_h27_new_threads('G27-BADPROF', pre_badprof)} "
+              f"new_nonhook_msgs={n} health={st} channels={st2}")
+    finally:
+        _h27_cleanup()
+
+
+def test_27_hooks_thread_finished():
+    """GROUP 27-E: thread_finished fires when a thread reaches a terminal state (complete/failed).
+    Robust to leftover hook threads from prior runs: only NEW G27-FIN hook threads count."""
+    _h27_cleanup()
+    hid_fin = _h27_create_hook(name="g27-fin", event="thread_finished", scope="global",
+                               count=1, mode="agentic", prompt="G27-FIN", profile="omni")
+    try:
+        base_t, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0]
+        # leftover G27-FIN hook threads from interrupted runs are inert but present; only a
+        # NEW one (id above the max pre-existing) proves a fresh thread_finished event fired
+        pre_fin, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads WHERE hook_caused = true AND id IN "
+                            "(SELECT thread_id FROM messages WHERE content = 'G27-FIN')")[0]
+        cid = _h27_run_cron("fin")
+        def fin_thr_new():
+            return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true AND id > %s "
+                            "AND id IN (SELECT thread_id FROM messages WHERE content = 'G27-FIN')",
+                            (pre_fin,))[0][0]
+        ok = _h27_wait_until(lambda: fin_thr_new() >= 1, timeout=60)
+        assert ok, "thread_finished hook must trigger when a thread reaches a terminal state"
+        # the source thread (cron thread created after base_t) must itself be terminal
+        def term_cnt():
+            return _h27_sql("SELECT COUNT(*) FROM threads WHERE id > %s AND status IN "
+                            "('completed','failed','skipped','system')", (base_t,))[0][0]
+        ok = _h27_wait_until(lambda: term_cnt() >= 1, timeout=60)
+        assert ok, f"expected at least one terminal thread created during the test: {term_cnt()}"
+        time.sleep(2)
+        cf = _h27_counter(hid_fin)
+        assert cf.get("global") == 0, f"thread_finished count=1 hook must trigger+reset: {cf}"
+        print(f"PASS: fin_triggers_new={fin_thr_new()} terminal_threads={term_cnt()} "
+              f"counter={cf.get('global')}")
+    finally:
+        _h27_cleanup()
+
+
+test(test_27_hooks_counter_trigger_reset)
+test(test_27_hooks_scope_channel_profile)
+test(test_27_hooks_infinite_loop_protection)
+test(test_27_hooks_error_isolation)
+test(test_27_hooks_thread_finished)
+
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
