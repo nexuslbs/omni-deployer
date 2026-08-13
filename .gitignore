@@ -5,6 +5,7 @@ omnidev.env
 
 # API secrets (name=value pairs consumed by setup) — never commit
 secrets.env
+secrets.env.bak*
 
 # Python cache
 __pycache__/
