@@ -6383,6 +6383,7 @@ def test_20_8_schedule_crud():
             print(f"✓ Schedule list: {len(scheds)} total")
     finally:
         delete_json(f"/schedule/{sid}", raise_on_error=False)
+        tasks_yml_remove_keys(lambda section, key: key == sid)
         print(f"✓ Deleted schedule")
 
 test(test_20_8_schedule_crud)
@@ -7215,13 +7216,74 @@ def _h27_obs_ge(hid, scope, key, n):
     return (v if v is not None else 0) >= n
 
 
+def tasks_yml_remove_keys(pred):
+    """Remove schedule/hook blocks from {OMNI_DIR}/config/tasks.yml whose
+    (section, key) satisfies pred. Preserves all other lines (comments, other
+    entries, ordering). Definitions live in tasks.yml now — NOT in the
+    cron_jobs/hooks DB tables — so tests must clean up the yml directly."""
+    path = f"{WORKSPACE}/config/tasks.yml"
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        lines = f.readlines()
+    out = []
+    section = None
+    skip_indent = None
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if skip_indent is not None:
+            if stripped and indent <= skip_indent:
+                skip_indent = None
+                continue
+            i += 1
+            continue
+        if not stripped or stripped.startswith("#"):
+            out.append(line)
+            i += 1
+            continue
+        if indent == 0:
+            section = stripped[:-1].strip() if stripped.endswith(":") else None
+            out.append(line)
+            i += 1
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            key = stripped[:-1].strip()
+            if section in ("schedules", "hooks") and pred(section, key):
+                skip_indent = 2
+                i += 1
+                continue
+            out.append(line)
+            i += 1
+            continue
+        out.append(line)
+        i += 1
+    with open(path, "w") as f:
+        f.writelines(out)
+
+
 def _h27_cleanup():
-    """Remove g27 test hooks and cron jobs. Hook-caused threads are intentionally
-    LEFT in place: messages are append-only by design (DB trigger) so threads
-    referenced by messages cannot be deleted (FK). Leftover hook threads are
-    inert (no hooks reference them, cause='system')."""
-    _h27_sql("DELETE FROM hooks WHERE name LIKE 'g27-%'")
-    _h27_sql("DELETE FROM cron_jobs WHERE name LIKE 'g27-%'")
+    """Remove g27 test hooks and schedules. Definitions live in config/tasks.yml
+    (git-tracked) — NOT in the (dormant/dropped) hooks/cron_jobs tables — so
+    cleanup goes through the /hooks API (which also removes hook_counters rows)
+    and direct tasks.yml block removal. Runtime cadence rows (task_runs) are
+    cleaned directly. Hook-caused threads are intentionally LEFT in place:
+    messages are append-only by design (DB trigger) so threads referenced by
+    messages cannot be deleted (FK). Leftover hook threads are inert (no hooks
+    reference them, cause='system')."""
+    # API-delete g27 hooks (id is auto-generated; the prompt carries the G27- marker)
+    st, resp = _h27_api("GET", "/hooks")
+    if st == 200:
+        hooks = resp.get("data", resp) if isinstance(resp, dict) else resp
+        for h in (hooks if isinstance(hooks, list) else []) or []:
+            if isinstance(h, dict) and (h.get("prompt") or "").startswith("G27-"):
+                _h27_api("DELETE", f"/hooks/{h['id']}")
+    # Remove g27-* schedule/hook blocks from the git-tracked tasks.yml
+    tasks_yml_remove_keys(lambda section, key: key.startswith("g27-"))
+    # Runtime cadence bookkeeping for removed schedules (runtime table, not definitions)
+    _h27_sql("DELETE FROM task_runs WHERE task_key LIKE 'g27-%'")
 
 
 def _h27_run_cron(tag):
@@ -7239,7 +7301,7 @@ def _h27_run_cron(tag):
     assert d.get("id"), f"POST /schedule returned no id: {resp}"
     st, resp = _h27_api("POST", f"/schedule/{d['id']}/run", {})
     assert st == 200, f"POST /schedule/{d['id']}/run -> {st}: {resp}"
-    _h27_sql("DELETE FROM cron_jobs WHERE id = %s", (d["id"],))
+    tasks_yml_remove_keys(lambda section, key: key == d["id"])
     return d["id"]
 
 
