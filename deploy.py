@@ -341,7 +341,7 @@ def deploy(mode):
     if dirty_lines:
         KNOWN_RESIDUE = {
             "config/actions.yml", "config/plugins.yml", "config/settings.yml", "config/workflows.yml",
-            "config/remote.yml", "profiles/omni/wiki/relevant-index.md",
+            "config/remote.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md",
         }
         tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
         untracked = [ln[3:].strip() for ln in dirty_lines if ln.startswith("??")]
