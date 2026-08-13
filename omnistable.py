@@ -10,8 +10,10 @@ Usage:
 The `setup` command:
   1. Generates omnistable.env with random passwords and the latest GHCR
      :latest image tags (omniagent, dashboard, toolbox)
-  2. Starts Docker Compose (project=omnistable, profiles=noop,mattermost,memory)
+  2. Starts Docker Compose (project=omnistable, profiles=noop,mattermost)
      with `--pull always` so the newest :latest images are always fetched
+     (the `memory` profile — hindsight+qdrant — is DEV-only; stable does
+     not run it, see shared.py generate_env)
   3. Creates secrets (from secrets.env + Mattermost credentials)
   4. Enables + configures + runs the Mattermost platform setup
      (team `omni`, channel `stable-channel`, admin/test/bot users)
