@@ -204,7 +204,7 @@ def configure_secret_refs():
     Each value must be created as a secret first (see ensure_secret + secrets.env).
     """
     s = sett()
-    yml_path = os.path.join(s.omni_stack_dir, "plugins.yml")
+    yml_path = os.path.join(s.omni_stack_dir, "config", "plugins.yml")
     r = sh("sudo cat " + yml_path)
     if r.returncode != 0:
         print("  WARNING: Could not read plugins.yml — skipping secret ref config")

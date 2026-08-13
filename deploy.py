@@ -257,7 +257,7 @@ def generate_env(mode):
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
     # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
-    remote_yml_path = os.path.join(OMNI_STACK_DIR, "remote.yml")
+    remote_yml_path = os.path.join(OMNI_STACK_DIR, "config", "remote.yml")
     remote_yml_content = """tools:
   test-rust-tool:
     url: https://github.com/nexuslbs/omni-plugins.git
@@ -340,8 +340,8 @@ def deploy(mode):
     dirty_lines = r.stdout.splitlines()
     if dirty_lines:
         KNOWN_RESIDUE = {
-            "actions.yml", "plugins.yml", "settings.yml", "workflows.yml",
-            "remote.yml", "profiles/omni/wiki/relevant-index.md",
+            "config/actions.yml", "config/plugins.yml", "config/settings.yml", "config/workflows.yml",
+            "config/remote.yml", "profiles/omni/wiki/relevant-index.md",
         }
         tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
         untracked = [ln[3:].strip() for ln in dirty_lines if ln.startswith("??")]
@@ -632,7 +632,7 @@ def deploy(mode):
         # (plugins.yml, remote.yml, actions.yml, settings.yml) from the
         # bind-mounted omni-stack directory so check_git_clean() never
         # fails on retries.
-        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- plugins.yml remote.yml actions.yml settings.yml workflows.yml 2>/dev/null; true")
+        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- config/plugins.yml config/remote.yml config/actions.yml config/settings.yml config/workflows.yml 2>/dev/null; true")
         print(f"\n{'=' * 60}")
         print(f"  INTEGRATION TESTS — PASS {pass_num}")
         print(f"{'=' * 60}")
@@ -647,7 +647,7 @@ def deploy(mode):
        "sudo git clean -fdX -- plugins 2>/dev/null; "
        "sudo git clean -fd -- plugins 2>/dev/null; "
        "rmdir plugins/tools plugins/platforms plugins/providers plugins 2>/dev/null; "
-       "sudo rm -f workflows.yml; "
+       "sudo rm -f config/workflows.yml; "
        "true")
 
     print(f"\n{'=' * 60}")
@@ -683,8 +683,8 @@ def deploy(mode):
     # MUST be restored here or the next run's Step 0.5 fails on a dirty tree.
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
-       "sudo git checkout HEAD -- actions.yml plugins.yml settings.yml "
-       "workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "sudo git checkout HEAD -- config/actions.yml config/plugins.yml config/settings.yml "
+       "config/workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious
