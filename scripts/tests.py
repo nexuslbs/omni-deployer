@@ -209,7 +209,7 @@ def put_json(path, body=None):
 # ═══════════════════════════════════════════════════════════════════════
 
 def read_plugins_yml():
-    with open(f"{WORKSPACE}/plugins.yml") as f:
+    with open(f"{WORKSPACE}/config/plugins.yml") as f:
         content = f.read()
     lines = content.split("\n")
     sections, section, name, entry = {}, None, None, None
@@ -284,7 +284,7 @@ def write_plugins_yml(data):
                     lines.append(f"    {k}: {v}")
         lines.append("")
     content = "\n".join(lines)
-    with open(f"{WORKSPACE}/plugins.yml", "w") as f:
+    with open(f"{WORKSPACE}/config/plugins.yml", "w") as f:
         f.write(content)
 
 def yaml_get(entry_type, name):
@@ -308,7 +308,7 @@ def yaml_has(entry_type, name):
     return yaml_get(entry_type, name) is not None
 
 def read_remote_yml():
-    r = sh(f"cat {WORKSPACE}/remote.yml")
+    r = sh(f"cat {WORKSPACE}/config/remote.yml")
     data = {"tools": {}, "platforms": {}, "providers": {}}
     section = None
     for line in r.stdout.split("\n"):
@@ -360,21 +360,21 @@ def mkdir_p(path):
 # The .bak file is the per-test contract: do not nest backup/restore.
 
 def backup_plugins_yml():
-    shutil.copy2(f"{WORKSPACE}/plugins.yml", f"{WORKSPACE}/plugins.yml.bak")
+    shutil.copy2(f"{WORKSPACE}/config/plugins.yml", f"{WORKSPACE}/config/plugins.yml.bak")
 
 def restore_plugins_yml():
-    bak = f"{WORKSPACE}/plugins.yml.bak"
+    bak = f"{WORKSPACE}/config/plugins.yml.bak"
     if os.path.exists(bak):
-        shutil.copy2(bak, f"{WORKSPACE}/plugins.yml")
+        shutil.copy2(bak, f"{WORKSPACE}/config/plugins.yml")
         os.remove(bak)
 
 def backup_remote_yml():
-    shutil.copy2(f"{WORKSPACE}/remote.yml", f"{WORKSPACE}/remote.yml.bak")
+    shutil.copy2(f"{WORKSPACE}/config/remote.yml", f"{WORKSPACE}/config/remote.yml.bak")
 
 def restore_remote_yml():
-    bak = f"{WORKSPACE}/remote.yml.bak"
+    bak = f"{WORKSPACE}/config/remote.yml.bak"
     if os.path.exists(bak):
-        shutil.copy2(bak, f"{WORKSPACE}/remote.yml")
+        shutil.copy2(bak, f"{WORKSPACE}/config/remote.yml")
         os.remove(bak)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1090,19 +1090,19 @@ def test_3():
     if not name:
         return
     # Save state before deletion so other tests (e.g. test_6) can still run
-    remote_yml_bak = f"{WORKSPACE}/remote.yml.bak"
-    plugins_yml_bak = f"{WORKSPACE}/plugins.yml.bak"
-    shutil.copy2(f"{WORKSPACE}/remote.yml", remote_yml_bak)
-    shutil.copy2(f"{WORKSPACE}/plugins.yml", plugins_yml_bak)
+    remote_yml_bak = f"{WORKSPACE}/config/remote.yml.bak"
+    plugins_yml_bak = f"{WORKSPACE}/config/plugins.yml.bak"
+    shutil.copy2(f"{WORKSPACE}/config/remote.yml", remote_yml_bak)
+    shutil.copy2(f"{WORKSPACE}/config/plugins.yml", plugins_yml_bak)
     try:
         resp = api_delete(f"/plugins/{ptype}/remote/{name}")
     finally:
         # Restore YAML state so download API can find the entry
         if os.path.exists(plugins_yml_bak):
-            shutil.copy2(plugins_yml_bak, f"{WORKSPACE}/plugins.yml")
+            shutil.copy2(plugins_yml_bak, f"{WORKSPACE}/config/plugins.yml")
             os.remove(plugins_yml_bak)
         if os.path.exists(remote_yml_bak):
-            shutil.copy2(remote_yml_bak, f"{WORKSPACE}/remote.yml")
+            shutil.copy2(remote_yml_bak, f"{WORKSPACE}/config/remote.yml")
             os.remove(remote_yml_bak)
         # Use download API to restore .remote/ directory from git instead of
         # manually copying files: also validates the download endpoint works
@@ -1647,7 +1647,7 @@ def check_git_clean():
         # settings.yml, plugins/tools/). If these are the *only* dirty files,
         # revert/remove them silently and proceed; any other dirtiness is
         # unexpected and still raises.
-        known_artifacts = {"plugins.yml", "remote.yml", "actions.yml", "settings.yml", "workflows.yml", "plugins/tools/"}
+        known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "plugins/tools/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
@@ -1655,7 +1655,7 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "plugins.yml", "remote.yml", "actions.yml", "settings.yml", "workflows.yml"],
+                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             # Remove untracked transient test artifacts (plugins/tools/)
@@ -5543,7 +5543,7 @@ def ensure_remote_plugin_from(url, name, path, plugin_type="tools"):
 
 def _remote_yml_entry(name, plugin_type="tools"):
     """Return the raw remote.yml entry dict (url/path) for a plugin, or None."""
-    r = sh(f"cat {WORKSPACE}/remote.yml")
+    r = sh(f"cat {WORKSPACE}/config/remote.yml")
     section = None
     found = None
     for line in r.stdout.split("\n"):
