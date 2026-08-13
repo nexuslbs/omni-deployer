@@ -1376,6 +1376,7 @@ def _dash_get(path):
 
 DASH_PAGES = [
     "/",
+    "/schedules",
 ]
 
 # ── API endpoints that should return valid data (not errors) ──
@@ -1394,8 +1395,8 @@ DASH_API_ENDPOINTS = [
     ("GET", "/api/threads/filters", 200),
     ("GET", "/api/fs/list?path=/", 200),
     # Static assets
-    ("GET", "/assets/index-UgvjgAk1.js", 200),
-    ("GET", "/assets/index-1NcF5H7V.css", 200),
+    ("GET", "/assets/index-CUcbyEWO.js", 200),
+    ("GET", "/assets/index-ZqNeTqN7.css", 200),
     ("GET", "/favicon.svg", 200),
 ]
 
@@ -1410,7 +1411,7 @@ def test_dashboard_pages():
     for path in DASH_PAGES:
         code, text, js = _dash_get(path)
         assert code == 200, f"GET {path} returned {code}, expected 200"
-        assert "index-UgvjgAk1.js" in text or "<!DOCTYPE html>" in text, \
+        assert "index-CUcbyEWO.js" in text or "<!DOCTYPE html>" in text, \
             f"GET {path} did not return SPA HTML (missing JS bundle reference)"
         assert '"error":"Not found"' not in text, \
             f"GET {path} returned 'Not found' error"
@@ -1488,6 +1489,14 @@ def test_dashboard_pages():
     assert health_js is not None, "/api/health must return valid JSON"
     assert health_js.get("status") == "ok", "/api/health must return status=ok"
 
+
+    # ── 13. Verify /schedules page route (renamed from /schedule) ──
+    code, text, _ = _dash_get("/")
+    assert code == 200, "GET / must return 200 to verify nav"
+    assert 'href="/schedules"' in text and 'data-route="schedules"' in text, \
+        "SPA nav must link to /schedules (renamed from /schedule)"
+    assert 'href="/schedule"' not in text, \
+        "SPA nav must NOT contain legacy href=/schedule page route"
 
 def test_dashboard_plugin_filters():
     """
