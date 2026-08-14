@@ -6358,6 +6358,46 @@ def test_20_7_kanban_crud():
 
 test(test_20_7_kanban_crud)
 
+# ─── 20.7b: Kanban plan normalization (planning_mode removed) ─────────
+
+def test_20_7b_kanban_plan_normalized():
+    """planning_mode is gone from every kanban API surface - single plan bool."""
+    import uuid
+    title = f"Plan Norm {uuid.uuid4().hex[:8]}"
+    tid = None
+    try:
+        r = post_json("/kanban/tasks", {"title": title, "status": "todo", "plan": True})
+        d = r.get("data", r) if isinstance(r, dict) else r
+        tid = d.get("id") if isinstance(d, dict) else None
+        assert tid, f"No task id: {r}"
+        print(f"PASS: POST /kanban/tasks plan:true -> id={tid}")
+
+        g = get_json(f"/kanban/tasks/{tid}")
+        gd = g.get("data", g) if isinstance(g, dict) else g
+        assert gd.get("plan") is True, f"GET plan: {gd.get('plan')!r}"
+        assert "planning_mode" not in gd, f"GET response has planning_mode: {gd}"
+        print("PASS: GET /kanban/tasks/<id> round-trips plan=true")
+
+        put_json(f"/kanban/tasks/{tid}", {"plan": False})
+        g2 = get_json(f"/kanban/tasks/{tid}")
+        g2d = g2.get("data", g2) if isinstance(g2, dict) else g2
+        assert g2d.get("plan") is False, f"PUT plan:false -> {g2d.get('plan')!r}"
+        assert "planning_mode" not in g2d, f"GET after PUT has planning_mode: {g2d}"
+        print("PASS: PUT plan:false toggles to plan=false, no planning_mode key")
+
+        tasks = get_data("/kanban/tasks")
+        mine = [t for t in tasks if t.get("id") == tid]
+        assert mine, "task missing from list"
+        assert "plan" in mine[0], f"list item lacks plan key: {mine[0]}"
+        assert "planning_mode" not in mine[0], f"list item has planning_mode: {mine[0]}"
+        print("PASS: /kanban/tasks list exposes plan, no planning_mode")
+    finally:
+        if tid:
+            delete_json(f"/kanban/tasks/{tid}", raise_on_error=False)
+            print(f"PASS: Deleted task {tid}")
+
+test(test_20_7b_kanban_plan_normalized)
+
 # ─── 20.8: Schedule CRUD ──────────────────────────────────────────────
 
 _schedule_id = None
