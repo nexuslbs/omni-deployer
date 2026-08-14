@@ -7187,6 +7187,10 @@ def _h27_api(method, path, body=None):
 
 
 def _h27_create_hook(**kw):
+    # Explicit unique id (= name): server auto-ids are ms-resolution and
+    # collide when several hooks are created in the same millisecond,
+    # silently overwriting an earlier hook in tasks.yml (27-B observed).
+    kw.setdefault("id", kw.get("name"))
     st, resp = _h27_api("POST", "/hooks", kw)
     assert st == 200, f"POST /hooks {kw} -> {st}: {resp}"
     d = resp.get("data", resp)
@@ -7280,6 +7284,7 @@ def _h27_cleanup():
         for h in (hooks if isinstance(hooks, list) else []) or []:
             if isinstance(h, dict) and (h.get("prompt") or "").startswith("G27-"):
                 _h27_api("DELETE", f"/hooks/{h['id']}")
+                _h27_sql("DELETE FROM hook_counters WHERE hook_key = %s", (h["id"],))
     # Remove g27-* schedule/hook blocks from the git-tracked tasks.yml
     tasks_yml_remove_keys(lambda section, key: key.startswith("g27-"))
     # Runtime cadence bookkeeping for removed schedules (runtime table, not definitions)
@@ -7462,7 +7467,7 @@ def test_27_hooks_scope_channel_profile():
     hid_obs_c = _h27_create_hook(name="g27-obs-c", event="thread_started", scope="channel",
                                  target="cron", count=100000, mode="agentic", prompt="G27-OBS-C")
     hid_chan = _h27_create_hook(name="g27-chan", event="thread_started", scope="channel",
-                                target="cron", count=1, mode="action", action_id="a3")
+                                target="cron", count=1, mode="action", action_id="a3", prompt="G27-CHAN")
     hid_chan_o = _h27_create_hook(name="g27-chan-o", event="thread_started", scope="channel",
                                   target="zzz-not-a-channel", count=1, mode="agentic", prompt="G27-NOPE")
     hid_obs_p = _h27_create_hook(name="g27-obs-p", event="thread_started", scope="profile",
@@ -7512,7 +7517,7 @@ def test_27_hooks_infinite_loop_protection():
     hid_obs = _h27_create_hook(name="g27-obs", event="new_message", scope="global",
                                count=100000, mode="agentic", prompt="G27-OBS", profile="omni")
     hid_trig = _h27_create_hook(name="g27-trig", event="thread_started", scope="global",
-                                count=1, mode="agentic", prompt="G27-TRIG", profile="omni")
+                                count=1, mode="agentic", prompt="G27-TRIG", profile="omni", channel_id="cron")
     pre_trig = _h27_pre_threads("G27-TRIG")
     try:
         # Drain the EXECUTOR backlog: cron threads from earlier tests fail
