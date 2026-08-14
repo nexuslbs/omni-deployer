@@ -6371,7 +6371,7 @@ def test_20_8_schedule_crud():
     global _schedule_id
     import uuid
     name = f"test-sched-{uuid.uuid4().hex[:8]}"
-    r = post_json("/schedule", {"name": name, "schedule": "0 6 * * *", "prompt": "test", "channel_id": 0, "enabled": False})
+    r = post_json("/schedule", {"name": name, "schedule": "0 6 * * *", "prompt": "test", "channel_id": "cron", "enabled": False})
     sid = r.get("data", {}).get("id") or r.get("id")
     assert sid, f"No id: {r}"
     _schedule_id = sid
@@ -7295,7 +7295,7 @@ def _h27_run_cron(tag):
     name = f"g27-{tag}-{int(time.time() * 1000)}"
     st, resp = _h27_api("POST", "/schedule", {
         "name": name, "schedule": "0 0 1 1 *", "prompt": f"g27 {tag} run",
-        "mode": "agentic", "profile": "omni", "channel_id": 2})
+        "mode": "agentic", "profile": "omni", "channel_id": "cron"})
     assert st == 200, f"POST /schedule -> {st}: {resp}"
     d = resp.get("data", resp)
     assert d.get("id"), f"POST /schedule returned no id: {resp}"
@@ -7520,7 +7520,7 @@ def test_27_hooks_infinite_loop_protection():
         # moving the SQL ground truth independently of the observer. Wait until
         # the cron channel (id 2) has no pending/processing threads left.
         _h27_quiesce(lambda: _h27_sql(
-            "SELECT COUNT(*) FROM threads WHERE channel_id = 2 AND status IN ('pending','processing')"
+            "SELECT COUNT(*) FROM threads WHERE channel_id = 'cron' AND status IN ('pending','processing')"
         )[0][0] == 0, stable_secs=6, timeout=90)
         # Drain the EVENT pipeline: events fired by earlier tests' threads may
         # still be queued; wait until the observer counter is stable so the
