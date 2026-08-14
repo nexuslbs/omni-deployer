@@ -5879,12 +5879,8 @@ conn.autocommit = True
 ch_id = th_id = None
 try:
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO channels (name, platform, cause, current_profile, current_model, current_provider) "
-        "VALUES (%s, 'cli', 'system', 'omni', 'test-tool-caller', 'noop') RETURNING id",
-        (f"g25-{marker}",),
-    )
-    ch_id = cur.fetchone()[0]
+    # channels table was dropped (config/channels.yml migration): channel_id is now the channel NAME
+    ch_id = f"g25-{marker}"
     cur.execute(
         "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
         "VALUES ('completed', 'user', %s, 'omni', true, false) RETURNING id",
