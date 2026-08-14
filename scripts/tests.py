@@ -7754,6 +7754,83 @@ test(test_27_hooks_infinite_loop_protection)
 test(test_27_hooks_error_isolation)
 test(test_27_hooks_thread_finished)
 
+#  GROUP 28: Terminal status invariant (task_18cb83096b238872)
+print(f"\n{'=' * 60}")
+print("GROUP 28: Terminal status invariant — skipped/completed/failed/interrupted/system always terminal=true")
+print(f"{'=' * 60}")
+
+
+def test_28_terminal_status_invariant():
+    """GROUP 28: every write that flips a thread into a terminal status MUST set
+    terminal=true (single choke point mark_thread_terminal in src/db/threads.rs,
+    structurally enforced by CHECK constraint chk_thread_terminal_status).
+
+    28-A: POST /stop/<channel> on a pending thread -> 'skipped' + terminal=true
+          + ended_at set (regression: the operator stop used to write 'skipped'
+          WITHOUT terminal=true — the 13 bad rows observed on channel 4).
+    28-B: the CHECK constraint exists and REJECTS the old-style write
+          (status='skipped' leaving terminal=false).
+    28-C: DB audit clean — no terminal-status row in the whole DB with terminal=false.
+    """
+    ch = "term-inv-" + uuid.uuid4().hex[:8]
+    try:
+        # 28-A: operator-stop skip must be a full terminal write.
+        # NOTE: _h27_sql commits only statements without a result set, so the
+        # INSERT must NOT use RETURNING (the row would be rolled back at close).
+        _h27_sql(
+            "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
+            "VALUES ('pending', 'user', %s, 'omni', false, false)",
+            (ch,))
+        tid, = _h27_sql(
+            "SELECT id FROM threads WHERE channel_id = %s ORDER BY id DESC LIMIT 1",
+            (ch,))[0]
+        resp = post_json(f"/stop/{ch}")
+        d = resp.get("data", resp) if isinstance(resp, dict) else resp
+        assert d.get("skipped_threads", 0) >= 1, f"/stop did not skip the pending thread: {resp}"
+        rows = _h27_sql(
+            "SELECT status, terminal, ended_at IS NOT NULL FROM threads WHERE id = %s",
+            (tid,))
+        assert rows, f"thread {tid} missing after /stop"
+        st, term, ended = rows[0]
+        assert st == "skipped", f"expected status 'skipped', got {st!r}"
+        assert term is True, f"skipped thread must have terminal=true, got {term!r}"
+        assert ended is True, "skipped thread must have ended_at set"
+
+        # 28-B: structural enforcement — a FRESH pending thread flipped to 'skipped'
+        # by the old-style write (no terminal=true) must be rejected by the CHECK.
+        _h27_sql(
+            "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
+            "VALUES ('pending', 'user', %s, 'omni', false, false)",
+            (ch,))
+        tid2, = _h27_sql(
+            "SELECT id FROM threads WHERE channel_id = %s ORDER BY id DESC LIMIT 1",
+            (ch,))[0]
+        cons = _h27_sql(
+            "SELECT conname FROM pg_constraint WHERE conname = 'chk_thread_terminal_status'")
+        assert cons, "CHECK constraint chk_thread_terminal_status is missing"
+        try:
+            _h27_sql("UPDATE threads SET status = 'skipped' WHERE id = %s", (tid2,))
+            assert False, "old-style write (status='skipped' without terminal=true) must be rejected"
+        except Exception as e:
+            err = str(e).lower()
+            assert "check constraint" in err or "chk_thread_terminal_status" in err,                 f"expected a CHECK-constraint violation, got: {e}"
+        st2, = _h27_sql("SELECT status FROM threads WHERE id = %s", (tid2,))[0]
+        assert st2 == "pending", f"rejected write must leave the thread untouched, got {st2!r}"
+
+        # 28-C: whole-DB audit — no terminal status with terminal=false.
+        bad = _h27_sql(
+            "SELECT COUNT(*) FROM threads WHERE status IN "
+            "('skipped','completed','failed','interrupted','system') AND NOT terminal")
+        assert bad[0][0] == 0, f"terminal-status rows with terminal=false: {bad[0][0]}"
+
+        print(f"PASS: /stop -> skipped+terminal=t+ended_at; constraint present + rejects "
+              f"old-style write; DB audit clean (0 bad rows)")
+    finally:
+        _h27_sql("DELETE FROM threads WHERE channel_id = %s", (ch,))
+
+
+test(test_28_terminal_status_invariant)
+
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
