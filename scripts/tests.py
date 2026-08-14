@@ -7082,6 +7082,56 @@ def test_22_workflow_8_d9_dependency_gate():
         _wf_channel_restore(cid, orig)
 
 
+def test_22_workflow_9_dispatch_channel_busy_gate():
+    """D10: a todo task whose channel has an active (queued/running) thread must NOT be
+    dispatched; once the channel drains it is. Regression: the gate is STATUS-based
+    (pending/processing) — a skipped thread with terminal=false never blocks dispatch."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf_test_d10_" + uuid.uuid4().hex[:8]
+    # Slow script keeps A's executor thread ACTIVE while we probe the gate.
+    script_slow = json.dumps([{"name": "ok", "tool": "test-python_lorem", "arguments": {"seconds": 8}}])
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        a_id = _wf_create_task("wf-d10-a", key, script_slow, cid)
+        b_id = _wf_create_task("wf-d10-b", key, WF_SCRIPT_OK, cid)
+        tids = [a_id, b_id]
+        # Dispatch A; its executor thread is queued/running on the channel.
+        post_json("/kanban/dispatch", {})
+        # Wait until A's executor thread is actually ACTIVE (pending or processing).
+        deadline = time.time() + 30
+        active = False
+        while time.time() < deadline:
+            if any(t["status"] in ("pending", "processing") for t in _wf_step_threads(a_id)):
+                active = True
+                break
+            time.sleep(0.5)
+        assert active, "A's executor thread never became active (pending/processing)"
+        # While the channel has an active thread, B must NOT be dispatched.
+        resp = post_json("/kanban/dispatch", {})
+        d_resp = resp.get("data", resp) if isinstance(resp, dict) else resp
+        assert d_resp.get("dispatched") is False, f"dispatch must be blocked while channel active, got {resp}"
+        b_status = _wf_task_status(b_id).get("status")
+        assert b_status == "todo", f"B must stay todo while channel busy, got {b_status}"
+        assert not _wf_step_threads(b_id), "B must have no step threads while channel busy"
+        # A's executor-only workflow finishes -> channel drains (threads completed).
+        st_a, _ = _wf_wait_status(a_id, {"review", "blocked", "done"}, timeout=120)
+        assert st_a == "review", f"A expected review, got {st_a}"
+        # Give the channel a beat to fully drain, then dispatch must promote B.
+        time.sleep(3)
+        post_json("/kanban/dispatch", {})
+        st_b, _ = _wf_wait_status(b_id, {"review", "blocked", "done", "running", "testing"}, timeout=120)
+        assert st_b != "todo", "B must be dispatched after the channel drains"
+        threads_b = _wf_step_threads(b_id)
+        assert threads_b, "B must have a step thread after dispatch"
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
 test(test_22_workflow_1_executor_only)
 test(test_22_workflow_2_executor_tester)
 test(test_22_workflow_3_executor_tester_reviewer)
@@ -7090,6 +7140,7 @@ test(test_22_workflow_5_fail_thread_testing_no_tester_blocked)
 test(test_22_workflow_6_interruption_rerun)
 test(test_22_workflow_7_clear_executions_on_review)
 test(test_22_workflow_8_d9_dependency_gate)
+test(test_22_workflow_9_dispatch_channel_busy_gate)
 #  GROUP 26: Plain kanban task (NO workflow_id) - fail-tool -> blocked; clean completion -> review (R8-N)
 print(f"\n{'=' * 60}")
 print("GROUP 26: Plain kanban task (no workflow_id) - fail-tool -> blocked; clean completion -> review (R8-N)")
