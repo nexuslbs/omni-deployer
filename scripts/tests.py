@@ -552,8 +552,16 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
                     try:
                         cmdline = open(f"/proc/{pid_text}/cmdline", "rb").read()
                         cmdline_str = cmdline.decode("utf-8", errors="replace").replace("\0", " ")
-                        # Must reference the plugin directory, not just API URL
-                        if f"/plugins/providers/{provider_name}" in cmdline_str:
+                        # Must reference the provider's plugin directory, NOT just
+                        # the provider name anywhere. Plain substring matching is
+                        # wrong: "noop" matches "noop-full" (cmdline contains
+                        # /plugins/providers/noop-full/client.py), which made the
+                        # wait report "ready" for a DIFFERENT provider. Match the
+                        # provider name as a path COMPONENT: "/plugins/providers/
+                        # noop/" (bundled/built-in) or "/noop/" (remote installs
+                        # live under plugins/providers/.remote/noop/...).
+                        if f"/plugins/providers/{provider_name}/" in cmdline_str or \
+                           f"/{provider_name}/" in cmdline_str:
                             real_pids.append(pid_text)
                     except (OSError, IOError):
                         pass  # process may have exited between pgrep and read
