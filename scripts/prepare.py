@@ -108,8 +108,14 @@ def main() -> None:
     print("Step 1: cargo fmt --all")
     run(["cargo", "fmt", "--all"])
 
-    print("Step 2: cargo sqlx prepare --workspace")
-    run(["cargo", "sqlx", "prepare", "--workspace"])
+    print("Step 2: cargo sqlx prepare --workspace -- --tests")
+    # --tests: the production Dockerfile gate runs `cargo check --workspace
+    # --all-targets --release` with SQLX_OFFLINE=true, which compiles TEST
+    # targets too. A lib-only prepare drops test-module queries, so the
+    # committed root cache was missing them and the hybrid/CI image build
+    # failed ("could not compile omniagent (lib test)"). Same fix as the
+    # plugin step below.
+    run(["cargo", "sqlx", "prepare", "--workspace", "--", "--tests"])
 
     # Step 3: prepare plugin crates that use sql_forge! / sqlx::query!
     if PLUGINS_DIR.is_dir():
