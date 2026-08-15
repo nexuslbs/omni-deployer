@@ -387,7 +387,10 @@ def _remove_data_volumes(project_name):
 # projects it actually conflicts with:
 #   - omnidev    → stops omnideploy (CI/deploy project) only — NEVER omnistable
 #   - omnistable → stops omnideploy only — NEVER omnidev
-#   - omnideploy → stops both launchers (CI wants a clean slate)
+#   - omnideploy → stops both launchers by default (CI wants a clean slate);
+#                  DEV mode stops ONLY omnidev — omnistable is the agent's
+#                  own live runtime and must never be torn down (see
+#                  stop_other_stacks mode='dev').
 # No fixed container_name / network name / volume name entries exist in the
 # base compose — all containers (and networks/volumes) are auto-named with the
 # compose project prefix ({project}-{service}-{index}, {project}_{volume}), so
@@ -401,21 +404,32 @@ STOP_TARGETS = {
     "omnideploy": ["omnidev", "omnistable"],
 }
 
+# Projects deploy.py NEVER stops in dev mode. omnistable is the agent's own
+# live runtime — `deploy.py dev` stopping it would kill the running agent
+# mid-task, so dev mode excludes it (ci/hybrid keep the clean-slate behavior
+# via the full STOP_TARGETS list above).
+DEV_STOP_EXCLUDE = {"omnistable"}
 
-def stop_other_stacks(current_project):
+
+def stop_other_stacks(current_project, mode=None):
     """Stop + remove containers of the projects this launcher conflicts with.
 
     omnidev and omnistable run side-by-side (host ports are dev-overlay-only,
     so they do not collide), therefore each stops ONLY omnideploy (the
     deploy/CI project) — never each other. deploy.py (omnideploy) stops both
-    launchers: CI wants a clean slate.
+    launchers by default: CI wants a clean slate. In dev mode (mode='dev')
+    omnistable is excluded so the agent's own live runtime is never torn
+    down while the deploy runs.
 
     Containers are matched by the compose project label
     (com.docker.compose.project), NOT by name prefix, so unrelated containers
     are never touched. Networks left behind by the removed containers are
     pruned best-effort (only networks not in use by any container).
     """
-    for proj in STOP_TARGETS.get(current_project, []):
+    targets = STOP_TARGETS.get(current_project, [])
+    if mode == "dev":
+        targets = [p for p in targets if p not in DEV_STOP_EXCLUDE]
+    for proj in targets:
         listed = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={proj}"],
             capture_output=True, text=True,
