@@ -2873,10 +2873,15 @@ def test_mm9_e2e():
     for _ in range(15):
         r = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
         channels = json.loads(r.read()).get("data", [])
-        mm_channel = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
+        mm_channel = next((ch for ch in channels if ch.get("platform") == "mattermost"
+                       and ch.get("resource_identifier") == mm_channel_id), None)
+        if mm_channel is None:
+            # Fallback: first mattermost channel (older behavior)
+            mm_channel = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
         if mm_channel:
             channel_id = mm_channel["id"]
-            print(f"[found omniagent channel_id={channel_id} ({mm_channel.get('name')})]")
+            print(f"[found omniagent channel_id={channel_id} ({mm_channel.get('name')}, "
+                  f"resource_identifier={mm_channel.get('resource_identifier')})]")
             break
         time.sleep(2)
     assert channel_id is not None, "No mattermost channel found in omniagent channels after setup"
@@ -2947,7 +2952,11 @@ def test_fn_9b_provider_source_awareness():
     for _ in range(15):
         r2 = urllib.request.urlopen(f"{BASE}/channels", timeout=10)
         channels = json.loads(r2.read()).get("data", [])
-        mm_agent = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
+        mm_agent = next((ch for ch in channels if ch.get("platform") == "mattermost"
+                       and ch.get("resource_identifier") == mm_channel_id), None)
+        if mm_agent is None:
+            # Fallback: first mattermost channel (older behavior)
+            mm_agent = next((ch for ch in channels if ch.get("platform") == "mattermost"), None)
         if mm_agent:
             channel_id = mm_agent["id"]
             break
