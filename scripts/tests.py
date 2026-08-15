@@ -3621,9 +3621,9 @@ def test_p7_tool_names_preserved():
     assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
     resp = _compact_call(msgs, keep_recent=2)
     assert resp["was_compacted"], f"Should compact over hard budget: {resp}"
-    # NOTE: compact_old_assistant_messages writes "[context compacted: ...]"
-    # (compact.rs) — match on "[context compacted", not "compacted".
-    compacted = [m for m in resp["messages"] if "[context compacted" in m.get("content", "")]
+    # NOTE: compact_old_assistant_messages now writes ONE frozen system-message
+    # summary block "=== Compaction Summary ===" (compact.rs) — match on that.
+    compacted = [m for m in resp["messages"] if "=== Compaction Summary ===" in m.get("content", "")]
     assert compacted, "Expected at least one compacted message"
     for m in compacted:
         assert "search_docs" in m["content"] or "read_file" in m["content"], \
@@ -3640,7 +3640,7 @@ def test_p7_compact_multiple_tools():
     resp = _compact_call(msgs, keep_recent=1)
     assert resp["was_compacted"], f"Expected compaction: {resp['before_count']} -> {resp['after_count']}"
     assert resp["after_count"] < resp["before_count"], f"Count did not reduce: {resp}"
-    compacted = [m for m in resp["messages"] if "[context compacted" in m.get("content", "")]
+    compacted = [m for m in resp["messages"] if "=== Compaction Summary ===" in m.get("content", "")]
     if compacted:
         assert "tool_a" in compacted[0]["content"], f"Missing tool name: {compacted[0]['content'][:100]}"
 
@@ -5782,9 +5782,9 @@ def test_fn_24_compact_keeps_result_excerpt():
     compacted = parsed["messages"]
     assert isinstance(compacted, list) and compacted, "compacted messages missing"
     blob = json.dumps(compacted)
-    assert "[context compacted" in blob, "compact marker missing"
+    assert "=== Compaction Summary ===" in blob, "frozen summary block missing"
     assert "filesystem_read" in blob, "tool name must be preserved"
-    assert "results excerpt" in blob, "results excerpt marker missing"
+    assert "- [iter" in blob, "summary entries must appear as - [iter N] tool → excerpt"
     assert "RESULT_CONTENT_00" in blob, "tool-result content excerpt must survive compaction"
     assert "RESULT_CONTENT_01" in blob, "second tool-result excerpt must survive"
     print(f"  ✓ compacted {parsed['before_count']} -> {parsed['after_count']} msgs; "
