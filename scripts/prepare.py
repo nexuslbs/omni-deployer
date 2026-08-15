@@ -13,9 +13,15 @@ What it does:
     2. Runs `cargo sqlx prepare --workspace` to generate offline cache
        for the root crate (includes all workspace member crates).
     3. For each plugin (plugins/tools/*/) that uses `sql_forge!()` or
-       `sqlx::query!()`, runs `cargo sqlx prepare` in its crate directory
-       so production builds (which compile each plugin as -p <name>) can
-       resolve queries with SQLX_OFFLINE=true.
+       `sqlx::query!()`, runs `cargo sqlx prepare -- --tests` in its crate
+       directory so production builds (which compile each plugin as -p <name>)
+       can resolve queries with SQLX_OFFLINE=true. The extra `-- --tests`
+       forwards `--tests` to cargo so queries inside test modules are ALSO
+       captured — without it, `cargo sqlx prepare` (lib-only build) drops
+       test-target queries and the cache silently loses entries that
+       `cargo test --offline` needs (observed: prompt plugin's
+       continuation-block test query deleted on every run, leaving a dirty
+       tree).
     4. Runs `cargo fmt` a final pass.
 
 The offline cache files (*.sqlx/*.json) must be committed to version
@@ -114,7 +120,10 @@ def main() -> None:
             if needs_offline_cache(pdir):
                 found += 1
                 print(f"  → {pdir.name} (sql_forge!/sqlx::query! detected)")
-                run(["cargo", "sqlx", "prepare"], cwd=pdir)
+                # --tests so queries inside test modules are captured too;
+                # otherwise the regenerated cache drops them (lib-only build)
+                # and leaves a dirty tree every run.
+                run(["cargo", "sqlx", "prepare", "--", "--tests"], cwd=pdir)
         if found == 0:
             print("  (no plugins with sql_forge!/sqlx::query! found)")
         else:
