@@ -15,8 +15,10 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -36,6 +38,25 @@ OMNI_ENV_PATH = os.path.join(SCRIPT_DIR, "omni.env")
 TESTS_SCRIPT = os.path.join(SCRIPT_DIR, "scripts", "tests.py")
 OMNIAGENT_DIR = os.path.join(WORKSPACE_DIR, "omniagent")
 REMOTE_REPO = os.path.join(WORKSPACE_DIR, "omni-plugins")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  sudo compat
+# ═══════════════════════════════════════════════════════════════════════
+# The deploy scripts use `sudo` throughout so they also work when invoked
+# under sudo on a dev host. Some container images (notably the production
+# omniagent image) run as root with NO sudo binary, which made every
+# `sudo ...` shell command fail silently (2>/dev/null + `; true`) and turned
+# the pre-flight restore / final restore into no-ops. When sudo is absent we
+# are already root, so install a tiny PATH shim that makes `sudo <cmd>`
+# transparently execute `<cmd>`.
+if shutil.which("sudo") is None:
+    _sudo_shim_dir = tempfile.mkdtemp(prefix="sudo-shim-")
+    with open(os.path.join(_sudo_shim_dir, "sudo"), "w") as _f:
+        _f.write("#!/bin/sh\nexec \"$@\"\n")
+    os.chmod(os.path.join(_sudo_shim_dir, "sudo"), 0o755)
+    os.environ["PATH"] = _sudo_shim_dir + os.pathsep + os.environ["PATH"]
+    print(f"[deploy] sudo not found (running as root) — installed no-op sudo shim")
 
 
 # ═══════════════════════════════════════════════════════════════════════
