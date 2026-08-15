@@ -8077,6 +8077,355 @@ test(test_29_status_change_no_workflow_noop)
 test(test_29_redispatch_endpoint)
 
 
+
+
+#  GROUP 30: Surgical stop-thread (task_18cbcd7a8c4a6f5e)
+print(f"\n{'=' * 60}")
+print("GROUP 30: Surgical stop-thread — never cancel the channel handler for another "
+      "thread; a stopped kanban thread clears its task's thread_status")
+print(f"{'=' * 60}")
+
+# NOTE: 30-A/30-B require the instance to run a supervisor whose channels.yml declares
+# the g30-a / g30-b channels (live channel handlers). The dedicated GROUP 30 harness
+# (see tester report) runs a second omniagent instance with a stripped config; in a
+# full-stack deploy run these channels must be added to channels.yml or the tests
+# will fail at the "handler_running" precondition.
+
+def _g30_channel(tag):
+    return f"g30-{tag}"
+
+
+def _g30_insert_thread(status, cid, cause="user", task_id=None, step=None, tpl=None,
+                       terminal=False):
+    """INSERT a thread row directly (channel_id is TEXT, no FK). Returns its id."""
+    cols = ["status", "cause", "channel_id", "profile", "terminal", "plan"]
+    vals = [status, cause, cid, "omni", terminal, False]
+    if task_id is not None:
+        cols += ["task_id", "task_type"]
+        vals += [task_id, "kanban"]
+    if step is not None:
+        cols.append("workflow_step")
+        vals.append(step)
+    if tpl is not None:
+        cols.append("template")
+        vals.append(tpl)
+    ph = ", ".join(["%s"] * len(vals))
+    _h27_sql(f"INSERT INTO threads ({', '.join(cols)}) VALUES ({ph})", tuple(vals))
+    rows = _h27_sql(
+        "SELECT id FROM threads WHERE channel_id = %s ORDER BY id DESC LIMIT 1", (cid,))
+    assert rows, "failed to insert thread"
+    return rows[0][0]
+
+
+def _g30_status(tid):
+    """(status, terminal, ended_at set) for a thread, or None."""
+    rows = _h27_sql(
+        "SELECT status, terminal, ended_at IS NOT NULL FROM threads WHERE id = %s", (tid,))
+    if not rows:
+        return None
+    return {"status": rows[0][0], "terminal": rows[0][1], "ended": rows[0][2]}
+
+
+def _g30_msg_count(tid):
+    return _h27_sql("SELECT COUNT(*) FROM messages WHERE thread_id = %s", (tid,))[0][0]
+
+
+def _g30_handler_running(cid):
+    st, d = _h27_api("GET", f"/status/{cid}")
+    if st != 200:
+        return False
+    return bool(d and d.get("handler_running"))
+
+
+def _g30_delete_thread_ids(tids):
+    for t in tids:
+        try:
+            _h27_sql("DELETE FROM messages WHERE thread_id = %s", (t,))
+            _h27_sql("DELETE FROM threads WHERE id = %s", (t,))
+        except Exception:
+            pass
+
+
+def _g30_delete_channel(cid):
+    _h27_sql("DELETE FROM messages WHERE thread_id IN "
+             "(SELECT id FROM threads WHERE channel_id = %s)", (cid,))
+    _h27_sql("DELETE FROM threads WHERE channel_id = %s", (cid,))
+
+
+def _g30_live_find_thread(cid, marker):
+    """Id of the newest thread on cid whose seq-0 user message contains marker."""
+    rows = _h27_sql(
+        "SELECT t.id FROM threads t JOIN messages m ON m.thread_id = t.id "
+        "WHERE t.channel_id = %s AND m.thread_sequence = 0 AND m.role = 'user' "
+        "AND m.content LIKE %s ORDER BY t.id DESC LIMIT 1", (cid, f"%{marker}%"))
+    return rows[0][0] if rows else None
+
+
+def test_30_stop_thread_pending_never_cancels_handler():
+    """30-A: stop-thread on a 'pending' thread while ANOTHER thread is 'processing' on
+    the same channel WITH a live channel handler -> handler_cancelled=false, the
+    handler keeps running, the processing thread is untouched, the target stays
+    terminal. The target is inserted terminal=true so the live handler can never claim
+    it (claim requires status='pending' AND NOT terminal) — this makes the test
+    deterministic while still exercising the exact decision: status at lookup is
+    'pending', so stop_thread_cancels_handler() must be false. Regression: pre-fix
+    code cancelled the channel token unconditionally (incident 2026-08-14: stopping
+    thread 420 killed unrelated in-flight thread 412)."""
+    cid = _g30_channel("a")
+    t_proc = t_pend = None
+    try:
+        # Precondition: a live handler owns this channel (token present) — otherwise
+        # the test cannot discriminate old vs new behavior.
+        ok = _h27_wait_until(lambda: _g30_handler_running(cid), timeout=30, step=2)
+        assert ok, f"no live handler on {cid} — declare it in channels.yml of the instance under test"
+
+        t_proc = _g30_insert_thread("processing", cid)
+        t_pend = _g30_insert_thread("pending", cid, terminal=True)
+        d = post_json(f"/stop-thread/{t_pend}")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        assert d.get("action") == "stop-thread", f"unexpected response: {d}"
+        assert d.get("handler_cancelled") is False, \
+            f"stop of a PENDING thread must NOT cancel the handler: {d}"
+        assert _g30_handler_running(cid), \
+            "handler must still be running after stopping a pending thread"
+        tgt = _g30_status(t_pend)
+        assert tgt and tgt["terminal"] is True, \
+            f"target must be terminal after stop: {tgt}"
+        proc = _g30_status(t_proc)
+        assert proc and proc["status"] == "processing", \
+            f"processing sibling must be untouched: {proc}"
+        print(f"PASS: stop-thread on pending #{t_pend} -> handler_cancelled=false, "
+              f"handler still running, processing sibling #{t_proc} untouched, "
+              f"target terminal (skipped={d.get('skipped')})")
+    finally:
+        _g30_delete_thread_ids([x for x in (t_proc, t_pend) if x is not None])
+
+
+def test_30_stop_thread_processing_cancels_handler_and_respawns():
+    """30-B: stop-thread on the 'processing' thread with a LIVE channel handler ->
+    handler_cancelled=true, target skipped+terminal; the supervisor respawns the
+    handler and it continues the remaining pending thread; nothing is left
+    'processing' ownerless (the cancellation-branch safety net + skip_thread)."""
+    cid = _g30_channel("b")
+    t_proc = t_pend = None
+    try:
+        ok = _h27_wait_until(lambda: _g30_handler_running(cid), timeout=30, step=2)
+        assert ok, f"no live handler on {cid} — declare it in channels.yml of the instance under test"
+
+        t_proc = _g30_insert_thread("processing", cid)
+        t_pend = _g30_insert_thread("pending", cid)
+        d = post_json(f"/stop-thread/{t_proc}")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        assert d.get("handler_cancelled") is True, \
+            f"stop of the PROCESSING thread must cancel the handler: {d}"
+        tgt = _g30_status(t_proc)
+        assert tgt and tgt["status"] == "skipped" and tgt["terminal"] is True, \
+            f"target must be skipped+terminal: {tgt}"
+        # Supervisor respawns the handler (~5s loop) and it continues the remaining
+        # pending thread (no cause message -> handler marks it failed = terminal; the
+        # cancel-branch safety net also skips it if it was mid-flight).
+        ok = _h27_wait_until(lambda: _g30_handler_running(cid), timeout=30, step=2)
+        assert ok, "handler did not respawn after stop-thread cancelled it"
+        ok = _h27_wait_until(
+            lambda: (lambda s: bool(s and s["terminal"]))(_g30_status(t_pend)),
+            timeout=40, step=2)
+        assert ok, f"pending sibling #{t_pend} never reached a terminal state: {_g30_status(t_pend)}"
+        proc = _g30_status(t_proc)
+        assert proc["status"] == "skipped" and proc["terminal"] is True, \
+            f"target must stay skipped+terminal: {proc}"
+        print(f"PASS: stop-thread on processing #{t_proc} -> handler_cancelled=true; "
+              f"target skipped; handler respawned; pending #{t_pend} terminal; no orphans")
+    finally:
+        _g30_delete_thread_ids([x for x in (t_proc, t_pend) if x is not None])
+
+
+def _g30_make_task(tag, status, thread_status):
+    """Insert a kanban task directly (id = g30-<tag>-<hex>). Returns the task id."""
+    tid = f"g30-{tag}-{uuid.uuid4().hex[:8]}"
+    _h27_sql(
+        "INSERT INTO kanban_tasks (id, title, status, thread_status, archived, plan, channel_id) "
+        "VALUES (%s, %s, %s, %s, false, false, NULL)",
+        (tid, f"G30 {tag}", status, thread_status))
+    return tid
+
+
+def _g30_task(tid):
+    rows = _h27_sql("SELECT status, thread_status FROM kanban_tasks WHERE id = %s", (tid,))
+    return {"status": rows[0][0], "thread_status": rows[0][1]} if rows else None
+
+
+def test_30_stop_thread_kanban_clears_thread_status():
+    """30-C: stopping a kanban-linked thread clears kanban_tasks.thread_status in BOTH
+    stop outcomes: Block (running -> blocked, marker dropped) and Noop (todo stays todo,
+    marker dropped; NULL stays NULL). The task's own status is preserved in Noop.
+    Channel g30-c has NO handler (not declared) so the pending threads are never claimed
+    mid-test — skip_thread flips them to skipped deterministically."""
+    cid = _g30_channel("c")
+    tasks = []
+    tids = []
+    try:
+        # C1 Block: task running + thread_status running -> stop -> blocked + NULL.
+        t1 = _g30_make_task("c1", "running", "running")
+        tasks.append(t1)
+        th1 = _g30_insert_thread("pending", cid, task_id=t1, step="running", tpl="dev-executor")
+        tids.append(th1)
+        d = post_json(f"/stop-thread/{th1}")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        assert d.get("task_blocked") is True, f"C1: expected task_blocked=true: {d}"
+        row = _g30_task(t1)
+        assert row and row["status"] == "blocked" and row["thread_status"] is None, \
+            f"C1: task must be blocked with thread_status NULL: {row}"
+        st = _g30_status(th1)
+        assert st and st["status"] == "skipped" and st["terminal"] is True, \
+            f"C1: thread must be skipped+terminal: {st}"
+
+        # C2 Noop-with-marker: task todo + thread_status scheduled -> stop -> todo + NULL.
+        t2 = _g30_make_task("c2", "todo", "scheduled")
+        tasks.append(t2)
+        th2 = _g30_insert_thread("pending", cid, task_id=t2, step="running", tpl="dev-executor")
+        tids.append(th2)
+        d = post_json(f"/stop-thread/{th2}")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        assert d.get("task_blocked") is False, f"C2: expected task_blocked=false: {d}"
+        row = _g30_task(t2)
+        assert row and row["status"] == "todo" and row["thread_status"] is None, \
+            f"C2: task must STAY todo with thread_status NULL: {row}"
+
+        # C3 Noop-no-marker: task todo + thread_status NULL -> stop -> unchanged, no error.
+        t3 = _g30_make_task("c3", "todo", None)
+        tasks.append(t3)
+        th3 = _g30_insert_thread("pending", cid, task_id=t3, step="running", tpl="dev-executor")
+        tids.append(th3)
+        d = post_json(f"/stop-thread/{th3}")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        assert d.get("task_blocked") is False, f"C3: expected task_blocked=false: {d}"
+        row = _g30_task(t3)
+        assert row and row["status"] == "todo" and row["thread_status"] is None, \
+            f"C3: task must stay todo with thread_status NULL: {row}"
+        print("PASS: stop-thread on kanban-linked thread clears thread_status in Block "
+              "(running->blocked+NULL) and Noop (todo stays todo, marker dropped; "
+              "NULL stays NULL)")
+    finally:
+        _g30_delete_thread_ids(tids)
+        for t in tasks:
+            try:
+                _h27_sql("DELETE FROM kanban_tasks WHERE id = %s", (t,))
+            except Exception:
+                pass
+
+
+def test_30_stop_thread_live_pending_stop_keeps_processing():
+    """30-D LIVE (incident scenario, full-stack deploy only): with the wf-test channel
+    handler genuinely busy processing thread A (test-python_lorem 40s + wait), stopping
+    a second PENDING thread B must NOT cancel the handler: A keeps running to
+    completion (message count grows, status='completed'), B is skipped,
+    handler_cancelled=false. Pre-fix, A was dropped mid-flight and left 'processing'
+    forever. Requires the instance under test to run the NEW binary AND have a live
+    handler on the wf-test channel (mattermost-test-channel)."""
+    MM = "http://mattermost:8065"
+    try:
+        urllib.request.urlopen(MM + "/api/v4/system/ping", timeout=4)
+    except Exception:
+        print("SKIP: 30-D requires a running Mattermost (omnidev has none); "
+              "run on a full-stack deploy with the new binary")
+        return
+    cid, orig = _wf_channel_patch()
+    mm_cid = _wf_dedicated_mm_channel_id()
+    ta = tb = None
+    try:
+        try:
+            api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+        except Exception:
+            pass
+        time.sleep(1)
+        try:
+            api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+        except Exception:
+            pass
+        ensure_bundled_plugin("test-python", "tools")
+        yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
+        api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+        for attempt in range(15):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
+                tools_data = json.loads(r.read())
+                tools = tools_data if isinstance(tools_data, list) else (
+                    tools_data.get("tools") or tools_data.get("data") or [])
+                if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "")
+                       for t in tools):
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            raise AssertionError("test-python_lorem did not register after enable")
+
+        test_token = _mm_login(MM, "testuser", "Mattermost_Fresh_Start_1")
+
+        script_a = json.dumps([
+            {"name": "long_run", "tool": "test-python_lorem", "arguments": {"seconds": 40}},
+            {"name": "wait", "tool": "builtin_wait-task",
+             "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 60}},
+        ])
+        _mm_send_message(MM, mm_cid, test_token, script_a)
+        ok = _h27_wait_until(lambda: _g30_live_find_thread(cid, "long_run") is not None,
+                             timeout=60, step=2)
+        assert ok, "thread A was not created"
+        ta = _g30_live_find_thread(cid, "long_run")
+        ok = _h27_wait_until(lambda: (lambda s: bool(s and s["status"] == "processing"))(
+            _g30_status(ta)), timeout=30, step=1)
+        assert ok, f"thread A #{ta} never reached processing: {_g30_status(ta)}"
+
+        script_b = json.dumps([
+            {"name": "short", "tool": "test-python_lorem", "arguments": {"seconds": 1}},
+            {"name": "wait", "tool": "builtin_wait-task",
+             "arguments": {"task_id": "${short.task_id}", "timeout_secs": 30}},
+        ])
+        _mm_send_message(MM, mm_cid, test_token, script_b)
+        ok = _h27_wait_until(lambda: _g30_live_find_thread(cid, '"short"') is not None,
+                             timeout=30, step=1)
+        assert ok, "thread B was not created"
+        tb = _g30_live_find_thread(cid, '"short"')
+        st_b = _g30_status(tb)
+        assert st_b and st_b["status"] == "pending", f"thread B must be pending: {st_b}"
+
+        msgs_before = _g30_msg_count(ta)
+        d = post_json(f"/stop-thread/{tb}")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        assert d.get("handler_cancelled") is False, \
+            f"stopping PENDING B must not cancel the handler: {d}"
+        st_b = _g30_status(tb)
+        assert st_b and st_b["status"] == "skipped" and st_b["terminal"] is True, \
+            f"B must be skipped+terminal: {st_b}"
+        st_a = _g30_status(ta)
+        assert st_a and st_a["status"] == "processing", \
+            f"A must still be processing after stopping B: {st_a}"
+        ok = _h27_wait_until(lambda: (lambda s: bool(s and s["status"] == "completed"))(
+            _g30_status(ta)), timeout=90, step=3)
+        assert ok, f"thread A never completed after stopping B: {_g30_status(ta)}"
+        msgs_after = _g30_msg_count(ta)
+        assert msgs_after > msgs_before, \
+            f"thread A message count must grow after stopping B: {msgs_before} -> {msgs_after}"
+        print(f"PASS: stop-thread on pending B #{tb} -> handler_cancelled=false; "
+              f"A #{ta} kept processing ({msgs_before}->{msgs_after} msgs) and completed; "
+              f"B skipped+terminal")
+    finally:
+        _g30_delete_thread_ids([x for x in (ta, tb) if x is not None])
+        try:
+            yaml_del("tools", "test-python")
+            remove_bundled_plugin("test-python", "tools")
+            remove_remote_plugin("test-python", "tools")
+        except Exception:
+            pass
+        _wf_channel_restore(cid, orig)
+
+
+test(test_30_stop_thread_pending_never_cancels_handler)
+test(test_30_stop_thread_processing_cancels_handler_and_respawns)
+test(test_30_stop_thread_kanban_clears_thread_status)
+test(test_30_stop_thread_live_pending_stop_keeps_processing)
+
+
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
