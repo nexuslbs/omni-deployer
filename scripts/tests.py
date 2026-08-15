@@ -1650,9 +1650,19 @@ def _git_status(repo_dir):
 
 def _git_discard_all(repo_dir):
     """Restore all tracked files to HEAD — unstages, then restores modified/deleted files.
-    Does NOT git clean -fd (preserves compiled Rust binaries under target/)."""
+    Does NOT git clean -fd (preserves compiled Rust binaries under target/).
+
+    config/channels.yml is EXCLUDED: the deploy run pins the `cron` channel to
+    noop/test-tool-caller so the fresh-DB suite never 401s on the omni
+    profile's deepseek fallback. Reverting it mid-run would re-introduce the
+    401 storm for GROUP 27's cron/hook threads. The deploy's final seed
+    restore reverts channels.yml to HEAD at the end of the run (and Step 0.5
+    of the next run auto-restores it if a run dies midway)."""
     subprocess.run(["git", "reset", "HEAD", "--", "."], cwd=repo_dir, capture_output=True)
-    subprocess.run(["git", "checkout", "HEAD", "--", "."], cwd=repo_dir, capture_output=True)
+    subprocess.run(
+        ["git", "checkout", "HEAD", "--", ".", ":(exclude)config/channels.yml"],
+        cwd=repo_dir, capture_output=True,
+    )
     # Intentionally no git clean -fd — that would delete compiled binaries from target/
 
 def check_git_clean():
@@ -1663,8 +1673,12 @@ def check_git_clean():
         # bind-mounted host directory (plugins.yml, remote.yml, actions.yml,
         # settings.yml, plugins/tools/). If these are the *only* dirty files,
         # revert/remove them silently and proceed; any other dirtiness is
-        # unexpected and still raises.
-        known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "plugins/tools/"}
+        # unexpected and still raises. config/channels.yml is also allowed:
+        # the deploy run pins the cron channel to noop (fresh-DB suite must
+        # never hit the omni profile's deepseek fallback) — that pin is NOT
+        # reverted here (the deploy's final seed restore reverts it), so a
+        # channels.yml-only dirty tree is expected and tolerated.
+        known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "config/channels.yml", "plugins/tools/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
@@ -1672,7 +1686,7 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml"],
+                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             # Remove untracked transient test artifacts (plugins/tools/)
@@ -1681,6 +1695,11 @@ def check_git_clean():
                 subprocess.run(["rm", "-rf", tools_dir], capture_output=True)
             dirty = _git_status(OMNI_STACK_DIR)
             if not dirty:
+                return
+            # Only the deploy's noop pin on channels.yml may remain (kept
+            # intentionally; the final seed restore reverts it).
+            remaining = [l for l in dirty.split("\n") if l.strip()]
+            if all("config/channels.yml" in l for l in remaining):
                 return
         raise RuntimeError(
             f"omni-stack repo has unstaged changes: cannot run tests safely:\n{dirty}"
@@ -3761,6 +3780,34 @@ def test_p7_idempotent():
 
 
 
+def _wf_drain_channel(cid, timeout=90):
+    """Wait until the channel has NO pending/processing threads (full drain).
+
+    The channel handler claims pending threads within ~1s, but a workflow
+    test (e.g. D9) returns as soon as its task leaves 'todo' — its executor
+    thread can STILL be processing. The dispatch gate counts
+    pending/processing, so the next test's first dispatch would return
+    dispatched:false ("Channel busy") and its task would never run. Every
+    workflow test must start from a clean channel.
+    """
+    import psycopg2 as _pg
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with _pg.connect(os.environ["DATABASE_URL"]) as _conn:
+                with _conn.cursor() as _cur:
+                    _cur.execute(
+                        "SELECT COUNT(*) FROM threads WHERE channel_id = %s "
+                        "AND status IN ('pending','processing')", (cid,))
+                    n = _cur.fetchone()[0]
+            if n == 0:
+                return
+        except Exception:
+            pass
+        time.sleep(0.5)
+    print(f"  [warn] channel {cid} did not fully drain within {timeout}s")
+
+
 def _wf_channel_patch():
     """Return the DEDICATED workflow-test channel (omniagent 'mattermost-test-channel',
     Mattermost 'test-channel' in team 'omni') — PERMANENTLY configured with
@@ -3775,6 +3822,11 @@ def _wf_channel_patch():
     channel for tests — fail loudly if the dedicated channel is missing.
     Returns (channel_id, None) — _wf_channel_restore is a no-op for orig=None."""
     cid = _wf_dedicated_channel()
+    # The workflow tests share one channel and the dispatch gate counts
+    # pending/processing threads, so every test must start from a clean
+    # channel (the previous test's executor thread can outlive its task
+    # status transition — see _wf_drain_channel).
+    _wf_drain_channel(cid)
     return cid, None
 
 
@@ -6539,8 +6591,27 @@ def tasks_yml_remove_keys(pred):
             continue
         out.append(line)
         i += 1
-    with open(path, "w") as f:
-        f.writelines(out)
+    # Atomic write (tmp + rename): the hooks engine loads tasks.yml on every
+    # event, and _h27_run_cron removes its schedule IMMEDIATELY after the run
+    # POST returns — the same moment the thread_started event fires. A
+    # non-atomic truncate+write lets the engine read a partial file, which
+    # parse-fails and is treated as EMPTY -> every hook misses the event
+    # (flaky GROUP 27 failures). os.replace is atomic on POSIX. The temp
+    # file must carry the ORIGINAL file's permissions (mkstemp creates 0600,
+    # which breaks git reads of the bind mount by non-root users).
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tasks-rm-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.writelines(out)
+        os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 test(test_20_8_schedule_crud)
@@ -7929,6 +8000,20 @@ def _g29_kanban_thread_status(task_id):
     return rows[0][0] if rows else None
 
 
+def _g29_assert_thread_status_marker(tid):
+    """Assert the dispatch marker was set.
+
+    thread_status is 'scheduled' the moment the dispatch returns, but the
+    channel handler flips it to 'running' as soon as it picks the thread up
+    (kanban_updater on pickup). With an idle handler the pickup can land
+    BEFORE the test's read — both values prove the dispatch marker was set,
+    so the assertion accepts either.
+    """
+    ts = _g29_kanban_thread_status(tid)
+    assert ts in ("scheduled", "running"), \
+        f"thread_status must be 'scheduled' (or 'running' after pickup), got {ts!r}"
+
+
 def _g29_threads(task_id):
     """All kanban threads for a task (id, status, terminal, workflow_step, template)."""
     rows = _h27_sql(
@@ -7983,8 +8068,7 @@ def test_29_status_change_dispatch_running():
         thr = _g29_threads(tid)
         run = [t for t in thr if t["workflow_step"] == "running"]
         assert run, f"no running step thread: {thr}"
-        assert _g29_kanban_thread_status(tid) == "scheduled", \
-            f"thread_status must be 'scheduled', got {_g29_kanban_thread_status(tid)!r}"
+        _g29_assert_thread_status_marker(tid)
         gd = _wf_task_status(tid)
         assert gd.get("status") == "running", f"task must stay 'running', got {gd.get('status')}"
         print(f"PASS: PATCH->running dispatched executor thread {d['thread_id']} "
@@ -8016,8 +8100,7 @@ def test_29_status_change_dispatch_testing_skips_stale():
             f"stale thread {stale_id} must be skipped: {stale}"
         assert stale[0]["terminal"] is True, \
             f"skipped thread must be terminal=true: {stale[0]}"
-        assert _g29_kanban_thread_status(tid) == "scheduled", \
-            f"thread_status must be 'scheduled', got {_g29_kanban_thread_status(tid)!r}"
+        _g29_assert_thread_status_marker(tid)
         gd = _wf_task_status(tid)
         assert gd.get("status") == "testing", f"task must be 'testing', got {gd.get('status')}"
         print(f"PASS: PATCH running->testing dispatched tester thread {d['thread_id']}; "
@@ -8100,10 +8183,9 @@ def test_29_redispatch_endpoint():
         assert any(t["workflow_step"] == "running" for t in thr), f"no running thread: {thr}"
         gd = _wf_task_status(tid)
         assert gd.get("status") == "running", f"redispatch must NOT change status: {gd.get('status')}"
-        assert _g29_kanban_thread_status(tid) == "scheduled", \
-            f"thread_status must be 'scheduled', got {_g29_kanban_thread_status(tid)!r}"
+        _g29_assert_thread_status_marker(tid)
         print(f"PASS: redispatch on running task -> redispatch:true thread {d['thread_id']}, "
-              f"status unchanged (running), thread_status=scheduled")
+              f"status unchanged (running), thread_status={_g29_kanban_thread_status(tid)}")
 
         # E2: active thread present -> no-op 'already active'.
         stale_id = _g29_insert_pending_thread(tid, cid, step="running", template="dev-executor")
@@ -8225,12 +8307,27 @@ def _g30_delete_channel(cid):
     _h27_sql("DELETE FROM threads WHERE channel_id = %s", (cid,))
 
 
-def _g30_live_find_thread(cid, marker):
-    """Id of the newest thread on cid whose seq-0 user message contains marker."""
+def _g30_max_thread_id():
+    """Current max thread id — baseline for finding only NEWLY created threads."""
+    return _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0][0]
+
+
+def _g30_live_find_thread(cid, marker, since_id=0):
+    """Id of the newest thread created AFTER since_id on cid whose seq-0 user
+    message contains marker.
+
+    seq-0 messages are created with role='cause' (msg_type='Cause') since the
+    role/msg_type rename; role='user' is kept for backward compatibility with
+    older rows. `since_id` excludes STALE threads from earlier tests whose
+    content happens to contain the same marker (e.g. GROUP 13's long_run
+    scripts) — without it the live tests can latch onto an old thread and
+    "never reach processing" because it is already terminal.
+    """
     rows = _h27_sql(
         "SELECT t.id FROM threads t JOIN messages m ON m.thread_id = t.id "
-        "WHERE t.channel_id = %s AND m.thread_sequence = 0 AND m.role = 'user' "
-        "AND m.content LIKE %s ORDER BY t.id DESC LIMIT 1", (cid, f"%{marker}%"))
+        "WHERE t.channel_id = %s AND m.thread_sequence = 0 AND m.role IN ('user', 'cause') "
+        "AND t.id > %s AND m.content LIKE %s ORDER BY t.id DESC LIMIT 1",
+        (cid, since_id, f"%{marker}%"))
     return rows[0][0] if rows else None
 
 
@@ -8440,11 +8537,16 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
             {"name": "wait", "tool": "builtin_wait-task",
              "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 60}},
         ])
+        # Baseline BEFORE posting: earlier tests (GROUP 13) also post scripts
+        # whose content contains "long_run" — without the baseline the finder
+        # latches onto that stale (already-terminal) thread and the
+        # "processing" wait can never succeed.
+        pre_a = _g30_max_thread_id()
         _mm_send_message(MM, mm_cid, test_token, script_a)
-        ok = _h27_wait_until(lambda: _g30_live_find_thread(cid, "long_run") is not None,
+        ok = _h27_wait_until(lambda: _g30_live_find_thread(cid, "long_run", pre_a) is not None,
                              timeout=60, step=2)
         assert ok, "thread A was not created"
-        ta = _g30_live_find_thread(cid, "long_run")
+        ta = _g30_live_find_thread(cid, "long_run", pre_a)
         ok = _h27_wait_until(lambda: (lambda s: bool(s and s["status"] == "processing"))(
             _g30_status(ta)), timeout=30, step=1)
         assert ok, f"thread A #{ta} never reached processing: {_g30_status(ta)}"
@@ -8454,11 +8556,12 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
             {"name": "wait", "tool": "builtin_wait-task",
              "arguments": {"task_id": "${short.task_id}", "timeout_secs": 30}},
         ])
+        pre_b = _g30_max_thread_id()
         _mm_send_message(MM, mm_cid, test_token, script_b)
-        ok = _h27_wait_until(lambda: _g30_live_find_thread(cid, '"short"') is not None,
+        ok = _h27_wait_until(lambda: _g30_live_find_thread(cid, '"short"', pre_b) is not None,
                              timeout=30, step=1)
         assert ok, "thread B was not created"
-        tb = _g30_live_find_thread(cid, '"short"')
+        tb = _g30_live_find_thread(cid, '"short"', pre_b)
         st_b = _g30_status(tb)
         assert st_b and st_b["status"] == "pending", f"thread B must be pending: {st_b}"
 

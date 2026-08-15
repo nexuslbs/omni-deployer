@@ -40,6 +40,65 @@ OMNIAGENT_DIR = os.path.join(WORKSPACE_DIR, "omniagent")
 REMOTE_REPO = os.path.join(WORKSPACE_DIR, "omni-plugins")
 
 
+def patch_deploy_channels_noop():
+    """Pin the deploy environment's system channels to the noop provider.
+
+    The deploy runs on a FRESH database with NO LLM secrets (never seeds
+    secrets.env — that is omnidev/omnistable-only). But channels.yml is the
+    shared bind-mounted config, and the `omni` profile pins
+    provider=deepseek, so any thread on a channel WITHOUT an explicit
+    provider (e.g. the `cron` channel used by the hooks/schedule tests)
+    falls through to deepseek and 401s: "Config ref $secret:DEEPSEEK_API_KEY
+    not found in secrets table".
+
+    The deploy must therefore run with noop/test-tool-caller as the only
+    provider. The wf-test channel is already pinned noop by the tests; the
+    `cron` channel is the one system channel the tests actually execute
+    threads on. Patching it here (deploy-only) is safe for the LIVE
+    omnistable stack: its tasks.yml has no schedules/hooks on `cron`, so no
+    live thread ever runs on that channel, and the final seed restore
+    reverts channels.yml to HEAD at the end of the run anyway.
+
+    Idempotent: no-op when the cron channel already carries provider/model.
+    """
+    path = os.path.join(OMNI_STACK_DIR, "config", "channels.yml")
+    with open(path) as f:
+        content = f.read()
+    # The cron channel block in the committed channels.yml (HEAD) is:
+    #   cron:
+    #     resource_identifier: cron
+    #     cause: system
+    #     profile: omni
+    # Match the block, insert provider/model after the `profile:` line.
+    import re
+    m = re.search(r"(?ms)^  cron:\n(?:    [^\n]*\n)*", content)
+    if not m:
+        print("  [WARNING: no cron channel block found in channels.yml — noop pin skipped]")
+        return
+    block = m.group(0)
+    if re.search(r"(?m)^    provider:", block):
+        print("  ✓ cron channel already pinned (noop) — skipping")
+        return
+    if not re.search(r"(?m)^    profile:", block):
+        print("  [WARNING: cron channel block has no profile line — noop pin skipped]")
+        return
+    new_block = re.sub(
+        r"(?m)^    profile: [^\n]*$",
+        lambda m: m.group(0) + "\n    provider: noop\n    model: test-tool-caller",
+        block,
+        count=1,
+    )
+    content = content[: m.start()] + new_block + content[m.end():]
+    # The bind-mounted config files are root-owned (the omniagent container
+    # writes them as root); write via a temp file + sudo mv like every other
+    # config mutation in this script.
+    tmp_path = path + ".deploy-noop"
+    with open(tmp_path, "w") as f:
+        f.write(content)
+    sh(f"sudo mv -f {tmp_path} {path}")
+    print("  ✓ patched channels.yml: cron channel pinned to noop/test-tool-caller (deploy-only)")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  sudo compat
 # ═══════════════════════════════════════════════════════════════════════
@@ -420,6 +479,14 @@ def deploy(mode):
     generate_env(mode)
     compose = compose_cmd(mode)
 
+    # Step 0.6: Pin the deploy environment to the noop provider. The deploy
+    # DB is fresh with NO LLM secrets (secrets.env is omnidev/omnistable-only
+    # and is never read here); the shared omni profile pins deepseek, so any
+    # thread on a channel without an explicit provider (cron/hooks/schedules)
+    # would 401. Channels.yml is restored to HEAD by the final seed restore.
+    print("\n[deploy] Pinning system channels to noop provider (deploy-only)...")
+    patch_deploy_channels_noop()
+
     # ── Step 0 (hybrid): Stop old containers first ────────────────
     if mode == "hybrid":
         print("\n[deploy] Stopping old services...")
@@ -661,7 +728,7 @@ def deploy(mode):
         # (plugins.yml, remote.yml, actions.yml, settings.yml) from the
         # bind-mounted omni-stack directory so check_git_clean() never
         # fails on retries.
-        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- config/plugins.yml config/remote.yml config/actions.yml config/settings.yml config/workflows.yml 2>/dev/null; true")
+        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- config/plugins.yml config/remote.yml config/actions.yml config/settings.yml config/workflows.yml config/tasks.yml 2>/dev/null; true")
         print(f"\n{'=' * 60}")
         print(f"  INTEGRATION TESTS — PASS {pass_num}")
         print(f"{'=' * 60}")
@@ -713,7 +780,7 @@ def deploy(mode):
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
-       "config/settings.yml config/workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "config/settings.yml config/workflows.yml config/tasks.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious

@@ -1545,9 +1545,13 @@ TOOL_DEFS = {
     },
     "query_database": {
         "plugin": "query",
-        "test_args": {"sql": "SELECT id, name FROM channels ORDER BY id LIMIT 1"},
+        # The legacy `channels` DB table was DROPPED by the migration (channels
+        # now live in channels.yml; threads.channel_id holds the channel NAME).
+        # Query a surviving table and alias a column to keep the success_key
+        # meaningful for the agent-mode response check.
+        "test_args": {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"},
         "success_key": "channel",
-        "mcp_test_args": {"sql": "SELECT id, name FROM channels ORDER BY id LIMIT 1"},
+        "mcp_test_args": {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"},
     },
     "query_search-messages": {
         "plugin": "query",
@@ -1563,9 +1567,12 @@ TOOL_DEFS = {
     },
     "query_channel-prompts": {
         "plugin": "query",
-        "test_args": {"channel_id": 1, "limit": 5},
+        # channel_id is now the channel NAME (channels table dropped; the yml
+        # key is the identifier). A numeric id fails with "'channel_id' is
+        # required ... Pass channel_id explicitly".
+        "test_args": {"channel_id": "kanban", "limit": 5},
         "success_key": "found",
-        "mcp_test_args": {"channel_id": 1, "limit": 5},
+        "mcp_test_args": {"channel_id": "kanban", "limit": 5},
     },
     "query_channels": {
         "plugin": "query",
@@ -1948,10 +1955,13 @@ def run_tests():
             ("subtasks_list-subtasks", {"thread_id": 1}, "subtask"),
             ("actions_relevance-indexer", {}, "relevance"),
             ("plugin-manager_plugin-manager", {"action": "list"}, "plugin"),
-            ("query_database", {"sql": "SELECT id, name FROM channels ORDER BY id LIMIT 1"}, "channel"),
+            ("query_database", {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"}, "channel"),
             ("query_search-messages", {"query": "test", "limit": 1}, "found"),
             ("query_thread-messages", {"thread_id": 1, "limit": 5}, "found"),
-            ("query_channel-prompts", {"channel_id": 1, "limit": 5}, "found"),
+            # channel_id is the channel NAME now (channels table dropped by the
+            # migration; threads.channel_id holds the yml key). A numeric id
+            # errors out with "'channel_id' is required".
+            ("query_channel-prompts", {"channel_id": "kanban", "limit": 5}, "found"),
             ("query_channels", {"limit": 10}, "channel"),
             ("skills_list-skills", {}, "skill"),
             ("memory_list-memories", {}, "memory"),
