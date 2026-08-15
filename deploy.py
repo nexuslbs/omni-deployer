@@ -340,7 +340,8 @@ def deploy(mode):
     dirty_lines = r.stdout.splitlines()
     if dirty_lines:
         KNOWN_RESIDUE = {
-            "config/actions.yml", "config/plugins.yml", "config/settings.yml", "config/workflows.yml",
+            "config/actions.yml", "config/channels.yml", "config/plugins.yml",
+            "config/settings.yml", "config/workflows.yml",
             "config/remote.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md",
         }
         tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
@@ -362,7 +363,12 @@ def deploy(mode):
             if u.startswith("plugins"):
                 sh(f"cd /opt/workspace/omni-stack && sudo rm -rf -- {u} 2>/dev/null; true")
         r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
-        if r.stdout.strip():
+        # Untracked files are the LIVE agent's own data-dir artifacts (wiki
+        # pages, config symlinks / plugins.yml at the data-dir root) — NOT
+        # deploy residue, so they must not block the run. Only tracked files
+        # count as dirt (same rule as the end-of-run check below).
+        tracked_dirty = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
+        if tracked_dirty:
             raise RuntimeError(
                 "omni-stack still dirty after known-residue restore. "
                 f"Refusing to continue:\n{r.stdout}"
@@ -685,8 +691,8 @@ def deploy(mode):
     # MUST be restored here or the next run's Step 0.5 fails on a dirty tree.
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
-       "sudo git checkout HEAD -- config/actions.yml config/plugins.yml config/settings.yml "
-       "config/workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
+       "config/settings.yml config/workflows.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious
