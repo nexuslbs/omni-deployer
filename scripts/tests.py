@@ -7831,6 +7831,252 @@ def test_28_terminal_status_invariant():
 
 test(test_28_terminal_status_invariant)
 
+#  GROUP 29: Kanban status-change dispatch + /redispatch (task_18cbc3b0765efa85)
+print(f"\n{'=' * 60}")
+print("GROUP 29: Status-change dispatch (PATCH /kanban/tasks/{id}/status -> role thread) + POST /kanban/tasks/{id}/redispatch")
+print(f"{'=' * 60}")
+
+
+def _g29_patch_status(task_id, status):
+    """PATCH /kanban/tasks/{id}/status; returns the response data dict."""
+    st, resp = _h27_api("PATCH", f"/kanban/tasks/{task_id}/status", {"status": status})
+    assert st == 200, f"PATCH status {task_id} -> {status} failed: {st} {resp}"
+    return resp.get("data", resp)
+
+
+def _g29_redispatch(task_id):
+    """POST /kanban/tasks/{id}/redispatch; returns (status, data dict)."""
+    st, resp = _h27_api("POST", f"/kanban/tasks/{task_id}/redispatch", {})
+    return st, resp.get("data", resp)
+
+
+def _g29_kanban_thread_status(task_id):
+    """kanban_tasks.thread_status for a task."""
+    rows = _h27_sql("SELECT thread_status FROM kanban_tasks WHERE id = %s", (task_id,))
+    return rows[0][0] if rows else None
+
+
+def _g29_threads(task_id):
+    """All kanban threads for a task (id, status, terminal, workflow_step, template)."""
+    rows = _h27_sql(
+        "SELECT id, status, terminal, workflow_step, template FROM threads "
+        "WHERE task_id = %s AND task_type = 'kanban' ORDER BY id", (task_id,))
+    return [{"id": r[0], "status": r[1], "terminal": r[2],
+             "workflow_step": r[3], "template": r[4]} for r in rows]
+
+
+def _g29_insert_pending_thread(task_id, cid, step="running", template="dev-executor"):
+    """INSERT a stale pending kanban thread for a task (deterministic skip target)."""
+    _h27_sql(
+        "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan, "
+        "task_id, task_type, workflow_step, template) "
+        "VALUES ('pending', 'system', %s, 'omni', false, false, %s, 'kanban', %s, %s)",
+        (cid, task_id, step, template))
+    rows = _h27_sql("SELECT id FROM threads WHERE task_id = %s AND status = 'pending' "
+                    "ORDER BY id DESC LIMIT 1", (task_id,))
+    return rows[0][0] if rows else None
+
+
+def _g29_make_task(title, status="todo", workflow_id="omniagent-dev", cid="kanban"):
+    body = {"title": title, "status": status, "channel_id": cid}
+    if workflow_id:
+        body["workflow_id"] = workflow_id
+    r = post_json("/kanban/tasks", body)
+    d = r.get("data", r)
+    assert d.get("id"), f"task create failed: {r}"
+    return d["id"]
+
+
+def _g29_cleanup_threads(tids):
+    for t in tids:
+        try:
+            _h27_sql("DELETE FROM threads WHERE task_id = %s", (t,))
+        except Exception:
+            pass
+
+
+def test_29_status_change_dispatch_running():
+    """29-A: PATCH todo->running on a workflow task must dispatch the executor thread
+    (thread row workflow_step='running', kanban_tasks.thread_status='scheduled'), and
+    the task status stays 'running' (caller owns the transition)."""
+    cid, orig = _wf_channel_patch()
+    tids = []
+    try:
+        tid = _g29_make_task(f"g29-a-{uuid.uuid4().hex[:8]}", cid=cid)
+        tids.append(tid)
+        d = _g29_patch_status(tid, "running")
+        assert d.get("dispatched") is True, f"expected dispatched:true, got {d}"
+        assert d.get("thread_id"), f"expected thread_id, got {d}"
+        thr = _g29_threads(tid)
+        run = [t for t in thr if t["workflow_step"] == "running"]
+        assert run, f"no running step thread: {thr}"
+        assert _g29_kanban_thread_status(tid) == "scheduled", \
+            f"thread_status must be 'scheduled', got {_g29_kanban_thread_status(tid)!r}"
+        gd = _wf_task_status(tid)
+        assert gd.get("status") == "running", f"task must stay 'running', got {gd.get('status')}"
+        print(f"PASS: PATCH->running dispatched executor thread {d['thread_id']} "
+              f"(workflow_step=running, thread_status=scheduled, task status=running)")
+    finally:
+        _g29_cleanup_threads(tids)
+        _wf_cleanup([], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_29_status_change_dispatch_testing_skips_stale():
+    """29-B: PATCH running->testing dispatches the tester thread AND skips any stale
+    pending/processing thread for the task (status='skipped', terminal=true)."""
+    cid, orig = _wf_channel_patch()
+    tids = []
+    tid = None
+    try:
+        tid = _g29_make_task(f"g29-b-{uuid.uuid4().hex[:8]}", status="running", cid=cid)
+        tids.append(tid)
+        stale_id = _g29_insert_pending_thread(tid, cid, step="running", template="dev-executor")
+        assert stale_id, f"failed to insert stale pending thread for {tid}"
+        d = _g29_patch_status(tid, "testing")
+        assert d.get("dispatched") is True, f"expected dispatched:true, got {d}"
+        thr = _g29_threads(tid)
+        tst = [t for t in thr if t["workflow_step"] == "testing"]
+        assert tst, f"no testing step thread: {thr}"
+        stale = [t for t in thr if t["id"] == stale_id]
+        assert stale and stale[0]["status"] == "skipped", \
+            f"stale thread {stale_id} must be skipped: {stale}"
+        assert stale[0]["terminal"] is True, \
+            f"skipped thread must be terminal=true: {stale[0]}"
+        assert _g29_kanban_thread_status(tid) == "scheduled", \
+            f"thread_status must be 'scheduled', got {_g29_kanban_thread_status(tid)!r}"
+        gd = _wf_task_status(tid)
+        assert gd.get("status") == "testing", f"task must be 'testing', got {gd.get('status')}"
+        print(f"PASS: PATCH running->testing dispatched tester thread {d['thread_id']}; "
+              f"stale thread #{stale_id} skipped+terminal=true; thread_status=scheduled")
+    finally:
+        _g29_cleanup_threads(tids)
+        _wf_cleanup([], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_29_status_change_dispatch_review():
+    """29-C: PATCH testing->review dispatches the reviewer thread + skips stale tester."""
+    cid, orig = _wf_channel_patch()
+    tids = []
+    try:
+        tid = _g29_make_task(f"g29-c-{uuid.uuid4().hex[:8]}", status="testing", cid=cid)
+        tids.append(tid)
+        stale_id = _g29_insert_pending_thread(tid, cid, step="testing", template="dev-tester")
+        assert stale_id, f"failed to insert stale pending thread for {tid}"
+        d = _g29_patch_status(tid, "review")
+        assert d.get("dispatched") is True, f"expected dispatched:true, got {d}"
+        thr = _g29_threads(tid)
+        rvw = [t for t in thr if t["workflow_step"] == "review"]
+        assert rvw, f"no review step thread: {thr}"
+        stale = [t for t in thr if t["id"] == stale_id]
+        assert stale and stale[0]["status"] == "skipped" and stale[0]["terminal"] is True, \
+            f"stale tester thread must be skipped+terminal: {stale}"
+        print(f"PASS: PATCH testing->review dispatched reviewer thread {d['thread_id']}; "
+              f"stale tester #{stale_id} skipped+terminal=true")
+    finally:
+        _g29_cleanup_threads(tids)
+        _wf_cleanup([], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_29_status_change_no_workflow_noop():
+    """29-D: non-workflow task — PATCH->running dispatches the executor (plain path);
+    PATCH running->testing is a NO-OP (no tester role, no workflow)."""
+    cid, orig = _wf_channel_patch()
+    tids = []
+    try:
+        tid = _g29_make_task(f"g29-d-{uuid.uuid4().hex[:8]}", status="todo",
+                             workflow_id=None, cid=cid)
+        tids.append(tid)
+        d = _g29_patch_status(tid, "running")
+        assert d.get("dispatched") is True, f"plain todo->running must dispatch executor, got {d}"
+        thr = _g29_threads(tid)
+        assert any(t["workflow_step"] == "running" for t in thr), f"no running thread: {thr}"
+        before = len(thr)
+        d2 = _g29_patch_status(tid, "testing")
+        assert d2.get("dispatched") is False, \
+            f"plain running->testing must be a no-op (dispatched:false), got {d2}"
+        thr2 = _g29_threads(tid)
+        assert len(thr2) == before, f"no-op must not create a thread: {thr2}"
+        assert not any(t["workflow_step"] == "testing" for t in thr2), \
+            f"no testing thread expected for plain task: {thr2}"
+        print(f"PASS: plain task ->running dispatches executor (thread {d['thread_id']}); "
+              f"->testing no-op (dispatched:false, no thread)")
+    finally:
+        _g29_cleanup_threads(tids)
+        _wf_cleanup([], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_29_redispatch_endpoint():
+    """29-E: POST /kanban/tasks/{id}/redispatch — creates the role thread for the
+    task's CURRENT status without changing it; no-op with an active thread or a
+    status with no role; 404 for a missing task."""
+    cid, orig = _wf_channel_patch()
+    tids = []
+    try:
+        # E1: running task with NO active thread -> redispatch creates executor thread,
+        #     task status unchanged, thread_status='scheduled'.
+        tid = _g29_make_task(f"g29-e1-{uuid.uuid4().hex[:8]}", status="running", cid=cid)
+        tids.append(tid)
+        st, d = _g29_redispatch(tid)
+        assert st == 200 and d.get("redispatch") is True and d.get("thread_id"), \
+            f"redispatch on running (no thread) must create: {st} {d}"
+        thr = _g29_threads(tid)
+        assert any(t["workflow_step"] == "running" for t in thr), f"no running thread: {thr}"
+        gd = _wf_task_status(tid)
+        assert gd.get("status") == "running", f"redispatch must NOT change status: {gd.get('status')}"
+        assert _g29_kanban_thread_status(tid) == "scheduled", \
+            f"thread_status must be 'scheduled', got {_g29_kanban_thread_status(tid)!r}"
+        print(f"PASS: redispatch on running task -> redispatch:true thread {d['thread_id']}, "
+              f"status unchanged (running), thread_status=scheduled")
+
+        # E2: active thread present -> no-op 'already active'.
+        stale_id = _g29_insert_pending_thread(tid, cid, step="running", template="dev-executor")
+        assert stale_id
+        st, d = _g29_redispatch(tid)
+        assert st == 200 and d.get("redispatch") is False, \
+            f"redispatch with active thread must no-op: {st} {d}"
+        assert "already active" in (d.get("reason") or ""), f"reason: {d}"
+        print(f"PASS: redispatch with active thread #{stale_id} -> redispatch:false 'already active'")
+
+        # E3: todo task -> no-op (status has no role).
+        tid2 = _g29_make_task(f"g29-e3-{uuid.uuid4().hex[:8]}", status="todo", cid=cid)
+        tids.append(tid2)
+        st, d = _g29_redispatch(tid2)
+        assert st == 200 and d.get("redispatch") is False, \
+            f"redispatch on todo must no-op: {st} {d}"
+        assert "no role to run" in (d.get("reason") or ""), f"reason: {d}"
+        print(f"PASS: redispatch on todo -> redispatch:false 'no role to run'")
+
+        # E4: testing on a non-workflow task -> no-op.
+        tid3 = _g29_make_task(f"g29-e4-{uuid.uuid4().hex[:8]}", status="testing",
+                              workflow_id=None, cid=cid)
+        tids.append(tid3)
+        st, d = _g29_redispatch(tid3)
+        assert st == 200 and d.get("redispatch") is False, \
+            f"redispatch on plain testing must no-op: {st} {d}"
+        assert "no role to run" in (d.get("reason") or ""), f"reason: {d}"
+        print(f"PASS: redispatch on plain testing -> redispatch:false 'no role to run'")
+
+        # E5: missing task -> 404.
+        st, d = _g29_redispatch("task_g29_nonexistent_xyz")
+        assert st == 404, f"redispatch on missing task must 404, got {st} {d}"
+        print("PASS: redispatch on missing task -> HTTP 404")
+    finally:
+        _g29_cleanup_threads(tids)
+        _wf_cleanup([], tids)
+        _wf_channel_restore(cid, orig)
+
+
+test(test_29_status_change_dispatch_running)
+test(test_29_status_change_dispatch_testing_skips_stale)
+test(test_29_status_change_dispatch_review)
+test(test_29_status_change_no_workflow_noop)
+test(test_29_redispatch_endpoint)
+
+
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
