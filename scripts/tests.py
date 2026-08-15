@@ -3769,6 +3769,36 @@ def _wf_channel_patch():
     return cid, None
 
 
+def _wf_mm_test_channel_id():
+    """Return the Mattermost channel id of the dedicated wf-test MM channel
+    ('test-channel' in team 'omni'), or None if it does not exist yet.
+    The agent auto-creates an omniagent channel for it named
+    'mattermost-{mm_id[:8]}' — ids change on every fresh setup, so the
+    omniagent channel is resolved by resource_identifier (== this id), NOT
+    by name."""
+    import json as _json
+    MM = "http://mattermost:8065"
+    admin_data = _json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
+    admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
+                                       headers={"Content-Type": "application/json"})
+    try:
+        admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+    except urllib.error.HTTPError:
+        return None
+    if not admin_token:
+        return None
+    auth = {"Authorization": "Bearer " + admin_token}
+    teams = _json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/users/me/teams", headers=auth), timeout=10).read())
+    team_id = next((t["id"] for t in teams if t["name"] == "omni"), None)
+    if not team_id:
+        return None
+    channels = _json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels", headers=auth), timeout=10).read())
+    mm_ch = next((c for c in channels if c["name"] == "test-channel"), None)
+    return mm_ch["id"] if mm_ch else None
+
+
 def _wf_bootstrap_test_channel():
     """Create the DEDICATED workflow-test channel from scratch.
 
@@ -3847,16 +3877,17 @@ def _wf_bootstrap_test_channel():
     )
 
     cid = new_ch["id"]
-    urllib.request.urlopen(urllib.request.Request(
-        f"{BASE}/channels/{cid}",
-        data=json.dumps({"name": "mattermost-test-channel"}).encode(),
-        method="PATCH", headers={"Content-Type": "application/json"}), timeout=10).read()
+    # NOTE: the agent does NOT allow renaming a channel (the channel name IS
+    # the channels.yml key — PATCH name returns 500 by design), so the
+    # auto-created 'mattermost-{id[:8]}' name is kept. The channel is resolved
+    # afterwards by resource_identifier (== the MM 'test-channel' id), which is
+    # stable within a run. Only provider/model are patched (permanent).
     urllib.request.urlopen(urllib.request.Request(
         f"{BASE}/channels/{cid}",
         data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller"}).encode(),
         method="PATCH", headers={"Content-Type": "application/json"}), timeout=10).read()
-    print(f"[wf-test: omniagent channel {cid} bootstrapped as 'mattermost-test-channel' "
-          "(noop/test-tool-caller)]")
+    print(f"[wf-test: omniagent channel {cid} bootstrapped "
+          "(noop/test-tool-caller, resource_identifier={new_ch.get('resource_identifier')})]")
     allch = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
     return next(c for c in allch if c.get("id") == cid)
 
@@ -3869,11 +3900,17 @@ def _wf_dedicated_channel():
     Fails loudly if missing or misconfigured — never falls back to patching any other
     channel. Returns the channel id."""
     channels = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+    mm_test_id = _wf_mm_test_channel_id()
     ch = next((c for c in channels
                if c.get("platform") == "mattermost"
                and c.get("name") == "mattermost-test-channel"), None)
+    if ch is None and mm_test_id:
+        ch = next((c for c in channels
+                   if c.get("platform") == "mattermost"
+                   and (c.get("resource_identifier") == mm_test_id
+                        or c.get("external_id") == mm_test_id)), None)
     if ch is None:
-        print("[wf-test: dedicated channel 'mattermost-test-channel' NOT found — bootstrapping]")
+        print("[wf-test: dedicated wf-test channel NOT found — bootstrapping]")
         ch = _wf_bootstrap_test_channel()
     assert ch.get("current_provider") == "noop" and ch.get("current_model") == "test-tool-caller", (
         f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
@@ -3891,10 +3928,16 @@ def _wf_dedicated_mm_channel_id():
     resource_identifier IS the MM channel id — scripts MUST be posted there
     (the MM 'setup' channel maps to the echo model and never executes them)."""
     channels = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+    mm_test_id = _wf_mm_test_channel_id()
     ch = next((c for c in channels
                if c.get("platform") == "mattermost"
                and c.get("name") == "mattermost-test-channel"), None)
-    assert ch is not None, "dedicated wf-test channel 'mattermost-test-channel' not found"
+    if ch is None and mm_test_id:
+        ch = next((c for c in channels
+                   if c.get("platform") == "mattermost"
+                   and (c.get("resource_identifier") == mm_test_id
+                        or c.get("external_id") == mm_test_id)), None)
+    assert ch is not None, "dedicated wf-test channel not found (name 'mattermost-test-channel' or MM 'test-channel' id)"
     mm_id = ch.get("external_id") or ch.get("resource_identifier")
     assert mm_id, f"dedicated channel {ch.get('id')} has no external_id/resource_identifier"
     # Idempotently ensure the harness users (incl. testuser, who posts the
