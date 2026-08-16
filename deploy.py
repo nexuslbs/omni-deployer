@@ -142,7 +142,14 @@ def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
     if mode == "dev":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
-    # hybrid and ci use no dev overlay — just base compose
+    elif mode == "hybrid":
+        # Hybrid builds the PRODUCTION images locally (base compose builds
+        # Dockerfile.dev). The hybrid overlay overrides omniagent's build to
+        # the production Dockerfile and adds the dashboard build, so every
+        # image is built through docker compose (never standalone docker
+        # build) — keeping the build under the compose project + env file.
+        cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.hybrid.yml")]
+    # ci uses no overlay — just base compose (pre-built images)
     return cmd
 
 
@@ -503,41 +510,19 @@ def deploy(mode):
     remove_data_volumes()
 
     # Step 0b (hybrid): Build images like CI would (production Dockerfile's
-    # builder stage runs fmt/check/clippy/test — the hybrid pretest gate)
+    # builder stage runs fmt/check/clippy/test — the hybrid pretest gate).
+    # Built via docker compose (with the hybrid overlay + omni.env), never
+    # standalone docker build — so the build runs under the compose project
+    # and every image gets the compose-managed name/tag.
     if mode == "hybrid":
         print("\n[deploy] Building omniagent image (production Dockerfile)...")
-        r = subprocess.run(
-            ["docker", "build", "-t", "local/omniagent:latest",
-             "-f", os.path.join(OMNIAGENT_DIR, "Dockerfile"),
-             OMNIAGENT_DIR],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            print(r.stdout[-1000:] if r.stdout else "")
-            print(r.stderr[-1000:] if r.stderr else "")
-            raise RuntimeError("omniagent image build failed")
+        run_compose_check(compose, "build", "omniagent", label="omniagent image build")
 
         print("[deploy] Building dashboard image...")
-        dashboard_dir = os.path.join(WORKSPACE_DIR, "omni-dashboard")
-        r = subprocess.run(
-            ["docker", "build", "-t", "local/omni-dashboard:latest", dashboard_dir],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            print(r.stdout[-1000:] if r.stdout else "")
-            print(r.stderr[-1000:] if r.stderr else "")
-            raise RuntimeError("dashboard image build failed")
+        run_compose_check(compose, "build", "dashboard", label="dashboard image build")
 
         print("[deploy] Building toolbox image...")
-        toolbox_dir = os.path.join(OMNI_STACK_DIR, "services", "toolbox")
-        r = subprocess.run(
-            ["docker", "build", "-t", "local/omni-toolbox:latest", toolbox_dir],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            print(r.stdout[-1000:] if r.stdout else "")
-            print(r.stderr[-1000:] if r.stderr else "")
-            raise RuntimeError("toolbox image build failed")
+        run_compose_check(compose, "build", "toolbox", label="toolbox image build")
 
     # Step 2 (dev): Build images
     if mode == "dev":
