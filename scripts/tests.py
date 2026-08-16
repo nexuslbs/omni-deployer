@@ -9802,4 +9802,75 @@ test(test_34_ssh_copy)
 test(test_34_ssh_errors)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 35: Subtasks lifecycle — plan-mode workflow drives
+#  subtasks_manage-subtasks end-to-end through the real agent loop
+#  (noop/test-tool-caller fake agent). Verifies: subtask rows created via
+#  action=add, listed, updated to completed, counts; the executor thread
+#  reaches 'completed' (NOT force-failed by the subtask enforcement gate).
+# ═══════════════════════════════════════════════════════════════════════
+print(f"\n{'=' * 60}")
+print("GROUP 35: Subtasks lifecycle (plan-mode + manage_subtasks)")
+print(f"{'=' * 60}")
+
+
+WF_SCRIPT_SUBTASKS = json.dumps([
+    {"name": "add1", "tool": "subtasks_manage-subtasks",
+     "arguments": {"action": "add", "description": "step one", "priority": 2}},
+    {"name": "add2", "tool": "subtasks_manage-subtasks",
+     "arguments": {"action": "add", "description": "step two", "priority": 1}},
+    {"name": "list1", "tool": "subtasks_manage-subtasks",
+     "arguments": {"action": "list"}},
+    {"name": "upd1", "tool": "subtasks_manage-subtasks",
+     "arguments": {"action": "update", "subtask_id": "${add1.id}", "status": "completed"}},
+    {"name": "upd2", "tool": "subtasks_manage-subtasks",
+     "arguments": {"action": "update", "subtask_id": "${add2.id}", "status": "completed"}},
+    {"name": "counts1", "tool": "subtasks_manage-subtasks",
+     "arguments": {"action": "get_counts"}},
+])
+
+
+def test_35_subtasks_plan_mode_lifecycle():
+    """Plan-mode workflow: noop/test-tool-caller script drives
+    subtasks_manage-subtasks add/list/update/get_counts through the real agent
+    loop. The executor thread must end 'completed' (NOT 'failed') and the
+    thread_subtasks rows must exist with status='completed'."""
+    cid, orig = _wf_channel_patch()
+    key = f"wf_test_sub_{uuid.uuid4().hex[:8]}"
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "on",
+                                       "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop",
+                                                              "model": "test-tool-caller"}}})
+        tid = _wf_create_task("G35 subtasks", key, WF_SCRIPT_SUBTASKS, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=180)
+        assert st == "review", f"expected review after executor success, got {st}: {gd}"
+        threads = _wf_step_threads(tid)
+        assert threads, f"no step threads found for task {tid}"
+        ex = [t for t in threads if t.get("workflow_step") == "running"]
+        assert ex, f"no executor (running) thread: {threads}"
+        t = ex[0]
+        assert t["status"] == "completed", \
+            f"executor thread must be 'completed' (not failed): {t}"
+        # Verify thread_subtasks rows: 2 created, both completed.
+        rows = _h27_sql(
+            "SELECT id, description, status, priority FROM thread_subtasks "
+            "WHERE thread_id = %s ORDER BY id", (t["id"],))
+        assert len(rows) == 2, f"expected 2 subtask rows, got {rows}"
+        assert all(r[2] == "completed" for r in rows), \
+            f"all subtasks must be completed: {rows}"
+        print(f"PASS: task={tid} thread={t['id']} status={t['status']} "
+              f"subtasks={[(r[1], r[2]) for r in rows]}")
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+test(test_35_subtasks_plan_mode_lifecycle)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
