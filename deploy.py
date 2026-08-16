@@ -142,14 +142,11 @@ def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
     if mode == "dev":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
-    elif mode == "hybrid":
-        # Hybrid builds the PRODUCTION images locally (base compose builds
-        # Dockerfile.dev). The hybrid overlay overrides omniagent's build to
-        # the production Dockerfile and adds the dashboard build, so every
-        # image is built through docker compose (never standalone docker
-        # build) — keeping the build under the compose project + env file.
-        cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.hybrid.yml")]
-    # ci uses no overlay — just base compose (pre-built images)
+    # hybrid and ci use no overlay — base docker-compose.yml + omni.env.
+    # The base compose already builds omniagent from the production
+    # Dockerfile when OMNIAGENT_IMAGE is set; builds run via docker compose
+    # (never standalone docker build) so everything stays under the
+    # omnideploy project with the env file.
     return cmd
 
 
