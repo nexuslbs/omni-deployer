@@ -8930,4 +8930,293 @@ print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases,
 print(f"Passed: see test runner output above")
 
 
+
+# ── GROUP 33: Python Telegram Platform Plugin (mock Bot API) — task_18cc528e459bcad0 ──
+# Boots the omni-plugins python telegram platform (platforms/telegram/platform.py)
+# against the MOCK Telegram Bot API (platforms/telegram/tests/mock_telegram_api.py)
+# via the api_base_url config override. NO real token is used anywhere — the mock
+# accepts any non-empty token and all state stays in-memory on localhost.
+# Asserts outbound deliver/edit/delete/react payloads (via the mock's /admin/sent
+# + /admin/reactions) and inbound getUpdates flow (injected via /admin/inject ->
+# inbound_message / message_edited notifications on the platform stdout).
+
+import socket as _g33_socket
+import subprocess as _g33_subprocess
+
+TG_DIR = f"{REMOTE_REPO}/platforms/telegram"
+
+
+def _g33_free_port():
+    s = _g33_socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _g33_start_mock(port):
+    proc = _g33_subprocess.Popen(
+        [sys.executable, f"{TG_DIR}/tests/mock_telegram_api.py", "--port", str(port)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(base + "/health", timeout=2) as r:
+                if json.loads(r.read()).get("ok") is True:
+                    return proc, base
+        except Exception:
+            time.sleep(0.2)
+    raise AssertionError("mock telegram api did not come up")
+
+
+def _g33_stop_proc(proc):
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _g33_platform_proc():
+    return _g33_subprocess.Popen(
+        [sys.executable, f"{TG_DIR}/platform.py"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, bufsize=1)
+
+
+def _g33_call(proc, method, params=None, req_id=1, timeout=15):
+    req = {"id": req_id, "method": method}
+    if params is not None:
+        req["params"] = params
+    proc.stdin.write(json.dumps(req) + "\n")
+    proc.stdin.flush()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
+            break
+        try:
+            resp = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if resp.get("id") == req_id:
+            return resp
+    raise AssertionError(f"no response for {method} within {timeout}s")
+
+
+def _g33_notification(proc, method, timeout=25):
+    """Wait for a notification (no id field) with the given method on stdout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
+            break
+        try:
+            notif = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if notif.get("method") == method:
+            return notif
+    raise AssertionError(f"no '{method}' notification within {timeout}s")
+
+
+def _g33_mock_get(base, path):
+    with urllib.request.urlopen(base + path, timeout=10) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _g33_mock_post(base, path, payload):
+    req = urllib.request.Request(
+        base + path, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def test_33_telegram_outbound_mock():
+    """33-A: telegram platform outbound against the MOCK — initialize, configure
+    (api_base_url->mock), deliver (sendMessage), edit_message (editMessageText),
+    delete_message (deleteMessage), react (setMessageReaction) with correct
+    payloads and correct returns."""
+    port = _g33_free_port()
+    mock = plat = None
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+
+        r = _g33_call(plat, "initialize")
+        res = r.get("result", {})
+        assert res.get("name") == "telegram", f"initialize name wrong: {res}"
+        caps = res.get("capabilities", {})
+        assert caps.get("inbound") is True and caps.get("outbound") is True, \
+            f"initialize capabilities wrong: {caps}"
+
+        r = _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": base,
+            "polling_enabled": True,
+            "poll_interval_secs": 1,
+        }})
+        assert r.get("result", {}).get("configured") is True, f"configure failed: {r}"
+
+        r = _g33_call(plat, "deliver", {
+            "resource_identifier": "987654321",
+            "content": "Hello from G33 telegram test",
+            "msg_type": "chat",
+        }, req_id=3)
+        res = r.get("result", {})
+        assert res.get("delivered") is True and res.get("external_id"), \
+            f"deliver result wrong: {r}"
+        ext_id = res["external_id"]
+        sent = _g33_mock_get(base, "/admin/sent").get("messages", [])
+        assert len(sent) == 1 and sent[0]["chat_id"] == "987654321" \
+            and sent[0]["text"] == "Hello from G33 telegram test", \
+            f"sendMessage payload wrong: {sent}"
+
+        r = _g33_call(plat, "edit_message", {
+            "resource_identifier": "987654321",
+            "external_id": ext_id,
+            "content": "Edited by G33",
+        }, req_id=4)
+        assert r.get("result", {}).get("edited") is True, f"edit result wrong: {r}"
+        sent = _g33_mock_get(base, "/admin/sent").get("messages", [])
+        assert sent and sent[0]["text"] == "Edited by G33", \
+            f"editMessageText not applied: {sent}"
+
+        r = _g33_call(plat, "delete_message", {
+            "resource_identifier": "987654321",
+            "external_id": ext_id,
+        }, req_id=5)
+        assert r.get("result", {}).get("deleted") is True, f"delete result wrong: {r}"
+        sent = _g33_mock_get(base, "/admin/sent").get("messages", [])
+        assert not any(str(m["message_id"]) == str(ext_id) for m in sent), \
+            f"deleteMessage did not remove message: {sent}"
+
+        r = _g33_call(plat, "deliver", {
+            "resource_identifier": "987654321",
+            "content": "react target",
+        }, req_id=6)
+        ext2 = r.get("result", {}).get("external_id")
+        r = _g33_call(plat, "react", {
+            "resource_identifier": "987654321",
+            "external_id": ext2,
+            "emoji": "\U0001f44d",
+        }, req_id=7)
+        assert r.get("result", {}).get("reacted") is True, f"react result wrong: {r}"
+        reactions = _g33_mock_get(base, "/admin/reactions").get("reactions", [])
+        assert reactions and str(reactions[-1]["message_id"]) == str(ext2), \
+            f"setMessageReaction not recorded: {reactions}"
+
+        print("PASS: 33-A telegram outbound against mock — initialize/configure/"
+              "deliver/edit/delete/react payloads + returns correct")
+    finally:
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
+def test_33_telegram_inbound_mock():
+    """33-B: telegram platform inbound against the MOCK — injected getUpdates
+    flow back as inbound_message + message_edited notifications on stdout with
+    correct resource_identifier/text/external_id."""
+    port = _g33_free_port()
+    mock = plat = None
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+        _g33_call(plat, "initialize")
+        _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": base,
+            "polling_enabled": True,
+            "poll_interval_secs": 1,
+        }})
+
+        _g33_mock_post(base, "/admin/inject", {
+            "update_id": 7001,
+            "message": {
+                "message_id": 555,
+                "date": 1700000000,
+                "chat": {"id": -1001112223, "type": "channel"},
+                "from": {"id": 88},
+                "text": "hello from telegram inbound",
+            },
+        })
+        n = _g33_notification(plat, "inbound_message", timeout=30)
+        p = n.get("params", {})
+        assert p.get("resource_identifier") == "-1001112223", f"resource wrong: {p}"
+        assert p.get("text") == "hello from telegram inbound", f"text wrong: {p}"
+        assert p.get("external_id") == "555", f"external_id wrong: {p}"
+        md = p.get("metadata", {})
+        assert md.get("chat_id") == -1001112223, f"metadata chat_id wrong: {md}"
+
+        _g33_mock_post(base, "/admin/inject", {
+            "update_id": 7002,
+            "edited_message": {
+                "message_id": 555,
+                "date": 1700000100,
+                "chat": {"id": -1001112223, "type": "channel"},
+                "from": {"id": 88},
+                "text": "edited inbound text",
+            },
+        })
+        n = _g33_notification(plat, "message_edited", timeout=30)
+        p = n.get("params", {})
+        assert p.get("external_id") == "555", f"edited external_id wrong: {p}"
+        assert p.get("text") == "edited inbound text", f"edited text wrong: {p}"
+        assert p.get("resource_identifier") == "-1001112223", f"edited resource wrong: {p}"
+
+        print("PASS: 33-B telegram inbound against mock — injected getUpdates "
+              "-> inbound_message + message_edited notifications correct")
+    finally:
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
+def test_33_telegram_errors_mock():
+    """33-C: telegram platform error paths — unknown method -> protocol error;
+    deliver without token -> API error (mock unreachable/401 style)."""
+    port = _g33_free_port()
+    mock = plat = None
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+        _g33_call(plat, "initialize")
+
+        r = _g33_call(plat, "no_such_method", req_id=9)
+        assert r.get("error", {}).get("code") == -1, f"unknown method error wrong: {r}"
+
+        # deliver before configure -> no token -> error response (not a crash)
+        r = _g33_call(plat, "deliver", {
+            "resource_identifier": "1", "content": "x",
+        }, req_id=10)
+        assert "error" in r, f"deliver without token must error: {r}"
+
+        # configure with a bad api_base -> deliver -> error response
+        _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": "http://127.0.0.1:1",  # nothing listens here
+        }})
+        r = _g33_call(plat, "deliver", {
+            "resource_identifier": "1", "content": "x",
+        }, req_id=11)
+        assert "error" in r, f"deliver with unreachable api must error: {r}"
+
+        print("PASS: 33-C telegram error paths — unknown method, no-token "
+              "deliver, unreachable api all return protocol errors")
+    finally:
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
+test(test_33_telegram_outbound_mock)
+test(test_33_telegram_inbound_mock)
+test(test_33_telegram_errors_mock)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
