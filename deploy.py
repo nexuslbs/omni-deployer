@@ -143,10 +143,10 @@ def compose_cmd(mode):
     if mode == "dev":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
     # hybrid and ci use no overlay — base docker-compose.yml + omni.env.
-    # The base compose already builds omniagent from the production
-    # Dockerfile when OMNIAGENT_IMAGE is set; builds run via docker compose
-    # (never standalone docker build) so everything stays under the
-    # omnideploy project with the env file.
+    # The base compose is image-only (no build sections): hybrid builds the
+    # three images locally with the omni.env tags BEFORE `up` (see Step 0b),
+    # ci pulls pre-built images, omnistable pulls GHCR. run/exec/up all go
+    # through docker compose.
     return cmd
 
 
@@ -506,20 +506,45 @@ def deploy(mode):
     print("[deploy] Removing data volumes...")
     remove_data_volumes()
 
-    # Step 0b (hybrid): Build images like CI would (production Dockerfile's
-    # builder stage runs fmt/check/clippy/test — the hybrid pretest gate).
-    # Built via docker compose (with the hybrid overlay + omni.env), never
-    # standalone docker build — so the build runs under the compose project
-    # and every image gets the compose-managed name/tag.
+    # Step 0b (hybrid): Build the images locally like CI would, tagged with
+    # the exact names omni.env references (local/omniagent:latest,
+    # local/omni-dashboard:latest, local/omni-toolbox:latest). The base
+    # compose is image-only — services consume pre-built images by tag, so
+    # the images MUST exist before `up`. For services that carry a build
+    # section in the base compose (toolbox), `docker compose build` tags
+    # them per the service `image:`; for image-only services (omniagent,
+    # dashboard) we fall back to `docker build -t <tag>` — the goal is the
+    # tagged image on disk for the services to use. The omniagent build is
+    # the production Dockerfile whose builder stage runs fmt/check/clippy/
+    # test offline against the committed .sqlx cache (the hybrid pretest
+    # gate).
     if mode == "hybrid":
-        print("\n[deploy] Building omniagent image (production Dockerfile)...")
-        run_compose_check(compose, "build", "omniagent", label="omniagent image build")
+        def build_image(tag, dockerfile=None, context=None, service=None):
+            if service is not None:
+                # Service has a build section in the compose file — let
+                # compose build it and tag per the service image:.
+                print(f"\n[deploy] Building {service} (docker compose build)...")
+                run_compose_check(compose, "build", service, label=f"{service} image build")
+                return
+            cmd = ["docker", "build", "-t", tag]
+            if dockerfile:
+                cmd += ["-f", dockerfile]
+            cmd.append(context)
+            print(f"\n[deploy] Building {tag} (docker build)...")
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                print(r.stdout[-1000:] if r.stdout else "")
+                print(r.stderr[-1000:] if r.stderr else "")
+                raise RuntimeError(f"image build failed for {tag}")
 
-        print("[deploy] Building dashboard image...")
-        run_compose_check(compose, "build", "dashboard", label="dashboard image build")
-
-        print("[deploy] Building toolbox image...")
-        run_compose_check(compose, "build", "toolbox", label="toolbox image build")
+        build_image("local/omniagent:latest",
+                    dockerfile=os.path.join(OMNIAGENT_DIR, "Dockerfile"),
+                    context=OMNIAGENT_DIR)
+        build_image("local/omni-dashboard:latest",
+                    context=os.path.join(WORKSPACE_DIR, "omni-dashboard"))
+        build_image("local/omni-toolbox:latest",
+                    context=os.path.join(OMNI_STACK_DIR, "services", "toolbox"),
+                    service="toolbox")
 
     # Step 2 (dev): Build images
     if mode == "dev":
