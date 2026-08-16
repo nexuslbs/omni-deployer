@@ -343,6 +343,9 @@ def generate_env(mode):
     # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "config", "remote.yml")
     remote_yml_content = """tools:
+  paperclip:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: tools/paperclip
   test-rust-tool:
     url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/test-rust-tool
