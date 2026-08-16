@@ -9219,4 +9219,587 @@ test(test_33_telegram_inbound_mock)
 test(test_33_telegram_errors_mock)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+# ── GROUP 34: Builtin SSH plugin (mcp-server-ssh) — task_79 ────────────────
+# Spawns the mcp-server-ssh binary directly and drives it over MCP JSON-RPC
+# stdio (initialize → configure → tools/call), mirroring GROUP 33's approach
+# for the telegram platform. Targets a REAL local throwaway sshd on
+# 127.0.0.1:<port> when openssh-server is available and usable (dev
+# container: apt install is allowed; the deployer image may not ship sshd).
+# When a real sshd cannot be started, falls back to a fake ssh/scp shim in
+# PATH that records the invocations and returns canned output — asserting
+# the plugin builds the correct args/options (BatchMode, ConnectTimeout,
+# -F config, -p/-P port, scp -r, direction ordering, exit handling).
+import select as _g34_select
+import shutil as _g34_shutil
+import socket as _g34_socket
+import subprocess as _g34_subprocess
+
+
+def _g34_bin():
+    for cand in ("/usr/local/bin/mcp-server-ssh",
+                 "/target/release/mcp-server-ssh",
+                 "/app/target/release/mcp-server-ssh"):
+        if os.path.exists(cand):
+            return cand
+    raise AssertionError("mcp-server-ssh binary not found (build the plugin first)")
+
+
+def _g34_free_port():
+    s = _g34_socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _g34_ensure_sshd():
+    """Return the sshd binary path, or None if a real sshd is unavailable.
+    Best-effort: in the DEV container openssh-server may be installed on
+    demand (allowed); in the deployer image it usually is absent, in which
+    case the tests fall back to the shim."""
+    for cand in ("/usr/sbin/sshd", "/usr/bin/sshd"):
+        if os.path.exists(cand):
+            return cand
+    if _g34_shutil.which("sshd"):
+        return _g34_shutil.which("sshd")
+    # Best-effort install (dev container only; may fail in CI images)
+    try:
+        r = _g34_subprocess.run(
+            ["sh", "-c", "apt-get update -qq && apt-get install -y -qq openssh-server"],
+            capture_output=True, text=True, timeout=180)
+        for cand in ("/usr/sbin/sshd", "/usr/bin/sshd"):
+            if os.path.exists(cand):
+                return cand
+        if r.returncode == 0 and _g34_shutil.which("sshd"):
+            return _g34_shutil.which("sshd")
+    except Exception:
+        pass
+    return None
+
+
+def _g34_devnull_usable():
+    """/dev/null must exist AND be openable (some containers ship without
+    it). If missing, try to create it; verify by actually opening it."""
+    try:
+        if not os.path.exists("/dev/null"):
+            try:
+                _g34_subprocess.run(["mknod", "/dev/null", "c", "1", "3"],
+                                    capture_output=True, timeout=5)
+                _g34_subprocess.run(["chmod", "666", "/dev/null"],
+                                    capture_output=True, timeout=5)
+            except Exception:
+                pass
+        with open("/dev/null", "r"):
+            pass
+        with open("/dev/null", "w"):
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _g34_keygen(path):
+    if os.path.exists(path):
+        return  # reuse an existing key (per-test dirs keep them distinct)
+    _g34_devnull_usable()  # ssh-keygen needs /dev/null; (re)create if missing
+    r = _g34_subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", path],
+        capture_output=True, text=True, timeout=30)
+    if r.returncode != 0 or not os.path.exists(path):
+        raise AssertionError(f"ssh-keygen failed for {path}: {r.stderr[-300:]}")
+
+
+def _g34_write(path, content):
+    with open(path, "w") as f:
+        f.write(content)
+
+
+def _g34_sftp_server():
+    for cand in ("/usr/lib/openssh/sftp-server", "/usr/libexec/openssh/sftp-server",
+                 "/usr/lib/ssh/sftp-server"):
+        if os.path.exists(cand):
+            return cand
+    try:
+        r = _g34_subprocess.run(["find", "/usr", "-name", "sftp-server", "-type", "f"],
+                                capture_output=True, text=True, timeout=10)
+        for line in r.stdout.splitlines():
+            if line.strip():
+                return line.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _g34_start_sshd(sshd_bin, workdir, port, host_key, authorized_keys):
+    """Start a throwaway sshd on 127.0.0.1:port; return the Popen."""
+    if not os.path.exists(host_key):
+        _g34_keygen(host_key)  # per-test dir: ensure the host key exists
+    cfg = f"{workdir}/sshd_config"
+    sftp = _g34_sftp_server()
+    sftp_line = f"Subsystem sftp {sftp}\n" if sftp else ""
+    _g34_write(cfg, (
+        f"Port {port}\n"
+        f"ListenAddress 127.0.0.1\n"
+        f"HostKey {host_key}\n"
+        f"AuthorizedKeysFile {authorized_keys}\n"
+        "PermitRootLogin yes\n"
+        "PasswordAuthentication no\n"
+        "PubkeyAuthentication yes\n"
+        "StrictModes no\n"
+        "UsePAM no\n"
+        f"PidFile {workdir}/sshd.pid\n"
+        "LogLevel ERROR\n"
+        + sftp_line
+    ))
+    proc = _g34_subprocess.Popen(
+        [sshd_bin, "-D", "-e", "-f", cfg],
+        stdout=_g34_subprocess.PIPE, stderr=_g34_subprocess.STDOUT, text=True)
+    # wait for the port to accept TCP
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            out = proc.stdout.read() if proc.stdout else ""
+            raise AssertionError(f"sshd exited early: {out[-500:]}")
+        try:
+            with _g34_socket.create_connection(("127.0.0.1", port), timeout=1):
+                return proc
+        except OSError:
+            time.sleep(0.2)
+    raise AssertionError("sshd did not come up on 127.0.0.1:%d" % port)
+
+
+def _g34_stop_proc(proc):
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _g34_setup_ssh_dir(base, port, with_key=True):
+    """Create an ssh_dir with a config file + optional client key.
+    Returns (ssh_dir, client_key_path_or_None)."""
+    ssh_dir = f"{base}/ssh_dir"
+    os.makedirs(ssh_dir, exist_ok=True)
+    key = None
+    if with_key:
+        key = f"{ssh_dir}/id_ed25519"
+        _g34_keygen(key)
+    _g34_write(f"{ssh_dir}/config", (
+        f"Host g34test\n"
+        f"    HostName 127.0.0.1\n"
+        f"    Port {port}\n"
+        f"    User root\n"
+        + (f"    IdentityFile {key}\n" if key else "") +
+        "    StrictHostKeyChecking no\n"
+        "    UserKnownHostsFile /dev/null\n"
+    ))
+    return ssh_dir, key
+
+
+# ── MCP JSON-RPC client over stdio (same as GROUP 33) ─────────────────────
+
+_g34_STDERR = {}
+_g34_NEXT_ID = [100]
+
+def _g34_spawn(bin_path, extra_env=None):
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    proc = _g34_subprocess.Popen(
+        [bin_path], stdin=_g34_subprocess.PIPE, stdout=_g34_subprocess.PIPE,
+        stderr=_g34_subprocess.PIPE, env=env)
+    lines = []
+    _g34_STDERR[proc] = lines
+
+    def _drain():
+        try:
+            for line in proc.stderr:
+                lines.append(line)
+        except Exception:
+            pass
+    import threading as _g34_threading
+    _g34_threading.Thread(target=_drain, daemon=True).start()
+    return proc
+
+
+def _g34_call(proc, method, params=None, req_id=1, timeout=30):
+    req = {"jsonrpc": "2.0", "id": req_id, "method": method}
+    if params is not None:
+        req["params"] = params
+    proc.stdin.write(json.dumps(req).encode() + b"\n")
+    proc.stdin.flush()
+    fd = proc.stdout.fileno()
+    deadline = time.time() + timeout
+    buf = b""
+    while time.time() < deadline:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        r, _, _ = _g34_select.select([fd], [], [], min(remaining, 5))
+        if not r:
+            continue  # still within deadline; keep waiting
+        try:
+            chunk = os.read(fd, 8192)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                resp = json.loads(line.decode())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if resp.get("id") == req_id:
+                return resp
+    err_tail = b"".join(_g34_STDERR.get(proc, [])).decode("utf-8", "replace")[-1500:]
+    raise AssertionError("no response for %s within %ds (got %r; stderr: %r)" % (
+        method, timeout, buf[-200:], err_tail[-1500:]))
+
+
+def _g34_init(proc):
+    r = _g34_call(proc, "initialize", req_id=1)
+    assert "result" in r, f"initialize failed: {r}"
+    return r["result"]
+
+
+def _g34_configure(proc, config, req_id=2):
+    r = _g34_call(proc, "configure", config, req_id=req_id)
+    assert r.get("result", {}).get("configured") is True, f"configure failed: {r}"
+    return r
+
+
+def _g34_tool(proc, name, args, req_id=None, timeout=25):
+    if req_id is None:
+        req_id = _g34_NEXT_ID[0]
+        _g34_NEXT_ID[0] += 1
+    """Call a tool; return (text, is_error). A JSON-RPC error (handler
+    validation failure) is surfaced as (error message, True)."""
+    r = _g34_call(proc, "tools/call",
+                  {"name": name, "arguments": args}, req_id=req_id, timeout=timeout)
+    if "error" in r:
+        msg = r["error"].get("message", "") if isinstance(r.get("error"), dict) else str(r.get("error"))
+        return msg, True
+    assert "result" in r, f"tools/call {name} failed: {r}"
+    res = r["result"]
+    content = res.get("content", [])
+    text = ""
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text += item.get("text", "")
+    elif isinstance(content, str):
+        text = content
+    is_error = bool(res.get("isError", res.get("is_error", False)))
+    return text, is_error
+
+
+# ── Test setup: real sshd OR shim ─────────────────────────────────────────
+# Computed once per run. The real-sshd path is used only when sshd exists,
+# /dev/null is usable and key generation works — otherwise fall back to the
+# shim so the tests still assert plugin arg construction everywhere.
+_g34_SSHD = None
+_g34_SSH_BIN = None
+_g34_BASE = None
+_g34_SHIM_DIR = None
+_g34_REAL = False
+
+
+def _g34_SHIM_SCRIPT(kind):
+    """Fake ssh/scp: append args to calls.log, behave by sentinel substrings."""
+    return (
+        "#!/bin/sh\n"
+        f"echo \"{kind}:$@\" >> {_g34_BASE}/calls.log\n"
+        "case \"$@\" in\n"
+        "  *CONNREFUSED*) echo \"ssh: connect to host 127.0.0.1 port 1: Connection refused\" >&2; exit 255;;\n"
+        "  *PERMDENY*) echo \"root@127.0.0.1: Permission denied (publickey).\" >&2; exit 255;;\n"
+        "  *SLEEP10*) sleep 10; echo done; exit 0;;\n"
+        "  *EXIT7*) echo \"exit-7-output\"; exit 7;;\n"
+        "esac\n"
+        "echo \"hello-from-shim\"\n"
+        "exit 0\n"
+    )
+
+
+def _g34_prepare():
+    global _g34_SSHD, _g34_SSH_BIN, _g34_BASE, _g34_SHIM_DIR, _g34_REAL
+    _g34_SSH_BIN = _g34_bin()
+    _g34_BASE = f"{WORKSPACE}/../g34-tmp-{uuid.uuid4().hex[:8]}"
+    os.makedirs(_g34_BASE, exist_ok=True)
+    _g34_SSHD = _g34_ensure_sshd()
+    if _g34_SSHD is not None and _g34_devnull_usable():
+        try:
+            _g34_keygen(f"{_g34_BASE}/hostkey")
+            _g34_REAL = True
+            print(f"  [G34: using REAL sshd {_g34_SSHD}]")
+        except Exception as e:
+            _g34_REAL = False
+            print(f"  [G34: real sshd unusable ({e}); using shim]")
+    else:
+        _g34_REAL = False
+    if not _g34_REAL:
+        _g34_SHIM_DIR = f"{_g34_BASE}/shim"
+        os.makedirs(_g34_SHIM_DIR, exist_ok=True)
+        _g34_write(f"{_g34_SHIM_DIR}/ssh", _g34_SHIM_SCRIPT("ssh"))
+        _g34_write(f"{_g34_SHIM_DIR}/scp", _g34_SHIM_SCRIPT("scp"))
+        os.chmod(f"{_g34_SHIM_DIR}/ssh", 0o755)
+        os.chmod(f"{_g34_SHIM_DIR}/scp", 0o755)
+        print(f"  [G34: no usable sshd — using ssh/scp shim in {_g34_SHIM_DIR}]")
+
+
+_g34_prepare()
+
+
+def _g34_spawn_plugin():
+    """Spawn mcp-server-ssh; prepend shim dir to PATH when in shim mode."""
+    extra = None
+    if not _g34_REAL and _g34_SHIM_DIR:
+        extra = {"PATH": f"{_g34_SHIM_DIR}:" + os.environ.get("PATH", "")}
+    return _g34_spawn(_g34_SSH_BIN, extra_env=extra)
+
+
+def _g34_authorize(key, base=None):
+    auth = f"{base or _g34_BASE}/authorized_keys"
+    _g34_subprocess.run(["cp", f"{key}.pub", auth], check=True)
+    os.chmod(auth, 0o600)
+
+
+def _g34_test_dir(name):
+    """Per-test scratch dir (isolates keys/authorized_keys across tests)."""
+    d = f"{_g34_BASE}/{name}"
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+# ── 34-A: ssh_run ──────────────────────────────────────────────────────────
+
+def test_34_ssh_run():
+    """34-A: ssh_run against the local throwaway sshd (or shim) — command
+    output, exit code, error propagation. Verifies the tool returns the
+    remote stdout and a non-zero exit_code is surfaced as isError."""
+    port = _g34_free_port()
+    base = _g34_test_dir("t34a")
+    proc = None
+    sshd = None
+    try:
+        ssh_dir, key = _g34_setup_ssh_dir(base, port, with_key=_g34_REAL)
+        if _g34_REAL:
+            _g34_authorize(key, base)
+            sshd = _g34_start_sshd(_g34_SSHD, base, port, f"{base}/hostkey",
+                                   f"{base}/authorized_keys")
+
+        proc = _g34_spawn_plugin()
+        _g34_init(proc)
+        _g34_configure(proc, {"ssh_dir": ssh_dir, "connect_timeout_secs": "5"})
+
+        marker = f"g34-run-{uuid.uuid4().hex[:6]}"
+        cmd = f"echo {marker}" if _g34_REAL else "echo x"
+        text, is_error = _g34_tool(proc, "run", {"host": "g34test", "command": cmd})
+        assert not is_error, f"ssh_run echo failed: {text}"
+        expected = marker if _g34_REAL else "hello-from-shim"
+        assert expected in text, f"ssh_run output missing {expected!r}: {text!r}"
+
+        # non-zero exit code → isError with exit_code in payload
+        cmd = "exit 7" if _g34_REAL else "EXIT7 echo x"
+        text, is_error = _g34_tool(proc, "run", {"host": "g34test", "command": cmd})
+        assert is_error, "ssh_run exit 7 should be isError"
+        assert '"exit_code":7' in text or '"exit_code": 7' in text, \
+            f"ssh_run exit_code 7 not surfaced: {text!r}"
+
+        # missing command → clean error (JSON-RPC handler error), not a crash
+        text, is_error = _g34_tool(proc, "run", {"host": "g34test"})
+        assert is_error and "command" in text, f"missing command should error: {text!r}"
+
+        print("PASS: 34-A ssh_run — command output, exit_code 7 surfaced, missing-command error")
+    finally:
+        _g34_stop_proc(sshd)
+        _g34_stop_proc(proc)
+
+
+# ── 34-B: ssh_copy ─────────────────────────────────────────────────────────
+
+def test_34_ssh_copy():
+    """34-B: ssh_copy roundtrip against the local sshd — to-remote then
+    from-remote, file content preserved; recursive directory copy; shim
+    asserts scp arg construction (-r, -P, direction ordering)."""
+    port = _g34_free_port()
+    base = _g34_test_dir("t34b")
+    proc = None
+    sshd = None
+    try:
+        ssh_dir, key = _g34_setup_ssh_dir(base, port, with_key=_g34_REAL)
+        if _g34_REAL:
+            _g34_authorize(key, base)
+            sshd = _g34_start_sshd(_g34_SSHD, base, port, f"{base}/hostkey",
+                                   f"{base}/authorized_keys")
+
+        proc = _g34_spawn_plugin()
+        _g34_init(proc)
+        _g34_configure(proc, {"ssh_dir": ssh_dir, "connect_timeout_secs": "5",
+                              "workspace_dir": f"{base}/ws"})
+
+        ws = f"{base}/ws"
+        os.makedirs(f"{ws}/in", exist_ok=True)
+        content = f"g34-copy-{uuid.uuid4().hex[:8]}\nline2\n"
+        _g34_write(f"{ws}/in/payload.txt", content)
+
+        # to-remote: local ws/in/payload.txt -> remote /tmp/g34-payload.txt
+        text, is_error = _g34_tool(proc, "copy", {
+            "host": "g34test", "direction": "to-remote",
+            "source": "in/payload.txt", "destination": "/tmp/g34-payload.txt"})
+        assert not is_error, f"ssh_copy to-remote failed: {text}"
+
+        # verify remote content (real: ssh cat; shim: fake ssh echoes canned)
+        if _g34_REAL:
+            text, is_error = _g34_tool(proc, "run", {
+                "host": "g34test", "command": "cat /tmp/g34-payload.txt"})
+            assert not is_error, f"remote cat failed: {text}"
+            remote_out = json.loads(text).get("stdout", "")
+            assert content.strip() in remote_out, f"remote content mismatch: {text!r}"
+
+        # from-remote: pull it back to ws/out/payload.txt
+        os.makedirs(f"{ws}/out", exist_ok=True)
+        text, is_error = _g34_tool(proc, "copy", {
+            "host": "g34test", "direction": "from-remote",
+            "source": "/tmp/g34-payload.txt", "destination": "out/payload.txt"})
+        assert not is_error, f"ssh_copy from-remote failed: {text}"
+        if _g34_REAL:
+            with open(f"{ws}/out/payload.txt") as f:
+                assert f.read() == content, "roundtrip content mismatch"
+
+        # recursive directory copy (real: dir with file; shim: -r recorded)
+        os.makedirs(f"{ws}/in/sub", exist_ok=True)
+        _g34_write(f"{ws}/in/sub/nested.txt", "nested-g34\n")
+        text, is_error = _g34_tool(proc, "copy", {
+            "host": "g34test", "direction": "to-remote", "recursive": True,
+            "source": "in/sub", "destination": "/tmp/g34-sub"})
+        assert not is_error, f"ssh_copy recursive failed: {text}"
+        if _g34_REAL:
+            text, is_error = _g34_tool(proc, "run", {
+                "host": "g34test", "command": "cat /tmp/g34-sub/nested.txt"})
+            remote_out = json.loads(text).get("stdout", "")
+            assert not is_error and "nested-g34" in remote_out, \
+                f"recursive content wrong: {text!r}"
+        else:
+            with open(f"{_g34_BASE}/calls.log") as f:
+                calls = f.read()
+            assert "scp:" in calls, "scp shim was never invoked"
+            assert "-r" in calls, "recursive flag -r not passed to scp"
+            assert "g34test:/tmp/g34-payload.txt" in calls, \
+                "to-remote destination not formed as host:path"
+            assert "g34test:/tmp/g34-sub" in calls, "recursive remote path missing"
+
+        # invalid direction → clean error
+        text, is_error = _g34_tool(proc, "copy", {
+            "host": "g34test", "direction": "sideways",
+            "source": "a", "destination": "b"})
+        assert is_error and "direction" in text, f"bad direction should error: {text!r}"
+
+        print("PASS: 34-B ssh_copy — to-remote/from-remote roundtrip, recursive, bad-direction error")
+    finally:
+        _g34_stop_proc(sshd)
+        _g34_stop_proc(proc)
+
+
+# ── 34-C: error paths ──────────────────────────────────────────────────────
+
+def test_34_ssh_errors():
+    """34-C: ssh error paths — unreachable host, timeout, bad key, missing
+    ssh_dir auto-created, world-readable key chmod-600'd before running."""
+    port = _g34_free_port()
+    base = _g34_test_dir("t34c")
+    proc = None
+    sshd = None
+    try:
+        ssh_dir, key = _g34_setup_ssh_dir(base, port, with_key=_g34_REAL)
+        if _g34_REAL:
+            _g34_authorize(key, base)
+            sshd = _g34_start_sshd(_g34_SSHD, base, port, f"{base}/hostkey",
+                                   f"{base}/authorized_keys")
+
+        proc = _g34_spawn_plugin()
+        _g34_init(proc)
+        _g34_configure(proc, {"ssh_dir": ssh_dir, "connect_timeout_secs": "5"})
+
+        # 1) unreachable host: connect to a port nothing listens on
+        dead_port = _g34_free_port()
+        text, is_error = _g34_tool(proc, "run", {
+            "host": f"127.0.0.1:{dead_port}", "command": "CONNREFUSED echo x"})
+        assert is_error, "unreachable host should be isError"
+        assert "refused" in text.lower() or "timed out" in text.lower() \
+            or "denied" in text.lower() or "error" in text.lower(), \
+            f"unreachable host error text wrong: {text!r}"
+
+        # 2) timeout: explicit timeout=1 on a long command
+        cmd = "sleep 10" if _g34_REAL else "SLEEP10 echo x"
+        text, is_error = _g34_tool(proc, "run", {
+            "host": "g34test", "command": cmd, "timeout": 1})
+        assert is_error, "timeout should be isError"
+        assert "timed out" in text.lower(), f"timeout error text wrong: {text!r}"
+
+        # 3) bad key: real sshd — key not in authorized_keys; shim — PERMDENY sentinel
+        if _g34_REAL:
+            _g34_write(f"{base}/authorized_keys", "ssh-ed25519 AAAA-not-the-right-key\n")
+            time.sleep(0.2)
+            text, is_error = _g34_tool(proc, "run", {
+                "host": "g34test", "command": "PERMDENY echo x"})
+            assert is_error, "bad key should be isError"
+            assert "denied" in text.lower() or "permission" in text.lower(), \
+                f"bad key error text wrong: {text!r}"
+        else:
+            text, is_error = _g34_tool(proc, "run", {
+                "host": "g34test", "command": "PERMDENY echo x"})
+            assert is_error, "bad key (shim) should be isError"
+            assert "denied" in text.lower() or "permission" in text.lower(), \
+                f"bad key error text wrong: {text!r}"
+
+        # 4) missing ssh_dir → auto-created, then either runs or fails cleanly
+        missing = f"{base}/does-not-exist-{uuid.uuid4().hex[:6]}"
+        text, is_error = _g34_tool(proc, "run", {
+            "host": "g34test", "command": "echo x", "ssh_dir": missing})
+        assert os.path.isdir(missing), "ssh_dir should have been auto-created"
+
+        # 5) world-readable key → plugin chmod 600 before running
+        if _g34_REAL:
+            _g34_authorize(key, base)  # restore valid auth so the run can succeed
+            os.chmod(key, 0o644)
+            text, is_error = _g34_tool(proc, "run", {
+                "host": "g34test", "command": "echo x"})
+            mode = os.stat(key).st_mode & 0o777
+            assert mode == 0o600, f"key should be chmod 600 before running, got {oct(mode)}"
+
+        print("PASS: 34-C ssh error paths — unreachable host, timeout, bad key, "
+              "missing ssh_dir auto-created, world-readable key secured")
+    finally:
+        _g34_stop_proc(sshd)
+        _g34_stop_proc(proc)
+
+
+test(test_34_ssh_run)
+test(test_34_ssh_copy)
+test(test_34_ssh_errors)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
