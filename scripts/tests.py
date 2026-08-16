@@ -8794,6 +8794,136 @@ test(test_31_thread_creation_fails_invalid_board)
 test(test_31_boards_crud_and_resolution)
 
 
+
+
+# ── GROUP 32: External / Agnostic MCP Reference Servers — task_18cc528e459bcad0 ──
+# The 7 modelcontextprotocol reference servers (github.com/modelcontextprotocol/servers)
+# are registered as remote MCP tool plugins (remote.yml + plugins.yml, source: remote)
+# and live under plugins/tools/.remote/mcp-<server>/. Each test makes ≥1 tool call
+# through the live MCP executor (POST /mcp/execute) and asserts the RETURN is correct
+# (shape + content), using the executor's live verification (thread #73) as reference.
+# Tool names are callable as `server.tool` (e.g. mcp-time.get_current_time); /mcp/tools
+# lists them as mcp-time_get-current-time. NOTE: mcp-fetch's article-extraction path
+# (readabilipy node ExtractArticle.js) exits 1 in this image, so the fetch test uses
+# raw=true (verified correct). The group SKIPs when the servers are not installed
+# (omnistable has no .remote plugin dirs).
+
+def _g32_servers_present():
+    return all(
+        os.path.isdir(f"{WORKSPACE}/plugins/tools/.remote/mcp-{s}")
+        for s in ("everything", "fetch", "filesystem", "git", "memory",
+                  "sequentialthinking", "time")
+    )
+
+
+def _g32_mcp_execute(name, args):
+    """POST a tool call to the live MCP executor and return the parsed content.
+    Asserts the envelope succeeded and the tool did not report an error."""
+    req = urllib.request.Request(
+        f"{BASE}/mcp/execute",
+        data=json.dumps({"name": name, "arguments": args}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    assert data.get("success"), f"mcp execute {name} failed: {data}"
+    assert data.get("is_error") is False, f"{name} returned is_error=true: {data}"
+    content = data.get("content", "")
+    assert content, f"{name} returned empty content: {data}"
+    return content
+
+
+def test_32_everything_echo():
+    """32-A: mcp-everything echo returns 'Echo: <message>'."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    out = _g32_mcp_execute("mcp-everything.echo", {"message": "Hello from omniagent"})
+    assert out == "Echo: Hello from omniagent", f"echo return wrong: {out!r}"
+    print("PASS: mcp-everything echo -> 'Echo: Hello from omniagent'")
+
+
+def test_32_fetch_raw():
+    """32-B: mcp-fetch fetch with raw=true returns the page contents."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    out = _g32_mcp_execute("mcp-fetch.fetch", {"url": "https://example.com", "raw": True})
+    assert "Contents of https://example.com/" in out, f"fetch return missing contents marker: {out[:200]}"
+    assert "Example Domain" in out, f"fetch return missing page title: {out[:200]}"
+    print("PASS: mcp-fetch fetch(raw=true) -> page contents include 'Example Domain'")
+
+
+def test_32_filesystem_list_allowed():
+    """32-C: mcp-filesystem list_allowed_directories returns /opt/workspace."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    out = _g32_mcp_execute("mcp-filesystem.list_allowed_directories", {})
+    assert "Allowed directories:" in out and "/opt/workspace" in out, \
+        f"list_allowed_directories wrong: {out[:200]}"
+    print("PASS: mcp-filesystem list_allowed_directories -> 'Allowed directories: /opt/workspace'")
+
+
+def test_32_git_status():
+    """32-D: mcp-git git_status returns branch info for the omniagent repo."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    out = _g32_mcp_execute("mcp-git.git_status", {"repo_path": "/opt/workspace/omniagent"})
+    assert "On branch main" in out, f"git_status return wrong: {out[:200]}"
+    print("PASS: mcp-git git_status -> 'On branch main' for /opt/workspace/omniagent")
+
+
+def test_32_memory_create_entities():
+    """32-E: mcp-memory create_entities persists and echoes the entity."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    ent = f"g32-{uuid.uuid4().hex[:8]}"
+    out = _g32_mcp_execute("mcp-memory.create_entities", {
+        "entities": [{"name": ent, "entityType": "Person",
+                      "observations": ["Likes coffee"]}]})
+    assert ent in out and "Likes coffee" in out, f"create_entities return wrong: {out[:200]}"
+    print(f"PASS: mcp-memory create_entities -> entity {ent} persisted & echoed")
+
+
+def test_32_sequentialthinking():
+    """32-F: mcp-sequentialthinking sequentialthinking returns the thought record."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    out = _g32_mcp_execute("mcp-sequentialthinking.sequentialthinking", {
+        "thought": "Test thought", "thoughtNumber": 1, "totalThoughts": 1,
+        "nextThoughtNeeded": False})
+    assert "thoughtNumber" in out and "nextThoughtNeeded" in out, \
+        f"sequentialthinking return wrong: {out[:200]}"
+    print("PASS: mcp-sequentialthinking sequentialthinking -> thought record JSON")
+
+
+def test_32_time_get_current_time():
+    """32-G: mcp-time get_current_time returns timezone+datetime for UTC."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        return
+    out = _g32_mcp_execute("mcp-time.get_current_time", {"timezone": "UTC"})
+    d = json.loads(out)
+    assert d.get("timezone") == "UTC" and d.get("datetime") and d.get("day_of_week"), \
+        f"get_current_time wrong: {out[:200]}"
+    assert d.get("is_dst") is False, f"get_current_time is_dst should be false: {d}"
+    print("PASS: mcp-time get_current_time -> UTC datetime + day_of_week + is_dst=false")
+
+
+test(test_32_everything_echo)
+test(test_32_fetch_raw)
+test(test_32_filesystem_list_allowed)
+test(test_32_git_status)
+test(test_32_memory_create_entities)
+test(test_32_sequentialthinking)
+test(test_32_time_get_current_time)
+
+
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
