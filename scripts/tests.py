@@ -8602,6 +8602,198 @@ test(test_30_stop_thread_kanban_clears_thread_status)
 test(test_30_stop_thread_live_pending_stop_keeps_processing)
 
 
+# ── GROUP 31: Kanban Boards (config/boards.yml) — task_18cc48e8eace4df3 ──────
+# Boards group kanban tasks and carry default execution options. The feature is
+# gated on the presence of config/boards.yml (omnidev only; omnistable has no
+# boards.yml so all kanban behavior there is unchanged). When boards.yml is
+# present: GET /boards lists the boards; tasks can carry a board field
+# (create + ?board= filter); the dispatcher skips invalid-board tasks; any
+# thread-creation path on an invalid-board task creates the thread and fails it
+# with a clear Error message; board defaults fill the resolution chain
+# (task > board > channel). Boards CRUD (PUT/DELETE /boards/{key}) is backed by
+# boards.yml — the test snapshots and restores the file byte-for-byte.
+
+def _g31_boards_file():
+    return f"{WORKSPACE}/config/boards.yml"
+
+
+def _g31_boards_enabled():
+    return os.path.exists(_g31_boards_file())
+
+
+def _g31_board_keys():
+    r = get_json("/boards")
+    d = r.get("data", r) if isinstance(r, dict) else r
+    boards = d.get("boards", []) if isinstance(d, dict) else d
+    return [b.get("key") for b in boards] if isinstance(boards, list) else []
+
+
+def _g31_make_task(title, status="todo", board=None, cid=None, workflow_id="omniagent-dev"):
+    body = {"title": title, "status": status}
+    if cid is not None:
+        body["channel_id"] = cid
+    if board is not None:
+        body["board"] = board
+    if workflow_id:
+        body["workflow_id"] = workflow_id
+    r = post_json("/kanban/tasks", body)
+    d = r.get("data", r)
+    assert d.get("id"), f"task create failed: {r}"
+    return d["id"]
+
+
+def _g31_cleanup_tasks(tids):
+    for t in tids:
+        try:
+            _h27_sql("DELETE FROM threads WHERE task_id = %s", (t,))
+        except Exception:
+            pass
+        try:
+            _h27_sql("DELETE FROM kanban_tasks WHERE id = %s", (t,))
+        except Exception:
+            pass
+
+
+def _g31_thread_rows(task_id):
+    return _h27_sql(
+        "SELECT id, status, terminal, channel_id, workflow_step FROM threads "
+        "WHERE task_id = %s ORDER BY id", (task_id,))
+
+
+def test_31_boards_list_and_filter():
+    """31-A: boards.yml present -> GET /boards returns configured boards;
+    task create accepts a board; ?board= filter returns only that board's tasks."""
+    if not _g31_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        return
+    keys = _g31_board_keys()
+    assert "main" in keys and "dev" in keys, f"expected boards main+dev, got {keys}"
+    tids = []
+    try:
+        tid = _g31_make_task(f"g31-a-{uuid.uuid4().hex[:8]}", board="main", cid="kanban")
+        tids.append(tid)
+        rows = _h27_sql("SELECT board FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows and rows[0][0] == "main", f"board column not stored: {rows}"
+        d = get_json("/kanban/tasks?board=main")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        ids = [t.get("id") for t in d] if isinstance(d, list) else []
+        assert tid in ids, f"task {tid} missing from ?board=main list: {ids}"
+        d = get_json("/kanban/tasks?board=dev")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        ids = [t.get("id") for t in d] if isinstance(d, list) else []
+        assert tid not in ids, f"task {tid} leaked into ?board=dev list: {ids}"
+        print("PASS: boards listed (main+dev); task board field stored; ?board= filter works")
+    finally:
+        _g31_cleanup_tasks(tids)
+
+
+def test_31_dispatch_skips_invalid_board():
+    """31-B: with boards.yml present, todo tasks whose board is NULL or unknown
+    are never dispatched (stay todo, no thread row)."""
+    if not _g31_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        return
+    tids = []
+    try:
+        tid_null = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board=None, cid="kanban")
+        tid_unk = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board="no-such-board", cid="kanban")
+        tids += [tid_null, tid_unk]
+        r = post_json("/kanban/dispatch")
+        d = r.get("data", r) if isinstance(r, dict) else r
+        for t in (tid_null, tid_unk):
+            rows = _h27_sql("SELECT status FROM kanban_tasks WHERE id = %s", (t,))
+            assert rows and rows[0][0] == "todo", f"task {t} must stay todo: {rows}"
+            assert _g31_thread_rows(t) == [], f"task {t} must have no thread"
+        print(f"PASS: dispatcher skipped invalid-board tasks "
+              f"(NULL + unknown board; dispatch resp dispatched={d.get('dispatched')})")
+    finally:
+        _g31_cleanup_tasks(tids)
+
+
+def test_31_thread_creation_fails_invalid_board():
+    """31-C: with boards.yml present, status-change dispatch on an invalid-board
+    task creates the thread and immediately fails it with a clear Error message
+    (reusing the existing fail-thread machinery)."""
+    if not _g31_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        return
+    tids = []
+    try:
+        tid = _g31_make_task(f"g31-c-{uuid.uuid4().hex[:8]}", board="no-such-board", cid="kanban")
+        tids.append(tid)
+        st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid}/status", {"status": "running"})
+        rows = _g31_thread_rows(tid)
+        assert rows, f"expected a thread row for invalid-board task {tid}: {resp}"
+        thr_id, status, terminal, _ch, step = rows[-1]
+        assert status == "failed" and terminal is True, \
+            f"thread must be failed+terminal: {rows[-1]}"
+        assert step == "running", f"thread workflow_step must be running: {rows[-1]}"
+        errs = _h27_sql(
+            "SELECT content FROM messages WHERE thread_id = %s AND msg_type = 'error' "
+            "ORDER BY id DESC LIMIT 1", (thr_id,))
+        assert errs and "board" in (errs[0][0] or ""), \
+            f"error message must mention board: {errs}"
+        hist = _h27_sql(
+            "SELECT comment FROM kanban_history WHERE kanban_task_id = %s "
+            "ORDER BY id DESC LIMIT 1", (tid,))
+        assert hist and "board" in (hist[0][0] or ""), f"history missing board note: {hist}"
+        print(f"PASS: invalid-board thread-creation -> thread #{thr_id} failed+terminal "
+              f"with Error message (status-change dispatch path)")
+    finally:
+        _g31_cleanup_tasks(tids)
+
+
+def test_31_boards_crud_and_resolution():
+    """31-D: boards CRUD (PUT upsert / DELETE removes board AND its tasks) and
+    board defaults fill the resolution chain (task with board but no channel ->
+    thread channel = board channel). boards.yml restored byte-for-byte."""
+    if not _g31_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        return
+    bfile = _g31_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    tids = []
+    try:
+        # PUT upsert a temp board
+        st, resp = _h27_api("PUT", "/boards/g31-tmp", {
+            "channel": "kanban", "profile": "omni", "workflow": "omniagent-dev", "plan": False})
+        assert st == 200, f"PUT /boards/g31-tmp failed: {st} {resp}"
+        keys = _g31_board_keys()
+        assert "g31-tmp" in keys, f"upserted board missing: {keys}"
+        # task on the temp board
+        tid = _g31_make_task(f"g31-d-{uuid.uuid4().hex[:8]}", board="g31-tmp", cid="kanban")
+        tids.append(tid)
+        # DELETE removes board + its tasks
+        st, resp = _h27_api("DELETE", "/boards/g31-tmp")
+        assert st == 200, f"DELETE /boards/g31-tmp failed: {st} {resp}"
+        keys = _g31_board_keys()
+        assert "g31-tmp" not in keys, f"board still present after delete: {keys}"
+        rows = _h27_sql("SELECT COUNT(*) FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows[0][0] == 0, f"board delete must cascade to its tasks (task {tid} remains)"
+        tids.remove(tid)
+        # Resolution: task with board 'main' (board channel=kanban) and no channel
+        tid2 = _g31_make_task(f"g31-d-{uuid.uuid4().hex[:8]}", board="main", cid=None, workflow_id=None)
+        tids.append(tid2)
+        st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid2}/status", {"status": "running"})
+        rows = _g31_thread_rows(tid2)
+        assert rows, f"expected a thread row for board-resolution task: {resp}"
+        thr_id, _s, _t, ch, _step = rows[-1]
+        assert ch == "kanban", f"thread channel must fall back to board channel, got {ch}"
+        print("PASS: boards CRUD (PUT upsert, DELETE cascades tasks); "
+              "board channel fallback in thread creation (task no channel -> board channel)")
+    finally:
+        _g31_cleanup_tasks(tids)
+        with open(bfile, "w") as f:
+            f.write(orig)
+
+
+test(test_31_boards_list_and_filter)
+test(test_31_dispatch_skips_invalid_board)
+test(test_31_thread_creation_fails_invalid_board)
+test(test_31_boards_crud_and_resolution)
+
+
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
 print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
