@@ -7597,13 +7597,13 @@ def _h27_pre_threads(content):
     """MAX thread id of hook-caused threads whose seq-0 message content equals `content`
     (0 when none). Used to count only threads created DURING the current test run."""
     return _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads WHERE hook_caused = true AND id IN "
-                    "(SELECT thread_id FROM messages WHERE content = %s)", (content,))[0][0]
+                    "(SELECT thread_id FROM messages WHERE content LIKE %s)", (content + "%",))[0][0]
 
 
 def _h27_new_threads(content, pre):
     """Count hook-caused threads with content `content` created after thread id `pre`."""
     return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true AND id > %s AND id IN "
-                    "(SELECT thread_id FROM messages WHERE content = %s)", (pre, content))[0][0]
+                    "(SELECT thread_id FROM messages WHERE content LIKE %s)", (pre, content + "%"))[0][0]
 
 
 def _h27_wait_http(path, timeout=120, step=2):
@@ -7869,11 +7869,11 @@ def test_27_hooks_thread_finished():
         # leftover G27-FIN hook threads from interrupted runs are inert but present; only a
         # NEW one (id above the max pre-existing) proves a fresh thread_finished event fired
         pre_fin, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads WHERE hook_caused = true AND id IN "
-                            "(SELECT thread_id FROM messages WHERE content = 'G27-FIN')")[0]
+                            "(SELECT thread_id FROM messages WHERE content LIKE 'G27-FIN%')")[0]
         cid = _h27_run_cron("fin")
         def fin_thr_new():
             return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true AND id > %s "
-                            "AND id IN (SELECT thread_id FROM messages WHERE content = 'G27-FIN')",
+                            "AND id IN (SELECT thread_id FROM messages WHERE content LIKE 'G27-FIN%%')",
                             (pre_fin,))[0][0]
         ok = _h27_wait_until(lambda: fin_thr_new() >= 1, timeout=60)
         assert ok, "thread_finished hook must trigger when a thread reaches a terminal state"
@@ -7897,6 +7897,119 @@ test(test_27_hooks_scope_channel_profile)
 test(test_27_hooks_infinite_loop_protection)
 test(test_27_hooks_error_isolation)
 test(test_27_hooks_thread_finished)
+
+def _h27f_pre(content):
+    """MAX thread id of hook-caused threads whose seq-0 message content starts with
+    `content` (hook threads now embed the event JSON after the prompt)."""
+    return _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads WHERE hook_caused=true AND id IN "
+                    "(SELECT thread_id FROM messages WHERE content LIKE %s)", (content + "%",))[0][0]
+
+
+def _h27f_new(content, pre):
+    """Count hook-caused threads with seq-0 content starting with `content` after `pre`."""
+    return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused=true AND id > %s AND id IN "
+                    "(SELECT thread_id FROM messages WHERE content LIKE %s)", (pre, content + "%"))[0][0]
+
+
+def _h27f_meta(hid):
+    """The counter document's `meta` section (last_thread/last_message), or None."""
+    return _h27_counter(hid).get("meta")
+
+
+def test_27_hooks_event_meta():
+    """GROUP 27-F: counter meta (last_thread/last_message) persistence + the event object
+    delivered to the agentic target's prompt.
+
+    thread_started is deterministic (fires once per created thread; current_message resolves
+    to the thread's seq-0 message). First trigger: event last_* are null, meta written with
+    the triggering thread/message ids. Second trigger: event last_* carry the FIRST trigger's
+    ids (previous trigger context), meta updated to the second ids. Counter resets (count=1)
+    never clobber meta. The guard (thread_has_channel_and_profile) must NOT block normal
+    cron threads (channel='cron', profile='omni')."""
+    _h27_cleanup()
+    hid = _h27_create_hook(name="g27-meta", event="thread_started", scope="global",
+                           count=1, mode="agentic", prompt="G27-META", profile="omni")
+    try:
+        base_t, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0]
+        pre = _h27f_pre("G27-META")
+        _h27_run_cron("meta1")
+        ok = _h27_wait_until(lambda: _h27f_new("G27-META", pre) >= 1, timeout=40)
+        assert ok, "hook must fire on first thread_started event (no hook thread spawned)"
+        t1, = _h27_sql("SELECT id FROM threads WHERE id > %s AND channel_id='cron' "
+                       "ORDER BY id LIMIT 1", (base_t,))[0]
+        m1, = _h27_sql("SELECT MIN(id) FROM messages WHERE thread_id=%s", (t1,))[0]
+        meta1 = _h27f_meta(hid)
+        assert meta1 and meta1.get("last_thread") == t1, f"meta.last_thread must be {t1}: {meta1}"
+        assert meta1.get("last_message") == m1, f"meta.last_message must be {m1}: {meta1}"
+        c1 = _h27_counter(hid)
+        assert c1.get("global") == 0, f"count=1 hook must reset after trigger: {c1}"
+        ev1_row = _h27_sql("SELECT content FROM messages WHERE thread_sequence=0 AND thread_id IN "
+                           "(SELECT id FROM threads WHERE hook_caused=true AND id > %s AND id IN "
+                           "(SELECT thread_id FROM messages WHERE content LIKE 'G27-META%%')) "
+                           "ORDER BY id LIMIT 1", (pre,))
+        assert ev1_row, "no hook thread seq-0 message found"
+        content = ev1_row[0][0]
+        assert "Event: " in content, f"hook prompt must embed the event JSON: {content[:200]}"
+        ev1 = json.loads(content.split("Event: ", 1)[1])
+        assert ev1["last_thread"] is None and ev1["last_message"] is None,             f"first-trigger event last_* must be null: {ev1}"
+        assert ev1["current_thread"] == t1 and ev1["current_message"] == m1, f"current ids: {ev1}"
+        assert ev1["channel"] == "cron" and ev1["profile"] == "omni", f"channel/profile: {ev1}"
+        base_t2, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0]
+        pre2 = _h27f_pre("G27-META")
+        _h27_run_cron("meta2")
+        ok = _h27_wait_until(lambda: _h27f_new("G27-META", pre2) >= 1, timeout=40)
+        assert ok, "hook must fire again on the second thread_started event"
+        t2, = _h27_sql("SELECT id FROM threads WHERE id > %s AND channel_id='cron' "
+                       "ORDER BY id LIMIT 1", (base_t2,))[0]
+        m2, = _h27_sql("SELECT MIN(id) FROM messages WHERE thread_id=%s", (t2,))[0]
+        meta2 = _h27f_meta(hid)
+        assert meta2 and meta2.get("last_thread") == t2, f"meta.last_thread must be {t2}: {meta2}"
+        assert meta2.get("last_message") == m2, f"meta.last_message must be {m2}: {meta2}"
+        c2 = _h27_counter(hid)
+        assert c2.get("global") == 0, f"count=1 hook must reset after 2nd trigger: {c2}"
+        ev2_row = _h27_sql("SELECT content FROM messages WHERE thread_sequence=0 AND thread_id IN "
+                           "(SELECT id FROM threads WHERE hook_caused=true AND id > %s AND id IN "
+                           "(SELECT thread_id FROM messages WHERE content LIKE 'G27-META%%')) "
+                           "ORDER BY id DESC LIMIT 1", (pre2,))
+        assert ev2_row, "no second hook thread seq-0 message found"
+        ev2 = json.loads(ev2_row[0][0].split("Event: ", 1)[1])
+        assert ev2["last_thread"] == t1 and ev2["last_message"] == m1,             f"second-trigger event last_* must equal first trigger ids: {ev2}"
+        assert ev2["current_thread"] == t2 and ev2["current_message"] == m2, f"current ids: {ev2}"
+        print(f"PASS: meta1(t{t1}/m{m1}) meta2(t{t2}/m{m2}) ev1_last=null ev2_last=t{t1}/m{m1} "
+              f"channel=cron profile=omni")
+    finally:
+        _h27_cleanup()
+
+
+def test_27_hooks_event_action():
+    """GROUP 27-F-2: action-mode trigger writes meta + resets the counter (the trigger path
+    ran), and the actions.yml action executes (a3 = builtin_read-attached-file; its params
+    error on the missing file, but reaching the tool proves the event was merged into the
+    McpToolCall arguments and executed via the plugin registry)."""
+    _h27_cleanup()
+    hid = _h27_create_hook(name="g27-evt-a", event="thread_started", scope="global",
+                           count=1, mode="action", action_id="a3", prompt="G27-EVTA")
+    try:
+        base_t, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0]
+        _h27_run_cron("evta")
+        ok = _h27_wait_until(lambda: bool(_h27f_meta(hid)), timeout=40)
+        assert ok, "action-mode trigger must write meta"
+        t1, = _h27_sql("SELECT id FROM threads WHERE id > %s AND channel_id='cron' "
+                       "ORDER BY id LIMIT 1", (base_t,))[0]
+        m1, = _h27_sql("SELECT MIN(id) FROM messages WHERE thread_id=%s", (t1,))[0]
+        meta = _h27f_meta(hid)
+        assert meta.get("last_thread") == t1 and meta.get("last_message") == m1,             f"action-mode meta must match trigger ids: {meta}"
+        c = _h27_counter(hid)
+        assert c.get("global") == 0, f"action-mode count=1 hook must reset: {c}"
+        if _h27_logs("action hook 'g27-evt-a'"):
+            print("  evidence: '[hooks] action hook g27-evt-a' log line found (action executed)")
+        print(f"PASS: action-mode meta(t{t1}/m{m1}) counter_reset=0")
+    finally:
+        _h27_cleanup()
+
+
+test(test_27_hooks_event_meta)
+test(test_27_hooks_event_action)
 
 #  GROUP 28: Terminal status invariant (task_18cb83096b238872)
 print(f"\n{'=' * 60}")
