@@ -1055,8 +1055,8 @@ def prepare():
     print("\n[Enabling all built-in tool plugin MCPs...]")
     builtin_tool_plugins = [
         "actions", "cron", "docker", "fetch", "filesystem", "git",
-        "kanban", "memory", "metrics", "plugin-manager", "prompt",
-        "query", "search", "skills", "subtasks",
+        "kanban", "memory", "plugin-manager", "prompt",
+        "search", "skills", "subtasks",
     ]
     for p_name in builtin_tool_plugins:
         try:
@@ -1315,7 +1315,7 @@ def _validate_kanban_list(msg):
 
 
 def _validate_metrics(msg):
-    """metrics_get-metrics should return system metrics."""
+    """search_metrics should return system metrics."""
     return _validate_not_error(msg) and (
         "metric" in msg.lower() or "message" in msg.lower()
         or "channel" in msg.lower() or "thread" in msg.lower()
@@ -1394,7 +1394,7 @@ def _validate_plugin_manager_list(msg):
 
 
 def _validate_query_database(msg):
-    """query_database search_messages should return DB results."""
+    """search_database should return DB results."""
     return _validate_not_error(msg) and (
         "message" in msg.lower() or "content" in msg.lower()
         or "channel" in msg.lower() or "result" in msg.lower()
@@ -1420,7 +1420,7 @@ TOOL_VALIDATORS = {
     "git_status": _validate_git_status,
     "git_run-command": _validate_git_run_command,
     "kanban_list-kanban-tasks": _validate_kanban_list,
-    "metrics_get-metrics": _validate_metrics,
+    "search_metrics": _validate_metrics,
     "prompt_generate": _validate_prompt_generate,
     "prompt_compact-messages": _validate_prompt_compact,
     "search_messages": _validate_search_messages,
@@ -1429,11 +1429,10 @@ TOOL_VALIDATORS = {
     "skills_list-skills": _validate_skills_list,
     "actions_relevance-indexer": _validate_actions_relevance,
     "plugin-manager_plugin-manager": _validate_plugin_manager_list,
-    "query_database": _validate_query_database,
-    "query_search-messages": _validate_query_database,
-    "query_thread-messages": _validate_query_database,
-    "query_channel-prompts": _validate_query_database,
-    "query_channels": _validate_query_database,
+    "search_database": _validate_query_database,
+    "search_thread_messages": _validate_query_database,
+    "search_channel_prompts": _validate_query_database,
+    "search_channels": _validate_query_database,
     "memory_list-memories": _validate_memory_list,
 }
 
@@ -1489,8 +1488,8 @@ TOOL_DEFS = {
         "success_key": "kanban",
         "mcp_test_args": {},
     },
-    "metrics_get-metrics": {
-        "plugin": "metrics",
+    "search_metrics": {
+        "plugin": "search",
         "test_args": {},
         "success_key": "metrics",
         "mcp_test_args": {},
@@ -1543,8 +1542,8 @@ TOOL_DEFS = {
         "success_key": "plugin",
         "mcp_test_args": {"action": "list"},
     },
-    "query_database": {
-        "plugin": "query",
+    "search_database": {
+        "plugin": "search",
         # The legacy `channels` DB table was DROPPED by the migration (channels
         # now live in channels.yml; threads.channel_id holds the channel NAME).
         # Query a surviving table and alias a column to keep the success_key
@@ -1553,20 +1552,14 @@ TOOL_DEFS = {
         "success_key": "channel",
         "mcp_test_args": {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"},
     },
-    "query_search-messages": {
-        "plugin": "query",
-        "test_args": {"query": "test", "limit": 1},
-        "success_key": "found",
-        "mcp_test_args": {"query": "test", "limit": 1},
-    },
-    "query_thread-messages": {
-        "plugin": "query",
+    "search_thread_messages": {
+        "plugin": "search",
         "test_args": {"thread_id": 1, "limit": 5},
         "success_key": "found",
         "mcp_test_args": {"thread_id": 1, "limit": 5},
     },
-    "query_channel-prompts": {
-        "plugin": "query",
+    "search_channel_prompts": {
+        "plugin": "search",
         # channel_id is now the channel NAME (channels table dropped; the yml
         # key is the identifier). A numeric id fails with "'channel_id' is
         # required ... Pass channel_id explicitly".
@@ -1574,8 +1567,8 @@ TOOL_DEFS = {
         "success_key": "found",
         "mcp_test_args": {"channel_id": "kanban", "limit": 5},
     },
-    "query_channels": {
-        "plugin": "query",
+    "search_channels": {
+        "plugin": "search",
         "test_args": {"limit": 10},
         "success_key": "channel",
         "mcp_test_args": {"limit": 10},
@@ -1690,7 +1683,7 @@ def run_tests():
     print("\n[Enabling all built-in tool plugins...]")
     builtin_tool_plugins = [
         "actions", "cron", "docker", "fetch", "filesystem", "git",
-        "kanban", "memory", "metrics", "prompt", "search", "skills", "subtasks",
+        "kanban", "memory", "prompt", "search", "skills", "subtasks",
     ]
     for p_name in builtin_tool_plugins:
         try:
@@ -1947,7 +1940,7 @@ def run_tests():
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),
             ("git_run-command", {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]}, "git"),
             ("kanban_list-kanban-tasks", {}, "kanban"),
-            ("metrics_get-metrics", {}, "metrics"),
+            ("search_metrics", {}, "metrics"),
             ("prompt_generate", {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []}, "prompt"),
             ("prompt_compact-messages", {"messages": [{"role": "user", "content": "hello world"}]}, "compact"),
             ("search_messages", {"query": "test", "limit": 1}, "search"),
@@ -1955,14 +1948,13 @@ def run_tests():
             ("subtasks_list-subtasks", {"thread_id": 1}, "subtask"),
             ("actions_relevance-indexer", {}, "relevance"),
             ("plugin-manager_plugin-manager", {"action": "list"}, "plugin"),
-            ("query_database", {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"}, "channel"),
-            ("query_search-messages", {"query": "test", "limit": 1}, "found"),
-            ("query_thread-messages", {"thread_id": 1, "limit": 5}, "found"),
+            ("search_database", {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"}, "channel"),
+            ("search_thread_messages", {"thread_id": 1, "limit": 5}, "found"),
             # channel_id is the channel NAME now (channels table dropped by the
             # migration; threads.channel_id holds the yml key). A numeric id
             # errors out with "'channel_id' is required".
-            ("query_channel-prompts", {"channel_id": "kanban", "limit": 5}, "found"),
-            ("query_channels", {"limit": 10}, "channel"),
+            ("search_channel_prompts", {"channel_id": "kanban", "limit": 5}, "found"),
+            ("search_channels", {"limit": 10}, "channel"),
             ("skills_list-skills", {}, "skill"),
             ("memory_list-memories", {}, "memory"),
         ]
@@ -1994,9 +1986,9 @@ def run_tests():
             plugin_map = {
                 "actions": "actions", "cron": "cron", "docker": "docker",
                 "fetch": "fetch", "filesystem": "filesystem", "git": "git",
-                "kanban": "kanban", "memory": "memory", "metrics": "metrics",
+                "kanban": "kanban", "memory": "memory",
                 "plugin-manager": "plugin-manager", "prompt": "prompt",
-                "query": "query", "search": "search", "skills": "skills",
+                "search": "search", "skills": "skills",
                 "subtasks": "subtasks",
             }
             plugin = plugin_map.get(plugin_name)
