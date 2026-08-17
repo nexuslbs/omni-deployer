@@ -6059,10 +6059,10 @@ def test_fn_25_db_vectorizer():
     (omniagent) container.
     """
     print("GROUP 25: DB vectorizer populates embedding_vec")
-    # Ensure the query plugin is enabled and its tool is registered.
-    r = api_post_body("/plugins/tools/built-in/query/enable", {})
-    assert r.get("success"), f"enable query plugin failed: {r}"
-    assert _g24_wait_for_tool("query_search-messages"), "query_search-messages not registered"
+    # Ensure the consolidated search plugin is enabled and its tool registered.
+    r = api_post_body("/plugins/tools/built-in/search/enable", {})
+    assert r.get("success"), f"enable search plugin failed: {r}"
+    assert _g24_wait_for_tool("search_messages"), "search_messages not registered"
 
     marker = f"g25vec{uuid.uuid4().hex[:8]}"
     content = (
@@ -6076,16 +6076,16 @@ def test_fn_25_db_vectorizer():
     )
     print(f"  ✓ vectorizer backfilled embedding_vec for {n} message(s) in thread {th_id}")
 
-    # Semantic search must find the distinctive content via the query plugin.
+    # Keyword search (consolidated search plugin) must find the distinctive content.
     resp = _g24_mcp_execute(
-        "query_search-messages",
-        {"query": f"{marker} zebra quantum", "channel_id": ch_id, "limit": 5},
+        "search_messages",
+        {"query": marker, "channel_id": ch_id, "limit": 5},
     )
     out = resp.get("content") or ""
     assert marker in out, (
-        f"query_search-messages did not return the vectorized message: {out[:300]}"
+        f"search_messages did not return the vectorized message: {out[:300]}"
     )
-    print("  ✓ query_search-messages returned the vectorized message by semantic similarity")
+    print("  ✓ search_messages returned the vectorized message by keyword match")
 
 def test_fn_25_search_wiki():
     """GROUP 25: search_wiki does google-like keyword search over the wiki tree."""
@@ -10581,5 +10581,173 @@ def test_38_prompt_renders_skills_block():
 
 test(test_38_skills_create_list_view)
 test(test_38_prompt_renders_skills_block)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 39: Plugin consolidation — task_18cc76a266a194f9
+#  search/query/metrics merged into ONE search plugin (7 search_* tools),
+#  cron+kanban replaced by generic builtin_omniagent-api tool +
+#  DELETE /schedule/{id}, telegram/hindsight out of omniagent (remote).
+# ═══════════════════════════════════════════════════════════════════════
+print("GROUP 39: Plugin consolidation (search merge, omniagent-api generic tool, DELETE /schedule/{id})")
+
+
+def test_39_plugins_yml_consolidated():
+    """39-A: config/plugins.yml — query/metrics entries gone; search has
+    database_url; cron+kanban disabled; prompt built-in enabled."""
+    with open(f"{WORKSPACE}/config/plugins.yml", encoding="utf-8") as f:
+        txt = f.read()
+    tools_txt = txt.split("tools:")[1].split("providers:")[0]
+    assert "query:" not in tools_txt, "query plugin entry must be gone from plugins.yml"
+    assert "metrics:" not in tools_txt, "metrics plugin entry must be gone from plugins.yml"
+    assert "search:" in tools_txt and "database_url: $env:DATABASE_URL" in tools_txt, \
+        "search must keep database_url config"
+    cron_txt = tools_txt.split("cron:")[1]
+    assert "enabled: false" in cron_txt, "cron must be disabled"
+    kanban_txt = tools_txt.split("kanban:")[1]
+    assert "enabled: false" in kanban_txt, "kanban must be disabled"
+    prompt_txt = tools_txt.split("prompt:")[1]
+    assert "source: built-in" in prompt_txt, "prompt must stay built-in"
+    print("PASS: plugins.yml — query/metrics gone, search w/ database_url, cron+kanban disabled")
+
+
+def test_39_live_plugins():
+    """39-B: live /plugins — query/metrics absent; search built-in enabled;
+    cron+kanban disabled; prompt enabled."""
+    plugins = api_get("/plugins")["data"]
+    by_name = {}
+    for p in plugins:
+        by_name.setdefault(p.get("name"), []).append(p)
+    names = set(by_name)
+    assert "query" not in names, f"query plugin must be gone, have {sorted(names)}"
+    assert "metrics" not in names, f"metrics plugin must be gone, have {sorted(names)}"
+    s = next((p for p in by_name.get("search", []) if p.get("plugin_type") == "tool"), None)
+    assert s is not None and s.get("source") == "built-in" and s.get("status") == "enabled", \
+        f"search plugin state: {s}"
+    c = next((p for p in by_name.get("cron", []) if p.get("plugin_type") == "tool"), None)
+    assert c is not None and c.get("status") == "disabled", f"cron state: {c}"
+    k = next((p for p in by_name.get("kanban", []) if p.get("plugin_type") == "tool"), None)
+    assert k is not None and k.get("status") == "disabled", f"kanban state: {k}"
+    pr = next((p for p in by_name.get("prompt", []) if p.get("plugin_type") == "tool"), None)
+    assert pr is not None and pr.get("status") == "enabled", f"prompt state: {pr}"
+    print("PASS: live /plugins consolidated (no query/metrics, search enabled, cron+kanban disabled)")
+
+
+def test_39_search_tools_listed():
+    """39-C: /mcp/tools lists all 7 search_* tools + builtin_omniagent-api."""
+    req = urllib.request.Request(f"{BASE}/mcp/tools")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        tools = json.loads(r.read().decode("utf-8"))
+    if isinstance(tools, dict) and "tools" in tools:
+        tools = tools["tools"]
+    names = [t.get("full_name") or t.get("name") or "" for t in tools] if isinstance(tools, list) else list(tools.keys())
+
+    # Registered names are dasherized per omni-stack ac431c3:
+    # search_thread-messages / search_channel-prompts (underscore kept after
+    # 'search', dash before the suffix). Spec gate: all 7 search_* tools listed.
+    for want in ["search_messages", "search_wiki", "search_database",
+                 "search_thread-messages", "search_channel-prompts",
+                 "search_channels", "search_metrics"]:
+        assert any(want in n for n in names), f"{want} not in /mcp/tools ({len(names)} tools)"
+    assert any("builtin_omniagent-api" in n for n in names), "builtin_omniagent-api not in /mcp/tools"
+    print("PASS: 7 search_* tools + builtin_omniagent-api listed in /mcp/tools")
+
+
+def test_39_schedule_delete():
+    """39-D: DELETE /schedule/{id} — hard assert: create → delete → gone."""
+    import uuid as _g39_uuid
+    name = f"g39del{_g39_uuid.uuid4().hex[:8]}"
+    sid = None
+    try:
+        r = post_json("/schedule", {"name": name, "schedule": "0 4 * * *",
+                                    "prompt": "g39 delete test", "channel_id": "cron",
+                                    "enabled": False})
+        sid = r.get("data", {}).get("id") or r.get("id")
+        assert sid, f"no id from POST /schedule: {r}"
+        print(f"  ✓ created schedule {sid}")
+        resp = delete_json(f"/schedule/{sid}")  # raises on HTTP error
+        print(f"  ✓ DELETE /schedule/{sid} -> {resp}")
+        import urllib.error as _g39_ue
+        try:
+            get_json(f"/schedule/{sid}")
+            still = True
+        except Exception:
+            still = False
+        assert not still, "schedule still present after DELETE"
+        print("  ✓ schedule gone after DELETE")
+        sid = None
+    finally:
+        if sid:
+            delete_json(f"/schedule/{sid}", raise_on_error=False)
+            tasks_yml_remove_keys(lambda section, key: key == sid)
+    print("PASS: DELETE /schedule/{id} removes schedule")
+
+
+def test_39_omniagent_api_generic_tool():
+    """39-E: builtin_omniagent-api generic tool e2e — kanban CRUD + schedule
+    CRUD incl DELETE via the generic MCP tool (method/path/body to :8080)."""
+    import uuid as _g39_uuid
+    title = f"g39api{_g39_uuid.uuid4().hex[:8]}"
+    tid = None
+    sid = None
+    try:
+        resp = _g24_mcp_execute("builtin_omniagent-api",
+                                {"method": "POST", "path": "/kanban/tasks",
+                                 "body": {"title": title, "status": "todo"}})
+        out = resp.get("content") or ""
+        assert "HTTP 200" in out, f"kanban create via generic tool failed: {out[:300]}"
+        body = out.split("\n", 1)[1] if "\n" in out else out
+        data = json.loads(body)
+        tid = data.get("data", {}).get("id") or data.get("id")
+        assert tid, f"no task id in: {out[:300]}"
+        print(f"  ✓ kanban task {tid} created via builtin_omniagent-api")
+
+        resp = _g24_mcp_execute("builtin_omniagent-api",
+                                {"method": "GET", "path": "/kanban/tasks"})
+        out = resp.get("content") or ""
+        assert "HTTP 200" in out and title in out, f"kanban list via generic tool: {out[:300]}"
+        print("  ✓ kanban list via generic tool")
+
+        sname = f"g39apisched{_g39_uuid.uuid4().hex[:8]}"
+        resp = _g24_mcp_execute("builtin_omniagent-api",
+                                {"method": "POST", "path": "/schedule",
+                                 "body": {"name": sname, "schedule": "0 5 * * *",
+                                          "prompt": "g39 api", "channel_id": "cron",
+                                          "enabled": False}})
+        out = resp.get("content") or ""
+        assert "HTTP 200" in out, f"schedule create via generic tool: {out[:300]}"
+        body = out.split("\n", 1)[1] if "\n" in out else out
+        sdata = json.loads(body)
+        sid = sdata.get("data", {}).get("id") or sdata.get("id")
+        assert sid, f"no schedule id in: {out[:300]}"
+        print(f"  ✓ schedule {sid} created via builtin_omniagent-api")
+
+        resp = _g24_mcp_execute("builtin_omniagent-api",
+                                {"method": "DELETE", "path": f"/schedule/{sid}"})
+        out = resp.get("content") or ""
+        assert "HTTP 200" in out, f"DELETE /schedule/{sid} via generic tool: {out[:300]}"
+        print(f"  ✓ DELETE /schedule/{sid} via builtin_omniagent-api")
+        sid = None
+
+        resp = _g24_mcp_execute("builtin_omniagent-api",
+                                {"method": "DELETE", "path": f"/kanban/tasks/{tid}"})
+        out = resp.get("content") or ""
+        assert "HTTP 200" in out, f"kanban delete via generic tool: {out[:300]}"
+        print(f"  ✓ kanban task {tid} deleted via builtin_omniagent-api")
+        tid = None
+    finally:
+        if tid:
+            delete_json(f"/kanban/tasks/{tid}", raise_on_error=False)
+        if sid:
+            delete_json(f"/schedule/{sid}", raise_on_error=False)
+            tasks_yml_remove_keys(lambda section, key: key == sid)
+    print("PASS: builtin_omniagent-api generic tool e2e (kanban CRUD + schedule CRUD incl DELETE)")
+
+
+test(test_39_plugins_yml_consolidated)
+test(test_39_live_plugins)
+test(test_39_search_tools_listed)
+test(test_39_schedule_delete)
+test(test_39_omniagent_api_generic_tool)
 
 sys.exit(0 if tests_fail == 0 else 1)
