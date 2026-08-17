@@ -6907,21 +6907,30 @@ WF_SCRIPT_4STEPS = json.dumps([{"name": f"s{i}", "tool": "test-python_lorem", "a
 def _wf_ensure_test_python():
     """Enable the bundled test-python tool so WF_SCRIPT_OK (test-python_lorem) executes.
     Mirrors G12's enable sequence; GROUP 22 scripts call test-python_lorem and fail with
-    'Unknown tool' if it is not registered."""
+    'Unknown tool' if it is not registered. GROUP 40 (role mode agent/action) runs
+    agent-mode executor threads that build their prompt with prompt_generate, so we
+    also wait for prompt_generate AND settle for the async MCP server spawn: the
+    plugin reload respawns ALL MCP servers asynchronously and the /mcp/tools registry
+    fills in gradually — without this, 40-C/D/E hit 'Unknown tool: prompt_generate' /
+    'Unknown tool: test-python_lorem' right after the enable reload."""
     ensure_bundled_plugin("test-python", "tools")
     yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
     api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
-    for attempt in range(15):
+    for attempt in range(20):
         try:
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "") for t in tools):
+            names = [(t.get("full_name") or t.get("name") or "") for t in tools]
+            if (any("test-python_lorem" in n for n in names) and
+                    any("prompt_generate" in n for n in names)):
+                # Settle: the discovery/registry update lags the async server spawn.
+                time.sleep(3)
                 return True
         except Exception:
             pass
         time.sleep(2)
-    raise AssertionError("test-python_lorem did not register after enable")
+    raise AssertionError("test-python_lorem / prompt_generate did not register after enable")
 
 
 def _wf_remove_test_python():
