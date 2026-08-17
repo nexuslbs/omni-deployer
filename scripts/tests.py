@@ -10414,4 +10414,172 @@ test(test_37_mcp_stdio_tools)
 test(test_37_live_actions)
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 38: Skills plugin lifecycle — task_18cc76881db8a89a
+#  (prompt get_skills frontmatter display fix + Hermes create_skill layout
+#   + prompt nudge). Spawns the built mcp-server-skills / mcp-server-prompt
+#   binaries over MCP stdio (mirroring GROUP 34/37) with a TEMP omni_dir so
+#   the live profile is never touched. Verifies the full loop:
+#     create_skill -> <cat>/<name>/SKILL.md Hermes layout on disk ->
+#     list_skills/view_skill resolve it -> prompt_generate renders
+#     "- <name>: Use when ..." (frontmatter description, NOT the raw ---
+#     fence) plus the create-skill nudge; >1024-char and duplicate
+#     descriptions rejected.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _g38_find_binary(name):
+    for cand in (f"/target/release/{name}", f"/usr/local/bin/{name}",
+                 f"/app/target/release/{name}"):
+        if os.path.exists(cand):
+            return cand
+    raise AssertionError(f"{name} binary not found (build the plugin first)")
+
+def _g38_spawn(binary):
+    import subprocess as _g38_sp
+    return _g38_sp.Popen([binary], stdin=_g38_sp.PIPE, stdout=_g38_sp.PIPE,
+                         stderr=_g38_sp.DEVNULL)
+
+def _g38_init(proc):
+    r = _g34_call(proc, "initialize",
+                  {"protocolVersion": "2025-03-26", "capabilities": {},
+                   "clientInfo": {"name": "g38", "version": "1.0"}}, req_id=1)
+    assert "result" in r, f"initialize failed: {r}"
+    return r["result"]
+
+def _g38_tool(proc, name, args, profile_name="omni", req_id=None, timeout=30):
+    """Call a tool with a profile _meta; returns (text, is_error)."""
+    if req_id is None:
+        req_id = _g34_NEXT_ID[0]
+        _g34_NEXT_ID[0] += 1
+    params = {"name": name, "arguments": args}
+    if profile_name:
+        params["_meta"] = {"profile_name": profile_name}
+    r = _g34_call(proc, "tools/call", params, req_id=req_id, timeout=timeout)
+    if "error" in r:
+        msg = r["error"].get("message", "") if isinstance(r.get("error"), dict) else str(r.get("error"))
+        return msg, True
+    assert "result" in r, f"tools/call {name} failed: {r}"
+    res = r["result"]
+    content = res.get("content", [])
+    text = ""
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text += item.get("text", "")
+    elif isinstance(content, str):
+        text = content
+    is_error = bool(res.get("isError", res.get("is_error", False)))
+    return text, is_error
+
+def _g38_create_demo_skill(proc, base, name="g38-demo"):
+    """Create the demo skill; asserts the Hermes SKILL.md layout on disk."""
+    text, is_error = _g38_tool(proc, "create_skill", {
+        "name": name,
+        "description": "run the release pipeline",
+        "content": "# G38 Demo\n\n1. Build.\n2. Verify gates.\n",
+        "category": "devops", "tags": "build,ci",
+        "related_skills": "git-workflow"})
+    assert not is_error, f"create_skill failed: {text}"
+    skill_file = f"{base}/profiles/omni/skills/devops/{name}/SKILL.md"
+    assert os.path.exists(skill_file), f"SKILL.md not written: {skill_file} (msg: {text})"
+    content = open(skill_file, encoding="utf-8").read()
+    for want in ['name: g38-demo', 'description: "Use when run the release pipeline"',
+                 "version: 0.1.0", "author: omniagent", "license: MIT",
+                 "metadata:", "hermes:", "tags:", "- build", "- ci",
+                 "related_skills:", "- git-workflow"]:
+        assert want in content, f"SKILL.md missing {want!r}:\n{content}"
+    return content
+
+def test_38_skills_create_list_view():
+    """38-A: skills lifecycle over MCP stdio with a temp omni_dir — Hermes
+    dir layout, enriched frontmatter, list/view resolution, duplicate +
+    >1024-char rejection."""
+    import tempfile as _g38_tf
+    import shutil as _g38_sh
+    base = _g38_tf.mkdtemp(prefix="g38-skills-")
+    proc = None
+    try:
+        proc = _g38_spawn(_g38_find_binary("mcp-server-skills"))
+        _g38_init(proc)
+        _g34_configure(proc, {"omni_dir": base})
+
+        content = _g38_create_demo_skill(proc, base)
+
+        # list_skills resolves the created skill
+        text, is_error = _g38_tool(proc, "list_skills", {})
+        assert not is_error, f"list_skills failed: {text}"
+        assert "g38-demo" in text, f"list_skills missing g38-demo: {text}"
+
+        # view_skill reads it back
+        text, is_error = _g38_tool(proc, "view_skill", {"name": "g38-demo"})
+        assert not is_error, f"view_skill failed: {text}"
+        assert "G38 Demo" in text, f"view_skill content missing: {text}"
+
+        # duplicate create rejected
+        text, is_error = _g38_tool(proc, "create_skill", {
+            "name": "g38-demo", "description": "again", "content": "x",
+            "category": "devops"})
+        assert is_error, "duplicate create_skill must fail"
+        assert "already exists" in text.lower(), f"dup error msg: {text}"
+
+        # >1024-char description rejected
+        long_desc = "x" * 1025
+        text, is_error = _g38_tool(proc, "create_skill", {
+            "name": "g38-long", "description": long_desc, "content": "y"})
+        assert is_error, ">1024 description must fail"
+        assert "1024" in text, f"long-desc error msg: {text}"
+
+        print(f"PASS: 38-A create/list/view — Hermes SKILL.md layout, license MIT, "
+              f"use-when prefix, metadata.hermes tags/related_skills, dup+>1024 rejected")
+    finally:
+        _g34_stop_proc(proc)
+        _g38_sh.rmtree(base, ignore_errors=True)
+
+def test_38_prompt_renders_skills_block():
+    """38-B: prompt_generate renders the created skill with its frontmatter
+    description ("- g38-demo: Use when ...", NOT a raw --- fence) plus the
+    create-skill nudge."""
+    import tempfile as _g38_tf
+    import shutil as _g38_sh
+    base = _g38_tf.mkdtemp(prefix="g38-prompt-")
+    sk = None
+    pk = None
+    try:
+        # create the skill in the temp omni_dir via the skills binary
+        sk = _g38_spawn(_g38_find_binary("mcp-server-skills"))
+        _g38_init(sk)
+        _g34_configure(sk, {"omni_dir": base})
+        _g38_create_demo_skill(sk, base)
+
+        db_url = os.environ.get("DATABASE_URL", "")
+        assert db_url, "DATABASE_URL not set in test environment"
+
+        pk = _g38_spawn(_g38_find_binary("mcp-server-prompt"))
+        _g38_init(pk)
+        _g34_configure(pk, {"omni_dir": base, "database_url": db_url})
+        text, is_error = _g38_tool(pk, "prompt_generate", {
+            "profile_name": "omni", "platform": "mattermost",
+            "tool_names": ["create_skill", "list_skills", "view_skill", "notes_note-write"],
+            "system_message": "sys", "user_message": "hi", "channel_id": "g38-livecheck"},
+            profile_name=None, timeout=60)
+        assert not is_error, f"prompt_generate failed: {text[:500]}"
+        assert "Available skills" in text, f"no Available skills block: {text[:800]}"
+        assert "- g38-demo: Use when run the release pipeline" in text, \
+            f"frontmatter description not rendered:\n{text[:1200]}"
+        assert "create a skill with create_skill so future threads reuse it" in text, \
+            f"create-skill nudge missing:\n{text[:1200]}"
+        assert "- g38-demo: ---" not in text, "raw --- fence leaked into prompt"
+        print("PASS: 38-B prompt block — frontmatter description rendered, "
+              "no --- fence, create-skill nudge present")
+    finally:
+        _g34_stop_proc(sk)
+        _g34_stop_proc(pk)
+        _g38_sh.rmtree(base, ignore_errors=True)
+
+
+test(test_38_skills_create_list_view)
+test(test_38_prompt_renders_skills_block)
+
 sys.exit(0 if tests_fail == 0 else 1)
