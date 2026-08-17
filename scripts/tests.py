@@ -10750,4 +10750,212 @@ test(test_39_search_tools_listed)
 test(test_39_schedule_delete)
 test(test_39_omniagent_api_generic_tool)
 
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 40: Workflow role mode (agent/action) + auto_approve +
+#  review_on_fail — task_18cc95fc8fbba9e0
+#  Live behavior: action-mode roles execute actions.yml tools via the plugin
+#  manager instead of the agent loop. Routing matrix:
+#    - action-mode executor fail → blocked (NOT executor re-run)
+#    - action-mode tester fail  → review (NOT executor re-run)
+#    - action-mode reviewer fail→ blocked
+#    - successes follow the agent matrix
+#    - auto_approve=true: review-bound outcomes go DIRECTLY to done,
+#      review_on_fail forced false
+#    - review_on_fail=true: failed running/testing steps go to review
+#  Step threads for action-mode are TERMINAL: status='system' (success) or
+#  'failed' (error), created by kanban_action::run_action_step.
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_40_action_executor_success():
+    """40-A: executor mode=action, action 'builtin_hindsight_populator' SUCCEEDS
+    → task advances to review (executor-only workflow, no tester). The running
+    step thread must be a TERMINAL 'system' action thread carrying workflow_id +
+    workflow_step='running' (proves the action ran instead of the agent loop)."""
+    cid, orig = _wf_channel_patch()
+    key = "wf40_execok_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"}}})
+        tid = _wf_create_task("wf40-exec-ok", key, "[]", cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done", "testing"}, timeout=120)
+        assert st == "review", f"40-A: expected review after action executor success, got {st}: {gd}"
+        thr = _wf_step_threads(tid)
+        assert thr, f"40-A: no step threads for task {tid}"
+        t = thr[0]
+        assert t["workflow_step"] == "running", f"40-A: workflow_step={t['workflow_step']}, expected running"
+        assert t["status"] == "system", f"40-A: action thread must be terminal 'system', got {t['status']} ({t})"
+        assert t["workflow_id"] == key, f"40-A: workflow_id={t['workflow_id']}, expected {key}"
+        print(f"PASS: 40-A action executor success → review (thread {t['id']} status={t['status']})")
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_40_action_executor_fail_blocked():
+    """40-B: executor mode=action with UNRESOLVABLE action → task BLOCKED
+    (action-mode executor fail→blocked, NOT executor re-run). Step thread is
+    a terminal 'failed' action thread; exactly ONE running thread exists."""
+    cid, orig = _wf_channel_patch()
+    key = "wf40_execfail_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"mode": "action", "action_id": "no-such-action-xyz"}}})
+        tid = _wf_create_task("wf40-exec-fail", key, "[]", cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done", "testing"}, timeout=120)
+        assert st == "blocked", f"40-B: action executor fail must go to blocked, got {st}: {gd}"
+        thr = _wf_step_threads(tid)
+        run = [t for t in thr if t["workflow_step"] == "running"]
+        assert len(run) == 1, f"40-B: exactly one running thread expected (no executor re-run), got {thr}"
+        assert run[0]["status"] == "failed", f"40-B: action thread must be terminal 'failed', got {run[0]}"
+        print(f"PASS: 40-B action executor fail → blocked (thread {run[0]['id']} status=failed)")
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_40_action_tester_fail_review():
+    """40-C: agent-mode executor SUCCESS + tester mode=action FAIL → task REVIEW
+    (action-mode tester fail→review, NOT the agent-mode D5 executor re-run).
+    Exactly one running thread (no re-run); testing thread terminal 'failed'."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf40_testerfail_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
+                                                 "tester": {"mode": "action", "action_id": "no-such-action-xyz"}}})
+        tid = _wf_create_task("wf40-tester-fail", key, WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=180)
+        assert st == "review", f"40-C: action tester fail must go to review (NOT executor re-run), got {st}: {gd}"
+        thr = _wf_step_threads(tid)
+        run = [t for t in thr if t["workflow_step"] == "running"]
+        test = [t for t in thr if t["workflow_step"] == "testing"]
+        assert len(run) == 1, f"40-C: exactly one running thread (no D5 re-run), got {thr}"
+        assert len(test) == 1 and test[0]["status"] == "failed", f"40-C: testing thread terminal failed, got {test}"
+        print(f"PASS: 40-C action tester fail → review (running#{len(run)}, testing failed)")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_40_action_reviewer_fail_blocked():
+    """40-D: agent executor+tester SUCCESS + reviewer mode=action FAIL → task
+    BLOCKED (action-mode reviewer fail→blocked). Review thread terminal 'failed'."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf40_revfail_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
+                                                 "tester": {"provider": "noop", "model": "test-tool-caller",
+                                                            "template": "wf_tester.md"},
+                                                 "reviewer": {"mode": "action", "action_id": "no-such-action-xyz"}}})
+        tid = _wf_create_task("wf40-rev-fail", key, WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"done", "blocked", "review"}, timeout=240)
+        assert st == "blocked", f"40-D: action reviewer fail must go to blocked, got {st}: {gd}"
+        thr = _wf_step_threads(tid)
+        rev = [t for t in thr if t["workflow_step"] == "review"]
+        assert len(rev) == 1 and rev[0]["status"] == "failed", f"40-D: review thread terminal failed, got {rev}"
+        print(f"PASS: 40-D action reviewer fail → blocked (review thread failed)")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_40_auto_approve_done_direct():
+    """40-E: auto_approve=true — reviewer role ignored: tester passes → task
+    goes DIRECTLY to done (no review step thread, no manual review)."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf40_autoapp_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "auto_approve": True,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
+                                                 "tester": {"provider": "noop", "model": "test-tool-caller",
+                                                            "template": "wf_tester.md"}}})
+        tid = _wf_create_task("wf40-autoapp", key, WF_SCRIPT_OK, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"done", "blocked", "review"}, timeout=240)
+        assert st == "done", f"40-E: auto_approve must go directly to done, got {st}: {gd}"
+        thr = _wf_step_threads(tid)
+        steps = {t["workflow_step"] for t in thr}
+        assert "review" not in steps, f"40-E: auto_approve must skip review, got steps={steps} ({thr})"
+        assert steps == {"running", "testing"}, f"40-E: expected running+testing only, got {steps}"
+        print(f"PASS: 40-E auto_approve → done directly (steps={sorted(steps)})")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_40_review_on_fail_goes_review():
+    """40-F: review_on_fail=true — failed executor step goes to REVIEW instead
+    of blocked. Use action-mode executor fail (normally → blocked) + the flag."""
+    cid, orig = _wf_channel_patch()
+    key = "wf40_ronfail_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "review_on_fail": True,
+                                       "roles": {"executor": {"mode": "action", "action_id": "no-such-action-xyz"}}})
+        tid = _wf_create_task("wf40-ronfail", key, "[]", cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=120)
+        assert st == "review", f"40-F: review_on_fail must send failed executor to review, got {st}: {gd}"
+        print(f"PASS: 40-F review_on_fail → failed executor step went to review")
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_40_auto_approve_forces_review_on_fail_false():
+    """40-G: auto_approve=true FORCES review_on_fail=false: failed executor step
+    goes to BLOCKED even when review_on_fail=true is also set."""
+    cid, orig = _wf_channel_patch()
+    key = "wf40_aaforc_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "auto_approve": True, "review_on_fail": True,
+                                       "roles": {"executor": {"mode": "action", "action_id": "no-such-action-xyz"}}})
+        tid = _wf_create_task("wf40-aaforc", key, "[]", cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=120)
+        assert st == "blocked", f"40-G: auto_approve must force review_on_fail false → blocked, got {st}: {gd}"
+        print(f"PASS: 40-G auto_approve forces review_on_fail=false → blocked")
+    finally:
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+test(test_40_action_executor_success)
+test(test_40_action_executor_fail_blocked)
+test(test_40_action_tester_fail_review)
+test(test_40_action_reviewer_fail_blocked)
+test(test_40_auto_approve_done_direct)
+test(test_40_review_on_fail_goes_review)
+test(test_40_auto_approve_forces_review_on_fail_false)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
