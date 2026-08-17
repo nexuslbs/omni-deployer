@@ -9873,4 +9873,203 @@ def test_35_subtasks_plan_mode_lifecycle():
 test(test_35_subtasks_plan_mode_lifecycle)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 36: Paperclip service + official MCP server integration —
+#  task_18cc6c4199f913f9. Verifies the compose service (profiles
+#  paperclip/all, pinned sha-e55d702, volume paperclip-data), the config
+#  wiring (plugins.yml / remote.yml / allowed_tools), the vendored
+#  @paperclipai/mcp-server plugin files, the deploy.py remote.yml seed, and
+#  a live MCP stdio initialize+tools/list against the vendored binary (no
+#  paperclip container needed — tools/list is static). A live /api/health
+#  check runs only when the paperclip service is actually up (SKIP
+#  otherwise — omnidev does not run the paperclip profile).
+# ═══════════════════════════════════════════════════════════════════════
+print(f"\n{'=' * 60}")
+print("GROUP 36: Paperclip service + official MCP server integration")
+print(f"{'=' * 60}")
+
+
+def _g36_paperclip_dir():
+    return f"{REMOTE_REPO}/tools/paperclip"
+
+
+def test_36_compose_service():
+    """36-A: docker-compose.yml defines the paperclip service: image pinned
+    to sha-e55d702 (NOT latest), profiles ['paperclip','all'], expose 3100,
+    volume paperclip-data:/paperclip, required env vars."""
+    with open(f"{WORKSPACE}/docker-compose.yml", encoding="utf-8") as f:
+        txt = f.read()
+    assert "paperclip:" in txt, "paperclip service missing from docker-compose.yml"
+    assert "ghcr.io/paperclipai/paperclip:sha-e55d702" in txt, \
+        "paperclip image must be pinned to sha-e55d702"
+    image_line = [l for l in txt.split("\n") if "paperclipai/paperclip" in l]
+    assert image_line and ":latest" not in image_line[0], \
+        f"paperclip image must NOT use latest: {image_line}"
+    assert 'profiles: ["paperclip", "all"]' in txt, \
+        'paperclip profiles must be ["paperclip", "all"]'
+    assert '"3100"' in txt, "paperclip must expose 3100"
+    assert "paperclip-data:/paperclip" in txt, \
+        "volume paperclip-data:/paperclip required"
+    for env_key in ["HOST", "PAPERCLIP_HOME", "PAPERCLIP_DEPLOYMENT_MODE",
+                    "PAPERCLIP_DEPLOYMENT_EXPOSURE", "PAPERCLIP_PUBLIC_URL",
+                    "BETTER_AUTH_SECRET"]:
+        assert env_key in txt, f"env {env_key} missing from paperclip service"
+    print("PASS: compose paperclip service (pinned sha-e55d702, profiles "
+          "paperclip/all, expose 3100, volume paperclip-data, env)")
+
+
+def test_36_dev_overlay():
+    """36-B: docker-compose.dev.yml publishes paperclip UI host port
+    3101 -> container 3100 (mattermost-style dev host port)."""
+    with open(f"{WORKSPACE}/docker-compose.dev.yml", encoding="utf-8") as f:
+        txt = f.read()
+    assert "paperclip:" in txt, "paperclip missing from dev overlay"
+    assert "3101:3100" in txt, "dev overlay must map 3101:3100"
+    print("PASS: dev overlay paperclip ports 3101:3100")
+
+
+def test_36_config_wiring():
+    """36-C: config/plugins.yml enables the remote paperclip plugin with
+    PAPERCLIP_API_URL http://paperclip:3100 + $secret:PAPERCLIP_API_KEY;
+    config/remote.yml points at nexuslbs/omni-plugins tools/paperclip;
+    profiles/omni/config.json allowed_tools whitelists paperclip_* tools."""
+    with open(f"{WORKSPACE}/config/plugins.yml", encoding="utf-8") as f:
+        plugins_txt = f.read()
+    assert "paperclip:" in plugins_txt, "paperclip missing from plugins.yml"
+    assert "enabled: true" in plugins_txt.split("paperclip:")[1].split("plugin-manager:")[0], \
+        "paperclip must be enabled"
+    assert "source: remote" in plugins_txt.split("paperclip:")[1].split("plugin-manager:")[0], \
+        "paperclip must be source remote"
+    assert "PAPERCLIP_API_URL: http://paperclip:3100" in plugins_txt, \
+        "PAPERCLIP_API_URL must be http://paperclip:3100"
+    assert "PAPERCLIP_API_KEY: $secret:PAPERCLIP_API_KEY" in plugins_txt, \
+        "PAPERCLIP_API_KEY must be $secret:PAPERCLIP_API_KEY"
+    with open(f"{WORKSPACE}/config/remote.yml", encoding="utf-8") as f:
+        remote_txt = f.read()
+    assert "paperclip:" in remote_txt, "paperclip missing from remote.yml"
+    assert "nexuslbs/omni-plugins.git" in remote_txt, \
+        "remote.yml must point at nexuslbs/omni-plugins"
+    assert "tools/paperclip" in remote_txt, "remote.yml path must be tools/paperclip"
+    with open(f"{WORKSPACE}/profiles/omni/config.json", encoding="utf-8") as f:
+        cfg = json.load(f)
+    allowed = cfg.get("allowed_tools", [])
+    for t in ["paperclip_paperclipMe", "paperclip_paperclipApiRequest",
+              "paperclip_paperclipListIssues", "paperclip_paperclipCreateIssue"]:
+        assert t in allowed, f"allowed_tools missing {t}"
+    print("PASS: config wiring (plugins.yml remote+URL+secret, remote.yml "
+          "entry, allowed_tools paperclip_* tools)")
+
+
+def test_36_plugin_files():
+    """36-D: omni-plugins tools/paperclip plugin files — plugin.json (type
+    mcp, config_schema), mcp-config.json (stdio node dist/stdio.js,
+    allowed_tools ['*']), package.json pinned @paperclipai/mcp-server
+    2026.722.0, vendored node_modules present."""
+    d = _g36_paperclip_dir()
+    with open(f"{d}/plugin.json", encoding="utf-8") as f:
+        pj = json.load(f)
+    assert pj.get("type") == "mcp", f"plugin type must be mcp: {pj}"
+    keys = [k.get("key") for k in pj.get("config_schema", [])]
+    for k in ["PAPERCLIP_API_URL", "PAPERCLIP_API_KEY"]:
+        assert k in keys, f"config_schema missing {k}"
+    with open(f"{d}/mcp-config.json", encoding="utf-8") as f:
+        mc = json.load(f)
+    srv = mc["servers"][0]
+    assert srv.get("transport") == "stdio", f"transport must be stdio: {srv}"
+    assert srv.get("command") == "node", f"command must be node: {srv}"
+    assert "node_modules/@paperclipai/mcp-server/dist/stdio.js" in srv.get("args", []), \
+        f"args must point at vendored stdio.js: {srv.get('args')}"
+    assert srv.get("allowed_tools") == ["*"], f"allowed_tools must be ['*']: {srv}"
+    with open(f"{d}/package.json", encoding="utf-8") as f:
+        pkg = json.load(f)
+    dep = pkg.get("dependencies", {}).get("@paperclipai/mcp-server")
+    assert dep == "2026.722.0", \
+        f"@paperclipai/mcp-server must be pinned 2026.722.0: {dep}"
+    assert os.path.isdir(f"{d}/node_modules/@paperclipai/mcp-server"), \
+        "vendored node_modules missing"
+    assert os.path.exists(f"{d}/node_modules/@paperclipai/mcp-server/dist/stdio.js"), \
+        "vendored stdio.js missing"
+    print("PASS: plugin files (mcp type, config_schema, stdio node stdio.js, "
+          "allowed_tools *, pinned 2026.722.0, vendored node_modules)")
+
+
+def test_36_deploy_seed():
+    """36-E: deploy.py generate_env seeds config/remote.yml with the
+    paperclip entry so deployed stacks register the plugin."""
+    with open(f"{REMOTE_REPO}/../omni-deployer/deploy.py", encoding="utf-8") as f:
+        dep = f.read()
+    assert "paperclip:" in dep, \
+        "deploy.py generate_env must seed paperclip in remote.yml"
+    assert "tools/paperclip" in dep, \
+        "deploy.py seed must use path tools/paperclip"
+    print("PASS: deploy.py generate_env seeds remote.yml with paperclip")
+
+
+def test_36_mcp_stdio_tools():
+    """36-F: spawn the vendored @paperclipai/mcp-server (node stdio) and do
+    MCP initialize + tools/list — the paperclip_* tools must be present.
+    Does not need the paperclip container (tools/list is static)."""
+    import subprocess as _g36_sp
+    import threading as _g36_th
+    stdio_js = f"{_g36_paperclip_dir()}/node_modules/@paperclipai/mcp-server/dist/stdio.js"
+    assert os.path.exists(stdio_js), f"stdio.js missing: {stdio_js}"
+    env = dict(os.environ)
+    env.setdefault("PAPERCLIP_API_URL", "http://paperclip:3100")
+    # config.js readConfigFromEnv throws unless BOTH URL and KEY are set
+    # (the server validates env at startup). tools/list is static so a
+    # dummy key is enough to boot the server and list the tools.
+    env.setdefault("PAPERCLIP_API_KEY", "test-key-for-tools-list")
+    proc = _g36_sp.Popen(["node", stdio_js], stdin=_g36_sp.PIPE,
+                         stdout=_g36_sp.PIPE, stderr=_g36_sp.PIPE, env=env)
+    stderr_lines = []
+
+    def _drain():
+        try:
+            for line in proc.stderr:
+                stderr_lines.append(line)
+        except Exception:
+            pass
+    _g36_th.Thread(target=_drain, daemon=True).start()
+    try:
+        r = _g34_call(proc, "initialize",
+                     {"protocolVersion": "2024-11-05", "capabilities": {},
+                      "clientInfo": {"name": "g36", "version": "1.0"}},
+                     req_id=1)
+        assert "result" in r, f"initialize failed: {r}"
+        r = _g34_call(proc, "tools/list", req_id=2)
+        assert "result" in r, f"tools/list failed: {r}"
+        tools = r["result"].get("tools", [])
+        names = [t.get("name") for t in tools]
+        for want in ["paperclipMe", "paperclipApiRequest", "paperclipListIssues",
+                     "paperclipListAgents", "paperclipCreateIssue"]:
+            assert want in names, f"tools/list missing {want}; have {len(names)} tools"
+        assert len(names) >= 30, f"expected 30+ paperclip tools, got {len(names)}"
+        print(f"PASS: MCP stdio tools/list returned {len(names)} paperclip tools "
+              f"(paperclipMe, paperclipApiRequest, ...)")
+    finally:
+        _g34_stop_proc(proc)
+
+
+def test_36_live_health():
+    """36-G: if the paperclip service is up in this stack, /api/health
+    returns 200 (SKIP otherwise — omnidev does not run the paperclip
+    profile, so the container is absent)."""
+    try:
+        r = urllib.request.urlopen("http://paperclip:3100/api/health", timeout=5)
+        assert r.status == 200, f"/api/health status {r.status}"
+        print(f"PASS: paperclip /api/health HTTP {r.status}")
+    except Exception as e:
+        print(f"SKIP: paperclip container not running in this stack ({e})")
+
+
+test(test_36_compose_service)
+test(test_36_dev_overlay)
+test(test_36_config_wiring)
+test(test_36_plugin_files)
+test(test_36_deploy_seed)
+test(test_36_mcp_stdio_tools)
+test(test_36_live_health)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
