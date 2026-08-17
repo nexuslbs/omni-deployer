@@ -5729,7 +5729,8 @@ test(test_23_1_import_several_from_remote_yml)
 
 def test_23_2_import_from_remote_test_yml():
     """Import the plugins listed in remote.test.yml — kanban, cron, subtasks,
-    actions — from the omni-agent repository cloned as a remote repo."""
+    (the 'actions' crate was removed by the task_18cc73ad22835e2d port;
+    the actions plugin now lives in nexuslbs/omni-plugins tools/actions.)"""
     backup_remote_yml()
     backup_plugins_yml()
     try:
@@ -5737,7 +5738,6 @@ def test_23_2_import_from_remote_test_yml():
             "kanban": "plugins/tools/kanban",
             "cron": "plugins/tools/cron",
             "subtasks": "plugins/tools/subtasks",
-            "actions": "plugins/tools/actions",
         }
         for name, path in entries.items():
             ensure_remote_plugin_from("file:///opt/workspace/omniagent", name, path)
@@ -6958,8 +6958,25 @@ def _wf_cleanup(keys, task_ids):
 
 
 def _wf_create_task(title, key, script, cid):
-    r = post_json("/kanban/tasks", {"title": title, "status": "todo",
-                                    "workflow_id": key, "channel_id": cid, "body": script})
+    body = {"title": title, "status": "todo",
+            "workflow_id": key, "channel_id": cid, "body": script}
+    # Boards feature gate: when config/boards.yml exists (omnidev dev stack),
+    # the dispatch gate (server/kanban.rs:2336) skips tasks with no/unknown
+    # board — so workflow-test tasks need a VALID board to ever dispatch.
+    # The task's explicit channel/workflow win over the board's fallbacks,
+    # so any board key from the file works. Inert on stacks without boards.yml.
+    boards_path = f"{WORKSPACE}/config/boards.yml"
+    if os.path.exists(boards_path):
+        try:
+            import re as _re
+            txt = open(boards_path, encoding="utf-8").read()
+            m = _re.search(r"^boards:\s*\n", txt)
+            keys = _re.findall(r"^  ([\w-]+):", txt, _re.M)
+            if keys:
+                body["board"] = keys[0]
+        except Exception as _e:
+            print(f"  [warn] boards.yml parse failed ({_e}); task created without board")
+    r = post_json("/kanban/tasks", body)
     d = r.get("data", r) if isinstance(r, dict) else r
     assert d.get("id"), f"task create failed: {d}"
     return d["id"]
@@ -10183,6 +10200,218 @@ test(test_36_plugin_files)
 test(test_36_deploy_seed)
 test(test_36_mcp_stdio_tools)
 test(test_36_live_health)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 37: Remote python actions plugin (omni-plugins tools/actions) —
+#  task_18cc73ad22835e2d. Verifies the port of the built-in Rust actions
+#  plugin to a remote python MCP plugin: config wiring (plugins.yml
+#  tools.actions source: remote + database_url/omni_dir; remote.yml →
+#  nexuslbs/omni-plugins tools/actions; actions.yml keeps the 3 builtin_*
+#  entries mapped to actions_* tool names; builtin_kanban_dispatcher gone),
+#  the omniagent built-in removal (Cargo.toml member, plugins/tools/actions
+#  dir, mcp-server-actions refs), the python plugin files (plugin.json /
+#  mcp-config.json / server.py registering exactly hindsight_populator,
+#  relevance_indexer, setup_knowledge_pipeline — no kanban_dispatcher), a
+#  live MCP stdio initialize + tools/list, and REAL action runs via the
+#  API: relevance_indexer rewrites relevant-index.md, hindsight_populator
+#  advances hindsight_watermark.json, setup_knowledge_pipeline creates the
+#  tasks.yml knowledge_pipeline schedule idempotently. Side-effect files
+#  (config/actions.yml, config/tasks.yml, profiles/omni/wiki/relevant-index.md,
+#  hindsight_watermark.json) are backed up and restored.
+# ═══════════════════════════════════════════════════════════════════════
+print(f"\n{'=' * 60}")
+print("GROUP 37: Remote python actions plugin (omni-plugins tools/actions)")
+print(f"{'=' * 60}")
+
+
+def test_37_config_wiring():
+    """37-A: config wiring — plugins.yml tools.actions source: remote with
+    database_url/omni_dir; remote.yml points at nexuslbs/omni-plugins
+    tools/actions; actions.yml keeps the 3 builtin_* entries mapped to the
+    actions_* python tool names (no builtin_kanban_dispatcher); omniagent
+    no longer contains the built-in Rust actions plugin."""
+    with open(f"{WORKSPACE}/config/plugins.yml", encoding="utf-8") as f:
+        plugins_txt = f.read()
+    block = plugins_txt.split("  actions:")[1].split("  cron:")[0]
+    assert "enabled: true" in block, "actions must be enabled"
+    assert "source: remote" in block, "actions must be source: remote"
+    assert "database_url: $env:DATABASE_URL" in block, "database_url config missing"
+    assert "omni_dir: $env:OMNI_DIR" in block, "omni_dir config missing"
+    with open(f"{WORKSPACE}/config/remote.yml", encoding="utf-8") as f:
+        remote_txt = f.read()
+    assert "  actions:" in remote_txt, "actions missing from remote.yml"
+    assert "nexuslbs/omni-plugins.git" in remote_txt, \
+        "remote.yml must point at nexuslbs/omni-plugins"
+    assert "path: tools/actions" in remote_txt, "remote.yml path must be tools/actions"
+    with open(f"{WORKSPACE}/config/actions.yml", encoding="utf-8") as f:
+        actions_txt = f.read()
+    for aid, tool in [("builtin_relevance_indexer", "actions_relevance-indexer"),
+                      ("builtin_hindsight_populator", "actions_hindsight-populator"),
+                      ("builtin_setup_knowledge_pipeline", "actions_setup-knowledge-pipeline")]:
+        assert aid in actions_txt, f"{aid} missing from actions.yml"
+        assert f"tool_name: {tool}" in actions_txt, f"{aid} must map to {tool}"
+        assert "is_builtin: true" in actions_txt, f"{aid} must keep is_builtin: true"
+    assert "builtin_kanban_dispatcher" not in actions_txt, \
+        "builtin_kanban_dispatcher must be gone (moved into core)"
+    # omniagent removal audit (host repo bind-mounted at /opt/workspace/omniagent)
+    cargo = open("/opt/workspace/omniagent/Cargo.toml", encoding="utf-8").read()
+    assert "plugins/tools/actions" not in cargo, \
+        "Cargo.toml still lists plugins/tools/actions"
+    assert not os.path.isdir("/opt/workspace/omniagent/plugins/tools/actions"), \
+        "plugins/tools/actions dir still present in omniagent"
+    import subprocess as _g37_sp
+    r = _g37_sp.run(["grep", "-rn", "mcp-server-actions", "/opt/workspace/omniagent/src"],
+                    capture_output=True, text=True)
+    assert r.returncode != 0, f"mcp-server-actions still referenced: {r.stdout}"
+    print("PASS: config wiring (plugins.yml remote, remote.yml entry, "
+          "actions.yml 3 builtins -> actions_* tools, kanban_dispatcher gone, "
+          "omniagent removal)")
+
+
+def test_37_plugin_files():
+    """37-B: omni-plugins tools/actions python plugin — plugin.json (type
+    mcp, config_schema database_url/omni_dir), mcp-config.json (stdio
+    python3 server.py, allowed_tools ['*']), server.py registers exactly the
+    3 action tools (no kanban_dispatcher), requirements.txt manifest."""
+    d = f"{REMOTE_REPO}/tools/actions"
+    assert os.path.isdir(d), f"missing {d}"
+    with open(f"{d}/plugin.json", encoding="utf-8") as f:
+        pj = json.load(f)
+    assert pj.get("name") == "actions" and pj.get("type") == "mcp", pj
+    keys = [k.get("key") for k in pj.get("config_schema", [])]
+    assert "database_url" in keys and "omni_dir" in keys, f"config_schema keys: {keys}"
+    with open(f"{d}/mcp-config.json", encoding="utf-8") as f:
+        mc = json.load(f)
+    srv = mc["servers"][0]
+    assert srv.get("transport") == "stdio", srv
+    assert srv.get("command") == "python3", srv.get("command")
+    assert srv.get("args") == ["server.py"], srv.get("args")
+    assert srv.get("allowed_tools") == ["*"], srv.get("allowed_tools")
+    src = open(f"{d}/server.py", encoding="utf-8").read()
+    for tool in ["hindsight_populator", "relevance_indexer", "setup_knowledge_pipeline"]:
+        assert tool in src, f"server.py missing tool {tool}"
+    assert "kanban_dispatcher" not in src, "server.py must NOT port kanban_dispatcher"
+    assert os.path.exists(f"{d}/requirements.txt"), "requirements.txt manifest required"
+    print("PASS: plugin files (plugin.json, mcp-config.json, server.py 3 tools, "
+          "requirements.txt, no kanban_dispatcher)")
+
+
+def test_37_live_plugin_status():
+    """37-C: live API — /plugins lists actions as remote+enabled; GET
+    /actions lists the 3 builtin_* entries with actions_* tool names and
+    no builtin_kanban_dispatcher."""
+    plugins = api_get("/plugins")["data"]
+    act = next((p for p in plugins if p.get("name") == "actions"), None)
+    assert act is not None, "actions plugin not in /plugins"
+    assert act.get("source") == "remote", f"actions source: {act.get('source')}"
+    assert act.get("status") == "enabled", f"actions status: {act.get('status')}"
+    acts = get_json("/actions")
+    acts = acts if isinstance(acts, list) else acts.get("data", acts)
+    by_id = {a["id"]: a for a in acts}
+    for aid, tool in [("builtin_relevance_indexer", "actions_relevance-indexer"),
+                      ("builtin_hindsight_populator", "actions_hindsight-populator"),
+                      ("builtin_setup_knowledge_pipeline", "actions_setup-knowledge-pipeline")]:
+        assert aid in by_id, f"{aid} missing from /actions"
+        assert by_id[aid]["tool_name"] == tool, f"{aid} tool_name: {by_id[aid]['tool_name']}"
+        assert by_id[aid]["is_builtin"] is True
+    assert "builtin_kanban_dispatcher" not in by_id, "kanban dispatcher action must be gone"
+    print("PASS: /plugins actions remote+enabled; /actions 3 builtins -> actions_* tools")
+
+
+def test_37_mcp_stdio_tools():
+    """37-D: spawn the python actions MCP server over stdio and do MCP
+    initialize + tools/list — exactly the 3 action tools, no
+    kanban_dispatcher."""
+    import subprocess as _g37_sp
+    server = f"{REMOTE_REPO}/tools/actions/server.py"
+    assert os.path.exists(server), f"server.py missing: {server}"
+    env = dict(os.environ)
+    env.setdefault("OMNI_DIR", "/opt/omni")
+    proc = _g37_sp.Popen(["python3", server], stdin=_g37_sp.PIPE,
+                         stdout=_g37_sp.PIPE, stderr=_g37_sp.PIPE, env=env)
+    try:
+        r = _g34_call(proc, "initialize",
+                      {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "g37", "version": "1.0"}}, req_id=1)
+        assert "result" in r, f"initialize failed: {r}"
+        r = _g34_call(proc, "tools/list", req_id=2)
+        tools = r["result"].get("tools", [])
+        names = [t.get("name") for t in tools]
+        for want in ["hindsight_populator", "relevance_indexer", "setup_knowledge_pipeline"]:
+            assert want in names, f"tools/list missing {want}; have {names}"
+        assert "kanban_dispatcher" not in names, "kanban_dispatcher must not be ported"
+        print(f"PASS: MCP stdio tools/list -> {sorted(names)}")
+    finally:
+        _g34_stop_proc(proc)
+
+
+def test_37_live_actions():
+    """37-E: run the REAL actions end-to-end via the API and assert the same
+    side effects as the old Rust plugin:
+      - relevance_indexer rewrites profiles/omni/wiki/relevant-index.md
+      - hindsight_populator advances hindsight_watermark.json
+      - setup_knowledge_pipeline creates the tasks.yml knowledge_pipeline
+        schedule, idempotently (2nd run reports already exists)
+    Backs up and restores config/actions.yml, config/tasks.yml,
+    profiles/omni/wiki/relevant-index.md and hindsight_watermark.json."""
+    def _rd(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            return None
+    def _wr(p, content):
+        if content is None:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        else:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(content)
+    files = ["config/actions.yml", "config/tasks.yml",
+             "profiles/omni/wiki/relevant-index.md", "hindsight_watermark.json"]
+    backup = {f: _rd(f"{WORKSPACE}/{f}") for f in files}
+    try:
+        # relevance_indexer
+        r = post_json("/actions/builtin_relevance_indexer/run")
+        assert isinstance(r, dict) and r.get("is_error") is False, f"relevance run: {r}"
+        assert "Relevance indexer complete" in r.get("result", ""), r
+        idx = _rd(f"{WORKSPACE}/profiles/omni/wiki/relevant-index.md") or ""
+        assert idx.startswith("# Relevant Wiki Pages"), "relevant-index.md not written"
+        # hindsight_populator (fresh watermark -> starts from 0, creates file)
+        r = post_json("/actions/builtin_hindsight_populator/run")
+        assert isinstance(r, dict) and r.get("is_error") is False, f"hindsight run: {r}"
+        assert ("retained" in r.get("result", "") or
+                "No new messages" in r.get("result", "")), r
+        wm_after = _rd(f"{WORKSPACE}/hindsight_watermark.json")
+        assert wm_after is not None and '"last_message_id"' in wm_after, \
+            "watermark not written"
+        # setup_knowledge_pipeline: enable temporarily, run twice (idempotent)
+        put_json("/actions/builtin_setup_knowledge_pipeline", {"enabled": True})
+        r1 = post_json("/actions/builtin_setup_knowledge_pipeline/run")
+        assert isinstance(r1, dict) and r1.get("is_error") is False, f"setup run1: {r1}"
+        assert "created" in r1.get("result", ""), r1
+        tasks = _rd(f"{WORKSPACE}/config/tasks.yml") or ""
+        assert "knowledge_pipeline:" in tasks and "display_name: Knowledge Pipeline" in tasks, \
+            "tasks.yml schedule not created"
+        r2 = post_json("/actions/builtin_setup_knowledge_pipeline/run")
+        assert isinstance(r2, dict) and r2.get("is_error") is False, f"setup run2: {r2}"
+        assert "already exists" in r2.get("result", ""), r2
+        print("PASS: live actions — relevant-index written, hindsight watermark "
+              "advanced, knowledge_pipeline schedule created idempotently")
+    finally:
+        put_json("/actions/builtin_setup_knowledge_pipeline", {"enabled": False})
+        for f in files:
+            _wr(f"{WORKSPACE}/{f}", backup[f])
+
+
+test(test_37_config_wiring)
+test(test_37_plugin_files)
+test(test_37_live_plugin_status)
+test(test_37_mcp_stdio_tools)
+test(test_37_live_actions)
 
 
 sys.exit(0 if tests_fail == 0 else 1)
