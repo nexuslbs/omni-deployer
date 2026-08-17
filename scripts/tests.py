@@ -10831,18 +10831,20 @@ def test_40_action_executor_fail_blocked():
 
 
 def test_40_action_tester_fail_review():
-    """40-C: agent-mode executor SUCCESS + tester mode=action FAIL → task REVIEW
+    """40-C: ACTION-mode executor SUCCESS + tester mode=action FAIL → task REVIEW
     (action-mode tester fail→review, NOT the agent-mode D5 executor re-run).
-    Exactly one running thread (no re-run); testing thread terminal 'failed'."""
+    Exactly one running thread (no re-run); testing thread terminal 'failed'.
+    Uses action-mode executor (builtin_hindsight_populator) for the SUCCESS setup
+    step — the agent-mode noop+test-python_lorem setup was flaky (tool-registration
+    race -> 'Unknown tool: test-python_lorem' -> executor half-finished -> blocked)."""
     cid, orig = _wf_channel_patch()
-    _wf_ensure_test_python()
     key = "wf40_testerfail_" + uuid.uuid4().hex[:8]
     tids = []
     try:
         put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
-                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
+                                       "roles": {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
                                                  "tester": {"mode": "action", "action_id": "no-such-action-xyz"}}})
-        tid = _wf_create_task("wf40-tester-fail", key, WF_SCRIPT_OK, cid)
+        tid = _wf_create_task("wf40-tester-fail", key, "[]", cid)
         tids.append(tid)
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=180)
@@ -10854,25 +10856,25 @@ def test_40_action_tester_fail_review():
         assert len(test) == 1 and test[0]["status"] == "failed", f"40-C: testing thread terminal failed, got {test}"
         print(f"PASS: 40-C action tester fail → review (running#{len(run)}, testing failed)")
     finally:
-        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
 
 def test_40_action_reviewer_fail_blocked():
-    """40-D: agent executor+tester SUCCESS + reviewer mode=action FAIL → task
-    BLOCKED (action-mode reviewer fail→blocked). Review thread terminal 'failed'."""
+    """40-D: ACTION-mode executor+tester SUCCESS + reviewer mode=action FAIL → task
+    BLOCKED (action-mode reviewer fail→blocked). Review thread terminal 'failed'.
+    Uses action-mode executor+tester (builtin_hindsight_populator) for the SUCCESS
+    setup steps — the agent-mode noop+test-python_lorem setup was flaky (tool-
+    registration race -> executor half-finished -> blocked before review reached)."""
     cid, orig = _wf_channel_patch()
-    _wf_ensure_test_python()
     key = "wf40_revfail_" + uuid.uuid4().hex[:8]
     tids = []
     try:
         put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
-                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
-                                                 "tester": {"provider": "noop", "model": "test-tool-caller",
-                                                            "template": "wf_tester.md"},
+                                       "roles": {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
+                                                 "tester": {"mode": "action", "action_id": "builtin_hindsight_populator"},
                                                  "reviewer": {"mode": "action", "action_id": "no-such-action-xyz"}}})
-        tid = _wf_create_task("wf40-rev-fail", key, WF_SCRIPT_OK, cid)
+        tid = _wf_create_task("wf40-rev-fail", key, "[]", cid)
         tids.append(tid)
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid, {"done", "blocked", "review"}, timeout=240)
@@ -10882,25 +10884,25 @@ def test_40_action_reviewer_fail_blocked():
         assert len(rev) == 1 and rev[0]["status"] == "failed", f"40-D: review thread terminal failed, got {rev}"
         print(f"PASS: 40-D action reviewer fail → blocked (review thread failed)")
     finally:
-        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
 
 def test_40_auto_approve_done_direct():
     """40-E: auto_approve=true — reviewer role ignored: tester passes → task
-    goes DIRECTLY to done (no review step thread, no manual review)."""
+    goes DIRECTLY to done (no review step thread, no manual review).
+    Uses action-mode executor+tester (builtin_hindsight_populator) for the SUCCESS
+    setup steps — the agent-mode noop+test-python_lorem setup was flaky (tool-
+    registration race -> executor half-finished -> blocked before auto_approve)."""
     cid, orig = _wf_channel_patch()
-    _wf_ensure_test_python()
     key = "wf40_autoapp_" + uuid.uuid4().hex[:8]
     tids = []
     try:
         put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
                                        "auto_approve": True,
-                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"},
-                                                 "tester": {"provider": "noop", "model": "test-tool-caller",
-                                                            "template": "wf_tester.md"}}})
-        tid = _wf_create_task("wf40-autoapp", key, WF_SCRIPT_OK, cid)
+                                       "roles": {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
+                                                 "tester": {"mode": "action", "action_id": "builtin_hindsight_populator"}}})
+        tid = _wf_create_task("wf40-autoapp", key, "[]", cid)
         tids.append(tid)
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid, {"done", "blocked", "review"}, timeout=240)
@@ -10911,7 +10913,6 @@ def test_40_auto_approve_done_direct():
         assert steps == {"running", "testing"}, f"40-E: expected running+testing only, got {steps}"
         print(f"PASS: 40-E auto_approve → done directly (steps={sorted(steps)})")
     finally:
-        _wf_remove_test_python()
         _wf_cleanup([key], tids)
         _wf_channel_restore(cid, orig)
 
