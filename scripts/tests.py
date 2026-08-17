@@ -10968,4 +10968,253 @@ test(test_40_review_on_fail_goes_review)
 test(test_40_auto_approve_forces_review_on_fail_false)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 41: Fail-thread routing (review_on_fail) + double-normalization fix
+#  Follow-up to task_18cc95fc8fbba9e0: F0 (empty workflow_step) must re-run the
+#  executor (not double-normalize 'executor'→'invalid'→blocked); review_on_fail
+#  routes non-reviewer blocked-bound fails to REVIEW; auto_approve forces the
+#  flag off; the fail reason propagates into the re-run thread's cause message.
+# ═══════════════════════════════════════════════════════════════════════
+WF_SCRIPT_FAIL_F0 = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {}}])
+WF_SCRIPT_FAIL_BLOCKED = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "blocked"}}])
+WF_SCRIPT_FAIL_REASON = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "running", "reason": "REASON41-PROPAGATE-MARKER"}}])
+
+
+def _wf41_wait_retry(tid, timeout=60):
+    """Wait for a workflow retry (running→running 'Creating thread #N+1') in kanban_history."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _wf_history_retry_fired(tid):
+            return True
+        time.sleep(1)
+    return False
+
+
+def _wf41_roles_exec_action_tester_agent():
+    """Action-mode executor (hindsight_populator — succeeds instantly) + agent-mode
+    tester (noop/test-tool-caller — runs the body script)."""
+    return {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
+            "tester": {"provider": "noop", "model": "test-tool-caller"}}
+
+
+def test_41_executor_f0_rerun_vs_review():
+    """F0 (empty workflow_step) from the EXECUTOR: review_on_fail=false → executor
+    re-run (task stays running, history retry), then blocked at the retry limit;
+    review_on_fail=true → REVIEW (not executor re-run). Regression for the
+    double-normalization bug: the empty default previously went
+    'executor'→'invalid'→blocked."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key_f = "wf41e0_" + uuid.uuid4().hex[:8]
+    key_t = "wf41e0r_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                         "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf41-e0", key_f, WF_SCRIPT_FAIL_F0, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        assert _wf41_wait_retry(tid), f"41-A: F0 empty workflow_step must re-run executor, history={_wf_history_rows(tid)}"
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
+        assert st == "blocked", f"41-A: flag=false F0 retry-limit must end blocked, got {st}: {gd}"
+        # flag true: F0 → review (reviewer decides), NOT executor re-run
+        put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                         "review_on_fail": True,
+                                         "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid2 = _wf_create_task("wf41-e0r", key_t, WF_SCRIPT_FAIL_F0, cid)
+        tids.append(tid2)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid2, {"review", "blocked", "done"}, timeout=120)
+        assert st == "review", f"41-A: F0 + review_on_fail must go to review, got {st}: {gd}"
+        print("PASS: 41-A executor F0 — flag false → executor re-run (then blocked at limit); flag true → review")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key_f, key_t], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_41_tester_f0_rerun_vs_review():
+    """F0 (empty workflow_step) from the TESTER (agent-mode tester, action-mode
+    executor): review_on_fail=false → executor re-run (task running);
+    review_on_fail=true → REVIEW (not executor re-run, not blocked)."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key_f = "wf41t0_" + uuid.uuid4().hex[:8]
+    key_t = "wf41t0r_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        roles = _wf41_roles_exec_action_tester_agent()
+        put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False, "roles": roles})
+        tid = _wf_create_task("wf41-t0", key_f, WF_SCRIPT_FAIL_F0, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        assert _wf41_wait_retry(tid), f"41-B: tester F0 must re-run executor, history={_wf_history_rows(tid)}"
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
+        assert st == "blocked", f"41-B: flag=false tester F0 retry-limit must end blocked, got {st}: {gd}"
+        put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                         "review_on_fail": True, "roles": roles})
+        tid2 = _wf_create_task("wf41-t0r", key_t, WF_SCRIPT_FAIL_F0, cid)
+        tids.append(tid2)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid2, {"review", "blocked", "done"}, timeout=120)
+        assert st == "review", f"41-B: tester F0 + review_on_fail must go to review, got {st}: {gd}"
+        print("PASS: 41-B tester F0 — flag false → executor re-run; flag true → review")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key_f, key_t], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_41_explicit_running_honored_both_flags():
+    """Explicit workflow_step='running' from the TESTER (F1): executor re-run under
+    BOTH flags — review_on_fail converts only blocked-bound outcomes, not the
+    explicit destination."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key_f = "wf41r1_" + uuid.uuid4().hex[:8]
+    key_t = "wf41r1r_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        roles = _wf41_roles_exec_action_tester_agent()
+        put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False, "roles": roles})
+        tid = _wf_create_task("wf41-r1", key_f, WF_SCRIPT_FAIL_RUNNING, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        assert _wf41_wait_retry(tid), f"41-C: F1 (explicit running) must re-run executor (flag false), history={_wf_history_rows(tid)}"
+        put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                         "review_on_fail": True, "roles": roles})
+        tid2 = _wf_create_task("wf41-r1r", key_t, WF_SCRIPT_FAIL_RUNNING, cid)
+        tids.append(tid2)
+        post_json("/kanban/dispatch", {})
+        assert _wf41_wait_retry(tid2), f"41-C: F1 (explicit running) must re-run executor (flag true), history={_wf_history_rows(tid2)}"
+        print("PASS: 41-C tester explicit running (F1) → executor re-run under both flags")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key_f, key_t], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_41_blocked_restriction():
+    """Blocked restriction: non-reviewer explicit workflow_step='blocked' with
+    review_on_fail=true → REVIEW (reviewer decides); flag false → blocked."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key_f = "wf41bl_" + uuid.uuid4().hex[:8]
+    key_t = "wf41blr_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        roles = _wf41_roles_exec_action_tester_agent()
+        put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False, "roles": roles})
+        tid = _wf_create_task("wf41-bl", key_f, WF_SCRIPT_FAIL_BLOCKED, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
+        assert st == "blocked", f"41-D: flag=false explicit blocked must block, got {st}: {gd}"
+        put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                         "review_on_fail": True, "roles": roles})
+        tid2 = _wf_create_task("wf41-blr", key_t, WF_SCRIPT_FAIL_BLOCKED, cid)
+        tids.append(tid2)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid2, {"review", "blocked", "done"}, timeout=120)
+        assert st == "review", f"41-D: non-reviewer explicit blocked + flag true must go to review, got {st}: {gd}"
+        print("PASS: 41-D blocked restriction — flag false → blocked; flag true (non-reviewer) → review")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key_f, key_t], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_41_retry_limit_flag_true_review():
+    """Retry budget exhausted (retries=0, first F0 fail) on the EXECUTOR step with
+    review_on_fail=true → REVIEW (not blocked)."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf41rl_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 0, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "review_on_fail": True,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf41-rl", key, WF_SCRIPT_FAIL_F0, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=120)
+        assert st == "review", f"41-E: retry-limit + flag true on executor step must go to review, got {st}: {gd}"
+        print("PASS: 41-E retry-limit + flag true → review")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_41_auto_approve_forces_review_on_fail_false():
+    """auto_approve=true FORCES review_on_fail=false: executor F0 fail with both
+    flags set goes DIRECTLY to BLOCKED (failures are final, no review)."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf41aa_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "auto_approve": True, "review_on_fail": True,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf41-aa", key, WF_SCRIPT_FAIL_F0, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=120)
+        assert st == "blocked", f"41-F: auto_approve must force review_on_fail false → blocked, got {st}: {gd}"
+        print("PASS: 41-F auto_approve forces review_on_fail=false → blocked")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+def test_41_fail_reason_propagates_to_rerun_cause():
+    """The fail reason (error message content) must propagate into the re-run
+    thread's seq-0 cause message so the next step thread automatically sees WHY
+    the previous step failed."""
+    cid, orig = _wf_channel_patch()
+    _wf_ensure_test_python()
+    key = "wf41rp_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop", "model": "test-tool-caller"}}})
+        tid = _wf_create_task("wf41-rp", key, WF_SCRIPT_FAIL_REASON, cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        assert _wf41_wait_retry(tid), f"41-G: expected retry (executor re-run), history={_wf_history_rows(tid)}"
+        import psycopg2
+        found = False
+        with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM threads WHERE task_id = %s ORDER BY id DESC LIMIT 1", (tid,))
+                row = cur.fetchone()
+                assert row, "41-G: no threads found for task"
+                rerun_tid = row[0]
+                cur.execute("SELECT content FROM messages WHERE thread_id = %s AND thread_sequence = 0", (rerun_tid,))
+                m = cur.fetchone()
+                assert m, "41-G: re-run thread has no seq-0 cause message"
+                found = "REASON41-PROPAGATE-MARKER" in (m[0] or "")
+        assert found, "41-G: re-run cause message must contain the fail reason"
+        print("PASS: 41-G fail reason propagated into re-run thread's cause message")
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+        _wf_channel_restore(cid, orig)
+
+
+print("GROUP 41: Fail-thread routing (review_on_fail) + double-normalization fix")
+test(test_41_executor_f0_rerun_vs_review)
+test(test_41_tester_f0_rerun_vs_review)
+test(test_41_explicit_running_honored_both_flags)
+test(test_41_blocked_restriction)
+test(test_41_retry_limit_flag_true_review)
+test(test_41_auto_approve_forces_review_on_fail_false)
+test(test_41_fail_reason_propagates_to_rerun_cause)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
+
