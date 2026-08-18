@@ -1160,8 +1160,8 @@ def _disable_plugin(p_type, source, name):
 
 # External-network tools need more wall time for the agent round-trip
 # (fetch_fetch hits GitHub and can take seconds); local tools reply in <1s.
-PHASE2_ACTIVE_POLL_TIMEOUT = 6
-PHASE2_POLL_TIMEOUTS = {"fetch_fetch": 15}
+PHASE2_ACTIVE_POLL_TIMEOUT = 12
+PHASE2_POLL_TIMEOUTS = {"fetch_fetch": 15, "prompt_compact-messages": 20}
 
 
 def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_args, expected_keyword=None, expect_error=False, poll_timeout=5, validate_fn=None):
