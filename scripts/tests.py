@@ -8221,13 +8221,20 @@ def _g29_make_task(title, status="todo", workflow_id="omniagent-dev", cid="kanba
         body["workflow_id"] = workflow_id
     # Boards feature gate: with boards.yml present the dispatch gate skips
     # boardless tasks — use the first valid board (the task's explicit
-    # channel/workflow win over the board's fallbacks).
+    # channel/workflow win over the board's fallbacks). PLAIN tasks
+    # (workflow_id=None) must use the workflow-less 'plain' board instead:
+    # boards main/dev inject workflow omniagent-dev via board defaults, which
+    # would turn the plain task into a workflow task (making testing/review
+    # actionable). Mirrors _p_create_plain_task.
     boards_path = f"{WORKSPACE}/config/boards.yml"
     if os.path.exists(boards_path):
         import re as _re
         keys = _re.findall(r"^  ([\w-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
         if keys:
-            body["board"] = keys[0]
+            if not workflow_id and "plain" in keys:
+                body["board"] = "plain"
+            else:
+                body["board"] = keys[0]
     r = post_json("/kanban/tasks", body)
     d = r.get("data", r)
     assert d.get("id"), f"task create failed: {r}"
@@ -10184,15 +10191,20 @@ def test_36_plugin_files():
 
 
 def test_36_deploy_seed():
-    """36-E: deploy.py generate_env seeds config/remote.yml with the
-    paperclip entry so deployed stacks register the plugin."""
+    """36-E: deploy.py generate_env seeds config/remote.yml from omni-stack
+    HEAD (the FULL remote plugin manifest) so deployed stacks register the
+    paperclip MCP plugin (which lives in omni-stack config/remote.yml)."""
     with open(f"{REMOTE_REPO}/../omni-deployer/deploy.py", encoding="utf-8") as f:
         dep = f.read()
-    assert "paperclip:" in dep, \
-        "deploy.py generate_env must seed paperclip in remote.yml"
-    assert "tools/paperclip" in dep, \
-        "deploy.py seed must use path tools/paperclip"
-    print("PASS: deploy.py generate_env seeds remote.yml with paperclip")
+    assert "HEAD:config/remote.yml" in dep, \
+        "deploy.py generate_env must seed remote.yml from omni-stack HEAD"
+    with open(f"{REMOTE_REPO}/../omni-stack/config/remote.yml", encoding="utf-8") as f:
+        remote = f.read()
+    assert "paperclip:" in remote, \
+        "omni-stack HEAD remote.yml must carry the paperclip entry"
+    assert "tools/paperclip" in remote, \
+        "paperclip entry must use path tools/paperclip"
+    print("PASS: deploy.py seeds remote.yml from omni-stack HEAD (paperclip entry)")
 
 
 def test_36_mcp_stdio_tools():
@@ -11045,11 +11057,18 @@ WF_SCRIPT_FAIL_REASON = json.dumps([{"name": "fail", "tool": "builtin_fail-threa
 
 
 def _wf41_wait_retry(tid, timeout=60):
-    """Wait for a workflow retry (running→running 'Creating thread #N+1') in kanban_history."""
+    """Wait for a workflow retry in kanban_history: executor re-run
+    (running→running) OR tester-fail re-dispatch to the executor
+    (testing→running) — both recorded as 'Creating thread #N+1'."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _wf_history_retry_fired(tid):
-            return True
+        for r in _wf_history_rows(tid):
+            if r.get("action") != "workflow":
+                continue
+            if "Creating thread" not in r.get("comment", ""):
+                continue
+            if r.get("final_board") == "running" and r.get("initial_board") in ("running", "testing"):
+                return True
         time.sleep(1)
     return False
 
