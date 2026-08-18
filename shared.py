@@ -1830,6 +1830,14 @@ def run_tests():
         result = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
         total_assertions += 1
 
+        # fetch_fetch hits an EXTERNAL network URL (raw.githubusercontent.com);
+        # a transient upstream error (timeout / rate limit) is not a tool
+        # failure. Retry ONCE before declaring the tool broken.
+        if result.get("is_error") and tool_name == "fetch_fetch":
+            print("  [fetch_fetch: transient error, retrying once...]")
+            time.sleep(2)
+            result = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
+
         if result.get("success") and not result.get("is_error"):
             _print_result(f"{tool_name} (enabled)", "PASS")
             passed += 1
