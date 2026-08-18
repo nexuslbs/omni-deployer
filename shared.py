@@ -1054,7 +1054,7 @@ def prepare():
     # 6. Enable all built-in tool plugin MCPs
     print("\n[Enabling all built-in tool plugin MCPs...]")
     builtin_tool_plugins = [
-        "actions", "cron", "docker", "fetch", "filesystem", "git",
+        "cron", "docker", "fetch", "filesystem", "git",
         "kanban", "memory", "plugin-manager", "prompt",
         "search", "skills", "subtasks",
     ]
@@ -1139,6 +1139,12 @@ def _enable_plugin(p_type, source, name):
     except RuntimeError as e:
         print(f"  ~ {p_type}/{name} enable: {str(e)[:80]}")
         return None
+
+
+def _tool_plugin_source(plugin_name):
+    """Remote tool plugins (moved to omni-plugins, e.g. actions) must be
+    enabled/disabled via the 'remote' source; everything else is built-in."""
+    return "remote" if plugin_name == "actions" else "built-in"
 
 
 def _disable_plugin(p_type, source, name):
@@ -1430,8 +1436,8 @@ TOOL_VALIDATORS = {
     "actions_relevance-indexer": _validate_actions_relevance,
     "plugin-manager_plugin-manager": _validate_plugin_manager_list,
     "search_database": _validate_query_database,
-    "search_thread_messages": _validate_query_database,
-    "search_channel_prompts": _validate_query_database,
+    "search_thread-messages": _validate_query_database,
+    "search_channel-prompts": _validate_query_database,
     "search_channels": _validate_query_database,
     "memory_list-memories": _validate_memory_list,
 }
@@ -1552,13 +1558,13 @@ TOOL_DEFS = {
         "success_key": "channel",
         "mcp_test_args": {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"},
     },
-    "search_thread_messages": {
+    "search_thread-messages": {
         "plugin": "search",
         "test_args": {"thread_id": 1, "limit": 5},
         "success_key": "found",
         "mcp_test_args": {"thread_id": 1, "limit": 5},
     },
-    "search_channel_prompts": {
+    "search_channel-prompts": {
         "plugin": "search",
         # channel_id is now the channel NAME (channels table dropped; the yml
         # key is the identifier). A numeric id fails with "'channel_id' is
@@ -1682,7 +1688,7 @@ def run_tests():
     # 0b. Ensure all built-in tool plugins are enabled
     print("\n[Enabling all built-in tool plugins...]")
     builtin_tool_plugins = [
-        "actions", "cron", "docker", "fetch", "filesystem", "git",
+        "cron", "docker", "fetch", "filesystem", "git",
         "kanban", "memory", "prompt", "search", "skills", "subtasks",
     ]
     for p_name in builtin_tool_plugins:
@@ -1870,7 +1876,7 @@ def run_tests():
         # Test 2: Disable plugin, verify tool is unavailable
         plugin_name = tool_def["plugin"]
         print(f"    [Disabling plugin '{plugin_name}' to test unavailability...]")
-        _disable_plugin("tools", "built-in", plugin_name)
+        _disable_plugin("tools", _tool_plugin_source(plugin_name), plugin_name)
         time.sleep(0.2)
 
         result_disabled = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
@@ -1884,7 +1890,7 @@ def run_tests():
 
         # Re-enable plugin
         print(f"    [Re-enabling plugin '{plugin_name}'...]")
-        _enable_plugin("tools", "built-in", plugin_name)
+        _enable_plugin("tools", _tool_plugin_source(plugin_name), plugin_name)
         time.sleep(0.2)
 
         # Test 3: Enable but restrict via profile
@@ -1949,11 +1955,11 @@ def run_tests():
             ("actions_relevance-indexer", {}, "relevance"),
             ("plugin-manager_plugin-manager", {"action": "list"}, "plugin"),
             ("search_database", {"sql": "SELECT channel_id AS channel, status FROM threads ORDER BY id LIMIT 1"}, "channel"),
-            ("search_thread_messages", {"thread_id": 1, "limit": 5}, "found"),
+            ("search_thread-messages", {"thread_id": 1, "limit": 5}, "found"),
             # channel_id is the channel NAME now (channels table dropped by the
             # migration; threads.channel_id holds the yml key). A numeric id
             # errors out with "'channel_id' is required".
-            ("search_channel_prompts", {"channel_id": "kanban", "limit": 5}, "found"),
+            ("search_channel-prompts", {"channel_id": "kanban", "limit": 5}, "found"),
             ("search_channels", {"limit": 10}, "channel"),
             ("skills_list-skills", {}, "skill"),
             ("memory_list-memories", {}, "memory"),
@@ -2011,7 +2017,7 @@ def run_tests():
 
             # ── State A: Plugin disabled → expect error ──
             print(f"\n  [State A: Disabling plugin '{plugin}' → expect error]")
-            _disable_plugin("tools", "built-in", plugin)
+            _disable_plugin("tools", _tool_plugin_source(plugin), plugin)
             time.sleep(0.2)
             total_assertions += 1
             resp_a = _test_tool_via_mattermost(
@@ -2037,7 +2043,7 @@ def run_tests():
 
             # ── State B: Plugin enabled, but NOT in profile → expect error ──
             print(f"\n  [State B: Enabling '{plugin}', removing from profile → expect error]")
-            _enable_plugin("tools", "built-in", plugin)
+            _enable_plugin("tools", _tool_plugin_source(plugin), plugin)
             time.sleep(0.2)
 
             profile = _read_profile()
