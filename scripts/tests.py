@@ -1863,6 +1863,10 @@ def test_enable_source(name, source, expected_success=True):
     ptype = _get_plugin_type(name)
     bundled_dir = f"{WORKSPACE}/plugins/{ptype}/{name}"
     remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"
+    if source == "remote" and expected_success and not os.path.exists(remote_dir):
+        # Remote plugins must be installed before enable/disable can be
+        # exercised — install the fixture first (idempotent).
+        ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
         resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/enable", {}, timeout=90)
@@ -1881,6 +1885,8 @@ def test_enable_source(name, source, expected_success=True):
 
 def test_disable_source(name, source, expected_success=True):
     ptype = _get_plugin_type(name)
+    if source == "remote" and expected_success and not os.path.exists(f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"):
+        ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
         resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/disable", {})
@@ -1914,6 +1920,10 @@ def test_install_source(name, source, expected_success=True):
     ptype = _get_plugin_type(name)
     bundled_dir = f"{WORKSPACE}/plugins/{ptype}/{name}"
     remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"
+    if source == "remote" and expected_success and not os.path.exists(remote_dir):
+        # Remote plugins must be installed before enable/disable can be
+        # exercised — install the fixture first (idempotent).
+        ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if source == "remote":
         visible = _wait_for_plugin_visible(name, timeout=20)
@@ -1936,6 +1946,8 @@ def test_install_source(name, source, expected_success=True):
 
 def test_reinstall_source(name, source, expected_success=True):
     ptype = _get_plugin_type(name)
+    if source == "remote" and expected_success and not os.path.exists(f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"):
+        ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
         resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/reinstall", {}, timeout=90)
@@ -1954,6 +1966,10 @@ def test_download_source(name, source, expected_success=True):
     ptype = _get_plugin_type(name)
     bundled_dir = f"{WORKSPACE}/plugins/{ptype}/{name}"
     remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"
+    if source == "remote" and expected_success and not os.path.exists(remote_dir):
+        # Remote plugins must be installed before enable/disable can be
+        # exercised — install the fixture first (idempotent).
+        ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
         resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/download", {}, timeout=300)
@@ -7384,8 +7400,18 @@ def _p_create_plain_task(title, script, cid):
     # Create a PLAIN kanban task (NO workflow_id) in the dedicated wf-test channel.
     # Mirrors _wf_create_task but omits workflow_id: the engine must run it without
     # any workflow semantics (R8-N plain-task path).
-    r = post_json("/kanban/tasks", {"title": title, "status": "todo",
-                                    "channel_id": cid, "body": script})
+    body = {"title": title, "status": "todo", "channel_id": cid, "body": script}
+    # Boards feature gate: with boards.yml present the dispatch gate skips
+    # boardless tasks, and boards main/dev would inject workflow
+    # omniagent-dev. Plain tasks use the workflow-less 'plain' board so the
+    # task stays plain (workflow_id NULL) while still being dispatchable.
+    boards_path = f"{WORKSPACE}/config/boards.yml"
+    if os.path.exists(boards_path):
+        import re as _re
+        keys = _re.findall(r"^  ([\w-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
+        if "plain" in keys:
+            body["board"] = "plain"
+    r = post_json("/kanban/tasks", body)
     d = r.get("data", r) if isinstance(r, dict) else r
     assert d.get("id"), f"plain task create failed: {d}"
     return d["id"]
@@ -8193,6 +8219,15 @@ def _g29_make_task(title, status="todo", workflow_id="omniagent-dev", cid="kanba
     body = {"title": title, "status": status, "channel_id": cid}
     if workflow_id:
         body["workflow_id"] = workflow_id
+    # Boards feature gate: with boards.yml present the dispatch gate skips
+    # boardless tasks — use the first valid board (the task's explicit
+    # channel/workflow win over the board's fallbacks).
+    boards_path = f"{WORKSPACE}/config/boards.yml"
+    if os.path.exists(boards_path):
+        import re as _re
+        keys = _re.findall(r"^  ([\w-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
+        if keys:
+            body["board"] = keys[0]
     r = post_json("/kanban/tasks", body)
     d = r.get("data", r)
     assert d.get("id"), f"task create failed: {r}"
@@ -10325,6 +10360,19 @@ def test_37_live_plugin_status():
     """37-C: live API — /plugins lists actions as remote+enabled; GET
     /actions lists the 3 builtin_* entries with actions_* tool names and
     no builtin_kanban_dispatcher."""
+    # The deploy env carries actions in remote.yml but does not auto-install
+    # remote plugins — install the fixture (idempotent) and wait for the
+    # plugin manager to register it before asserting the live state.
+    ensure_remote_plugin("actions", "tools")
+    deadline = time.time() + 60
+    while True:
+        plugins = api_get("/plugins")["data"]
+        act = next((p for p in plugins if p.get("name") == "actions"), None)
+        if act is not None and act.get("status") == "enabled":
+            break
+        if time.time() > deadline:
+            break
+        time.sleep(2)
     plugins = api_get("/plugins")["data"]
     act = next((p for p in plugins if p.get("name") == "actions"), None)
     assert act is not None, "actions plugin not in /plugins"
@@ -11010,7 +11058,7 @@ def _wf41_roles_exec_action_tester_agent():
     """Action-mode executor (hindsight_populator — succeeds instantly) + agent-mode
     tester (noop/test-tool-caller — runs the body script)."""
     return {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
-            "tester": {"provider": "noop", "model": "test-tool-caller"}}
+            "tester": {"provider": "noop", "model": "test-tool-caller", "template": "wf_tester.md"}}
 
 
 def test_41_executor_f0_rerun_vs_review():

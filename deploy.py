@@ -340,27 +340,30 @@ def generate_env(mode):
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
-    # Seed remote.yml for test-rust-tool plugin (required by plugin_tests)
+    # Seed remote.yml from omni-stack HEAD — the FULL remote plugin manifest
+    # (actions, hindsight, paperclip, telegram, test-rust-tool, ...). The
+    # bind-mounted plugins.yml (also from HEAD) enables actions/telegram/etc.
+    # as source: remote, so the deploy env must carry the same remote.yml a
+    # real deployment has — otherwise those plugins resolve to
+    # status=not_found and the live-plugin tests (GROUP 37/40/41, t6 platform)
+    # fail. plugin_tests also needs test-rust-tool registered.
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "config", "remote.yml")
-    remote_yml_content = """tools:
-  paperclip:
-    url: https://github.com/nexuslbs/omni-plugins.git
-    path: tools/paperclip
-  test-rust-tool:
-    url: https://github.com/nexuslbs/omni-plugins.git
-    path: tools/test-rust-tool
-"""
     # Ensure .remote/ directories are clean before seeding (prevents stale git state)
-    for subdir in ["tools", "providers"]:
+    for subdir in ["tools", "platforms", "providers"]:
         remote_dir = os.path.join(OMNI_STACK_DIR, "plugins", subdir, ".remote")
         if os.path.isdir(remote_dir):
             subprocess.run(["rm", "-rf", remote_dir], capture_output=True)
+    r = subprocess.run(["git", "show", "HEAD:config/remote.yml"],
+                       cwd=OMNI_STACK_DIR, capture_output=True, text=True, timeout=10)
+    remote_yml_content = r.stdout if r.returncode == 0 else None
+    if remote_yml_content is None:
+        print("[deploy] WARNING: could not read HEAD:config/remote.yml — leaving remote.yml untouched")
     existing = ""
-    if os.path.exists(remote_yml_path):
+    if remote_yml_content is not None and os.path.exists(remote_yml_path):
         r = subprocess.run(["cat", remote_yml_path], capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
             existing = r.stdout
-    if existing.strip() != remote_yml_content.strip():
+    if remote_yml_content is not None and existing.strip() != remote_yml_content.strip():
         import tempfile
         tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yml")
         tmp.write(remote_yml_content)
@@ -368,7 +371,7 @@ def generate_env(mode):
         tmp.close()
         subprocess.run(["sudo", "cp", tmp_path, remote_yml_path], check=True)
         os.unlink(tmp_path)
-        print(f"[deploy] Seeded {remote_yml_path}")
+        print(f"[deploy] Seeded {remote_yml_path} from omni-stack HEAD")
     else:
         print(f"[deploy] {remote_yml_path} unchanged")
 
