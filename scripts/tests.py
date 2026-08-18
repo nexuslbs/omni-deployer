@@ -1678,7 +1678,7 @@ def check_git_clean():
         # never hit the omni profile's deepseek fallback) — that pin is NOT
         # reverted here (the deploy's final seed restore reverts it), so a
         # channels.yml-only dirty tree is expected and tolerated.
-        known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "config/channels.yml", "plugins/tools/"}
+        known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "config/channels.yml", "plugins/tools/", "profiles/omni/wiki/relevant-index.md"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
@@ -1686,7 +1686,7 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml"],
+                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             # Restore tracked bundled test tools under plugins/tools/.
