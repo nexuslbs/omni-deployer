@@ -8803,11 +8803,15 @@ test(test_30_stop_thread_live_pending_stop_keeps_processing)
 # gated on the presence of config/boards.yml (omnidev only; omnistable has no
 # boards.yml so all kanban behavior there is unchanged). When boards.yml is
 # present: GET /boards lists the boards; tasks can carry a board field
-# (create + ?board= filter); the dispatcher skips invalid-board tasks; any
-# thread-creation path on an invalid-board task creates the thread and fails it
-# with a clear Error message; board defaults fill the resolution chain
-# (task > board > channel). Boards CRUD (PUT/DELETE /boards/{key}) is backed by
-# boards.yml — the test snapshots and restores the file byte-for-byte.
+# (create + ?board= filter); board defaults fill the resolution chain
+# (task > board > channel). Since task_18cd074f62d194f2, POST /kanban/tasks
+# REQUIRES a valid board (missing/unknown -> 400) and PATCH /kanban/tasks/{id}
+# cannot clear or set an unknown board (400; missing field keeps the board) —
+# invalid-board tasks can now only arise from legacy rows or boards.yml edits,
+# and the dispatcher still skips them (no thread); any thread-creation path on
+# an invalid-board task creates the thread and fails it with a clear Error
+# message. Boards CRUD (PUT/DELETE /boards/{key}) is backed by boards.yml —
+# the test snapshots and restores the file byte-for-byte.
 
 def _g31_boards_file():
     return f"{WORKSPACE}/config/boards.yml"
@@ -8884,39 +8888,64 @@ def test_31_boards_list_and_filter():
 
 
 def test_31_dispatch_skips_invalid_board():
-    """31-B: with boards.yml present, todo tasks whose board is NULL or unknown
-    are never dispatched (stay todo, no thread row)."""
+    """31-B: with boards.yml present, POST /kanban/tasks REQUIRES a valid board
+    (missing -> 400 "board is required"; unknown -> 400 "not found in
+    boards.yml") so the auto-dispatcher can never silently skip a freshly
+    created task. Legacy invalid-board rows that exist anyway (pre-validation
+    rows, boards.yml edits) are still skipped by the dispatcher: they stay todo
+    with no thread row."""
     if not _g31_boards_enabled():
         print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
         return
     tids = []
     try:
-        tid_null = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board=None, cid="kanban")
-        tid_unk = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board="no-such-board", cid="kanban")
-        tids += [tid_null, tid_unk]
+        # API create validation (boards enabled): missing board -> 400
+        st, resp = _h27_api("POST", "/kanban/tasks", {
+            "title": f"g31-b-{uuid.uuid4().hex[:8]}", "status": "todo", "channel_id": "kanban"})
+        assert st == 400 and "board is required" in str(resp), \
+            f"create without board must 400 with 'board is required', got {st} {resp}"
+        # unknown board -> 400
+        st, resp = _h27_api("POST", "/kanban/tasks", {
+            "title": f"g31-b-{uuid.uuid4().hex[:8]}", "status": "todo",
+            "channel_id": "kanban", "board": "no-such-board"})
+        assert st == 400 and "not found in boards.yml" in str(resp), \
+            f"create with unknown board must 400 with 'not found in boards.yml', got {st} {resp}"
+        # valid board -> created
+        tid = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board="main", cid="kanban")
+        tids.append(tid)
+        # Legacy board-less / unknown-board rows (SQL-mutated): dispatcher skips
+        tid_null = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board="main", cid="kanban")
+        tids.append(tid_null)
+        _h27_sql("UPDATE kanban_tasks SET board = NULL WHERE id = %s", (tid_null,))
+        tid_unk = _g31_make_task(f"g31-b-{uuid.uuid4().hex[:8]}", board="main", cid="kanban")
+        tids.append(tid_unk)
+        _h27_sql("UPDATE kanban_tasks SET board = 'no-such-board' WHERE id = %s", (tid_unk,))
         r = post_json("/kanban/dispatch")
         d = r.get("data", r) if isinstance(r, dict) else r
         for t in (tid_null, tid_unk):
             rows = _h27_sql("SELECT status FROM kanban_tasks WHERE id = %s", (t,))
             assert rows and rows[0][0] == "todo", f"task {t} must stay todo: {rows}"
             assert _g31_thread_rows(t) == [], f"task {t} must have no thread"
-        print(f"PASS: dispatcher skipped invalid-board tasks "
-              f"(NULL + unknown board; dispatch resp dispatched={d.get('dispatched')})")
+        print(f"PASS: create requires valid board (missing/unknown -> 400); "
+              f"legacy invalid-board tasks still skipped by dispatcher "
+              f"(dispatch resp dispatched={d.get('dispatched')})")
     finally:
         _g31_cleanup_tasks(tids)
 
 
 def test_31_thread_creation_fails_invalid_board():
     """31-C: with boards.yml present, status-change dispatch on an invalid-board
-    task creates the thread and immediately fails it with a clear Error message
-    (reusing the existing fail-thread machinery)."""
+    task (board mutated to an unknown name — e.g. its board removed from
+    boards.yml) creates the thread and immediately fails it with a clear Error
+    message (reusing the existing fail-thread machinery)."""
     if not _g31_boards_enabled():
         print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
         return
     tids = []
     try:
-        tid = _g31_make_task(f"g31-c-{uuid.uuid4().hex[:8]}", board="no-such-board", cid="kanban")
+        tid = _g31_make_task(f"g31-c-{uuid.uuid4().hex[:8]}", board="main", cid="kanban")
         tids.append(tid)
+        _h27_sql("UPDATE kanban_tasks SET board = 'no-such-board' WHERE id = %s", (tid,))
         st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid}/status", {"status": "running"})
         rows = _g31_thread_rows(tid)
         assert rows, f"expected a thread row for invalid-board task {tid}: {resp}"
@@ -8935,6 +8964,46 @@ def test_31_thread_creation_fails_invalid_board():
         assert hist and "board" in (hist[0][0] or ""), f"history missing board note: {hist}"
         print(f"PASS: invalid-board thread-creation -> thread #{thr_id} failed+terminal "
               f"with Error message (status-change dispatch path)")
+    finally:
+        _g31_cleanup_tasks(tids)
+
+
+def test_31_update_board_validation():
+    """31-E: with boards.yml present, PATCH /kanban/tasks/{id} cannot clear the
+    board ("") or set an unknown board (both 400); a missing board field keeps
+    the existing board; a valid board updates it."""
+    if not _g31_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        return
+    tids = []
+    try:
+        tid = _g31_make_task(f"g31-e-{uuid.uuid4().hex[:8]}", board="main", cid="kanban")
+        tids.append(tid)
+        # Explicit clear -> 400, board unchanged
+        st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid}", {"board": ""})
+        assert st == 400 and "cannot be cleared" in str(resp), \
+            f"PATCH empty board must 400 with 'cannot be cleared', got {st} {resp}"
+        rows = _h27_sql("SELECT board FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows and rows[0][0] == "main", f"board must be unchanged after clear: {rows}"
+        # Unknown board -> 400, board unchanged
+        st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid}", {"board": "no-such-board"})
+        assert st == 400 and "not found in boards.yml" in str(resp), \
+            f"PATCH unknown board must 400 with 'not found in boards.yml', got {st} {resp}"
+        rows = _h27_sql("SELECT board FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows and rows[0][0] == "main", f"board must be unchanged after unknown: {rows}"
+        # Missing board field -> keeps existing board
+        st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid}",
+                            {"title": f"g31-e-renamed-{uuid.uuid4().hex[:4]}"})
+        assert st == 200, f"PATCH without board field must succeed, got {st} {resp}"
+        rows = _h27_sql("SELECT board FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows and rows[0][0] == "main", f"board must be kept when field absent: {rows}"
+        # Valid board -> updated
+        st, resp = _h27_api("PATCH", f"/kanban/tasks/{tid}", {"board": "dev"})
+        assert st == 200, f"PATCH to valid board must succeed, got {st} {resp}"
+        rows = _h27_sql("SELECT board FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows and rows[0][0] == "dev", f"board must update to dev: {rows}"
+        print("PASS: PATCH board validation — clear/unknown -> 400 (board kept); "
+              "missing field keeps board; valid board updates")
     finally:
         _g31_cleanup_tasks(tids)
 
@@ -8988,6 +9057,7 @@ test(test_31_boards_list_and_filter)
 test(test_31_dispatch_skips_invalid_board)
 test(test_31_thread_creation_fails_invalid_board)
 test(test_31_boards_crud_and_resolution)
+test(test_31_update_board_validation)
 
 
 
