@@ -1689,10 +1689,25 @@ def check_git_clean():
                 ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
-            # Remove untracked transient test artifacts (plugins/tools/)
-            tools_dir = os.path.join(OMNI_STACK_DIR, "plugins", "tools")
-            if os.path.isdir(tools_dir):
-                subprocess.run(["rm", "-rf", tools_dir], capture_output=True)
+            # Restore tracked bundled test tools under plugins/tools/.
+            # omni-stack now SHIPS the test MCP servers as TRACKED bundled
+            # plugins (test-python, test-js-tool, tsconfig.json) so the
+            # integration suite can enable them via /plugins/tools/bundled/.
+            # rm -rf would delete those TRACKED files and leave the tree
+            # dirty; instead restore tracked files and git-clean only
+            # untracked/ignored test residue (.remote clones, temp tools).
+            subprocess.run(
+                ["git", "checkout", "HEAD", "--", "plugins/tools"],
+                cwd=OMNI_STACK_DIR, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "clean", "-fdX", "--", "plugins/tools"],
+                cwd=OMNI_STACK_DIR, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "clean", "-fd", "--", "plugins/tools"],
+                cwd=OMNI_STACK_DIR, capture_output=True,
+            )
             dirty = _git_status(OMNI_STACK_DIR)
             if not dirty:
                 return
