@@ -793,7 +793,8 @@ def deploy(mode):
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
-       "config/settings.yml config/workflows.yml config/tasks.yml profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "config/settings.yml config/workflows.yml config/tasks.yml config/remote.yml "
+       "plugins/tools/test-python plugins/tools/test-js-tool profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious
