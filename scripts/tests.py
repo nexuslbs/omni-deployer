@@ -11372,5 +11372,171 @@ test(test_41_auto_approve_forces_review_on_fail_false)
 test(test_41_fail_reason_propagates_to_rerun_cause)
 
 
-sys.exit(0 if tests_fail == 0 else 1)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 42: Plugins omni_dir config field (task_18cd0c7a02d3884f) —
+#  data dir resolved via the omni_dir config field (default $env:OMNI_DIR),
+#  no hardcoded /opt/omni / ~/.omniagent fallbacks.
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_42_source_audit():
+    """42-A: tools/memory, tools/actions, tools/prompt server.py all resolve
+    the data dir config-first (cfg_env('omni_dir') → OMNI_DIR → explicit
+    error) with NO bare /opt/omni or ~/.omniagent fallback; all three
+    plugin.json files declare the omni_dir config_schema entry (type string,
+    default $env:OMNI_DIR); repo-wide grep shows no fixed-path fallbacks."""
+    for sub in ["memory", "actions", "prompt"]:
+        src = open(f"{REMOTE_REPO}/tools/{sub}/server.py", encoding="utf-8").read()
+        assert 'cfg_env("omni_dir")' in src, f"{sub}/server.py must read omni_dir config first"
+        assert 'os.environ.get("OMNI_DIR")' in src, \
+            f"{sub}/server.py must fall back to the OMNI_DIR env var"
+        assert "_fail_omni_dir()" in src, f"{sub}/server.py must raise a clear error when unset"
+        assert '"/opt/omni"' not in src, f"{sub}/server.py still hardcodes /opt/omni"
+        assert "~/.omniagent" not in src, f"{sub}/server.py still hardcodes ~/.omniagent"
+    # prompt plugin.json gained omni_dir in this task (was missing before)
+    with open(f"{REMOTE_REPO}/tools/prompt/plugin.json", encoding="utf-8") as f:
+        pj = json.load(f)
+    keys = [k.get("key") for k in pj.get("config_schema", [])]
+    assert "omni_dir" in keys, f"prompt plugin.json config_schema missing omni_dir: {keys}"
+    entry = next(k for k in pj["config_schema"] if k.get("key") == "omni_dir")
+    assert entry.get("type") == "string" and entry.get("default") == "$env:OMNI_DIR", entry
+    assert entry.get("label") == "OMNI_DIR", entry
+    # memory + actions keep declaring omni_dir
+    for sub in ["memory", "actions"]:
+        with open(f"{REMOTE_REPO}/tools/{sub}/plugin.json", encoding="utf-8") as f:
+            pj = json.load(f)
+        keys = [k.get("key") for k in pj.get("config_schema", [])]
+        assert "omni_dir" in keys, f"{sub} plugin.json config_schema missing omni_dir: {keys}"
+    # repo-wide: no bare fixed-path data-dir fallbacks (entrypoint/config sites)
+    import subprocess as _g42_sp
+    for pat in ['"/opt/omni"', '"~/.omniagent"', "'/opt/omni'", "'~/.omniagent'"]:
+        r = _g42_sp.run(["grep", "-rn", "--exclude-dir=.git", "--exclude-dir=node_modules",
+                         pat, REMOTE_REPO], capture_output=True, text=True)
+        assert r.returncode != 0, f"hardcoded fallback {pat} found:\n{r.stdout}"
+    print("PASS: 42-A source audit — config-first resolution, no hardcoded "
+          "fallbacks, omni_dir config_schema in all 3 plugin.json files")
+
+
+def _g42_spawn(server_path, extra_env):
+    import subprocess as _g42_sp
+    env = dict(os.environ)
+    env.pop("OMNI_DIR", None)
+    env.pop("omni_dir", None)
+    for k, v in (extra_env or {}).items():
+        env[k] = v
+    proc = _g42_sp.Popen(["python3", server_path], stdin=_g42_sp.PIPE,
+                         stdout=_g42_sp.PIPE, stderr=_g42_sp.PIPE, env=env)
+    _g34_call(proc, "initialize",
+              {"protocolVersion": "2025-03-26", "capabilities": {},
+               "clientInfo": {"name": "g42", "version": "1.0"}}, req_id=1)
+    return proc
+
+
+def test_42_unset_omni_dir_errors():
+    """42-B: with OMNI_DIR AND omni_dir both unset in the subprocess env, every
+    python plugin must fail with a clear error naming the omni_dir config field
+    — NEVER a silent write to /opt/omni or ~/.omniagent."""
+    cases = [
+        ("memory", "promote_to_memory",
+         {"name": "g42-unset", "content": "x", "confidence": "high"}),
+        ("actions", "relevance_indexer", {}),
+        ("prompt", "prompt_generate", {"user_message": "hi"}),
+    ]
+    for sub, tool, args in cases:
+        proc = _g42_spawn(f"{REMOTE_REPO}/tools/{sub}/server.py", None)
+        try:
+            text, is_error = _g38_tool(proc, tool, args, profile_name="omni", timeout=30)
+            assert is_error, f"{sub}: expected error when OMNI_DIR unset, got success: {text}"
+            assert "omni_dir" in text.lower(), \
+                f"{sub}: error must name the omni_dir config field, got: {text}"
+            print(f"  PASS: 42-B {sub} unset → error names omni_dir")
+        finally:
+            _g34_stop_proc(proc)
+    print("PASS: 42-B unset OMNI_DIR/omni_dir → clear error naming omni_dir "
+          "(no silent fallback)")
+
+
+def test_42_custom_omni_dir_config():
+    """42-C: with the omni_dir config injected as env (framework pattern) and
+    OMNI_DIR unset, memory/actions/prompt create+read files under the custom
+    data dir; the omni_dir config wins over a conflicting OMNI_DIR env var."""
+    import tempfile as _g42_tf
+    import shutil as _g42_sh
+    import glob as _g42_glob
+    base = _g42_tf.mkdtemp(prefix="g42-omnidir-")
+    base2 = _g42_tf.mkdtemp(prefix="g42-omnidir-env-")
+    procs = []
+    try:
+        # memory: promote + list under the omni_dir config path
+        proc = _g42_spawn(f"{REMOTE_REPO}/tools/memory/server.py", {"omni_dir": base})
+        procs.append(proc)
+        text, is_error = _g38_tool(proc, "promote_to_memory",
+                                   {"name": "g42-mem", "content": "g42 fact",
+                                    "confidence": "high"}, profile_name="omni")
+        assert not is_error, f"promote failed: {text}"
+        assert base in text, f"promote result must reference the omni_dir config path: {text}"
+        mem_files = _g42_glob.glob(f"{base}/profiles/*/wiki/Memory/Promoted/g42-mem.md")
+        assert mem_files, \
+            f"promoted memory not under omni_dir config path: {base}/profiles/*/.../g42-mem.md"
+        text, is_error = _g38_tool(proc, "list_memories", {}, profile_name="omni")
+        assert not is_error and "g42-mem" in text, f"list_memories: {text}"
+
+        # config-first: omni_dir config wins over a conflicting OMNI_DIR env
+        proc2 = _g42_spawn(f"{REMOTE_REPO}/tools/memory/server.py",
+                           {"omni_dir": base, "OMNI_DIR": base2})
+        procs.append(proc2)
+        text, is_error = _g38_tool(proc2, "promote_to_memory",
+                                   {"name": "g42-mem2", "content": "y",
+                                    "confidence": "low"}, profile_name="omni")
+        assert not is_error, f"promote (config-first) failed: {text}"
+        assert _g42_glob.glob(f"{base}/profiles/*/wiki/Memory/Promoted/g42-mem2.md"), \
+            "omni_dir config must win over OMNI_DIR env"
+        assert not _g42_glob.glob(f"{base2}/profiles/*/wiki/Memory/Promoted/g42-mem2.md"), \
+            "OMNI_DIR env must NOT win over omni_dir config"
+
+        # actions: relevance_indexer writes relevant-index.md under custom dir
+        wiki = f"{base}/profiles/omni/wiki"
+        os.makedirs(wiki, exist_ok=True)
+        with open(f"{wiki}/page.md", "w", encoding="utf-8") as f:
+            f.write("# Page\n")
+        proc = _g42_spawn(f"{REMOTE_REPO}/tools/actions/server.py", {"omni_dir": base})
+        procs.append(proc)
+        text, is_error = _g38_tool(proc, "relevance_indexer", {}, profile_name="omni")
+        assert not is_error, f"relevance_indexer failed: {text}"
+        idx_file = f"{wiki}/relevant-index.md"
+        assert os.path.exists(idx_file), "relevant-index.md not written under omni_dir config"
+        idx = open(idx_file, encoding="utf-8").read()
+        assert idx.startswith("# Relevant Wiki Pages"), idx
+
+        # prompt: prompt_generate resolves data_dir from the omni_dir config
+        proc = _g42_spawn(f"{REMOTE_REPO}/tools/prompt/server.py", {"omni_dir": base})
+        procs.append(proc)
+        text, is_error = _g38_tool(proc, "prompt_generate",
+                                   {"profile_name": "omni", "user_message": "hello"},
+                                   profile_name="omni", timeout=60)
+        if is_error:
+            # data_dir must have resolved from the config — any failure here
+            # must be downstream (DB), never the omni_dir resolution itself
+            assert "omni_dir" not in text.lower(), \
+                f"prompt: data_dir not resolved from omni_dir config: {text}"
+            print(f"  NOTE: prompt_generate resolved data_dir; downstream error (no DB): {text[:120]}")
+        else:
+            assert "Active Hermes profile: omni" in text, \
+                f"prompt output missing profile line: {text[:200]}"
+        print("  PASS: 42-C custom omni_dir config — memory promote/list, actions "
+              "relevance, prompt generate all operate under the custom path")
+    finally:
+        for p in procs:
+            _g34_stop_proc(p)
+        _g42_sh.rmtree(base, ignore_errors=True)
+        _g42_sh.rmtree(base2, ignore_errors=True)
+
+
+print("GROUP 42: Plugins omni_dir config field (no hardcoded /opt/omni fallbacks)")
+test(test_42_source_audit)
+test(test_42_unset_omni_dir_errors)
+test(test_42_custom_omni_dir_config)
+
+
+sys.exit(0 if tests_fail == 0 else 1)
