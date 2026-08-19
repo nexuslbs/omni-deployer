@@ -3817,7 +3817,7 @@ def test_p7_idempotent():
     assert r1["was_compacted"] == r2["was_compacted"]
     # Verify message count matches
     assert r1["after_count"] == len(r1["messages"])
-    assert _msgs_size(r1["messages"]) <= CHAR_SOFT, \
+    assert _msgs_size_tokens(r1["messages"]) <= TOKEN_SOFT, \
         f"Idempotent result should be within soft budget: {_msgs_size(r1['messages'])}"
 
 
@@ -5941,7 +5941,7 @@ def test_fn_24_compact_keeps_result_excerpt():
     for i in range(8):
         msgs.append(_g24_assistant_msg(i))
         msgs.append(_g24_tool_msg("filesystem_read", f"call_g24_{i}", i))
-    assert _g24_size(msgs) > CHAR_HARD, "context must exceed the hard budget"
+    assert _g24_size(msgs) > TOKEN_HARD * 4, "context must exceed the hard budget (chars/4)"
     resp = _g24_mcp_execute("prompt_compact-messages", {"messages": msgs, "keep_recent": 3})
     parsed = json.loads(resp["content"])
     assert parsed["was_compacted"], "expected compaction to run"
