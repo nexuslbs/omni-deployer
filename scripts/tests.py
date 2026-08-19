@@ -7601,7 +7601,7 @@ def _h27_run_cron(tag):
     thread_started) whose seq-0 cause message fires new_message."""
     name = f"g27-{tag}-{int(time.time() * 1000)}"
     st, resp = _h27_api("POST", "/schedule", {
-        "name": name, "schedule": "0 0 1 1 *", "prompt": f"g27 {tag} run",
+        "name": name, "cron": "0 0 1 1 *", "prompt": f"g27 {tag} run",
         "mode": "agentic", "profile": "omni", "channel": "cron"})
     assert st == 200, f"POST /schedule -> {st}: {resp}"
     d = resp.get("data", resp)
@@ -10817,7 +10817,7 @@ def test_39_schedule_delete():
     name = f"g39del{_g39_uuid.uuid4().hex[:8]}"
     sid = None
     try:
-        r = post_json("/schedule", {"name": name, "schedule": "0 4 * * *",
+        r = post_json("/schedule", {"name": name, "cron": "0 4 * * *",
                                     "prompt": "g39 delete test", "channel": "cron",
                                     "enabled": False})
         sid = r.get("data", {}).get("id") or r.get("id")
@@ -10869,7 +10869,7 @@ def test_39_omniagent_api_generic_tool():
         sname = f"g39apisched{_g39_uuid.uuid4().hex[:8]}"
         resp = _g24_mcp_execute("builtin_omniagent-api",
                                 {"method": "POST", "path": "/schedule",
-                                 "body": {"name": sname, "schedule": "0 5 * * *",
+                                 "body": {"name": sname, "cron": "0 5 * * *",
                                           "prompt": "g39 api", "channel": "cron",
                                           "enabled": False}})
         out = resp.get("content") or ""
