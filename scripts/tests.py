@@ -3579,7 +3579,7 @@ def _make_user_msg(text: str = "Hello") -> dict:
     return {"role": "user", "content": text}
 
 def _compact_call(messages: list, keep_recent: int = 3,
-                 soft_budget: int = TOKEN_SOFT, hard_budget: int = TOKEN_HARD,
+                 soft_budget: int = None, hard_budget: int = None,
                  thread_dir: str = None, current_iteration: int = 7) -> dict:
     """Call the prompt_compact-messages MCP tool and return parsed response.
 
@@ -3589,6 +3589,12 @@ def _compact_call(messages: list, keep_recent: int = 3,
     config). Tests pass explicit values so they are independent of the
     deployed settings. thread_dir/current_iteration are optional (durable
     auto-notes + context dump)."""
+    # TOKEN_SOFT/TOKEN_HARD are defined below this def; Python evaluates
+    # default args at def time, so resolve the module constants at CALL time.
+    if soft_budget is None:
+        soft_budget = TOKEN_SOFT
+    if hard_budget is None:
+        hard_budget = TOKEN_HARD
     arguments = {"messages": messages, "keep_recent": keep_recent,
                  "soft_budget": soft_budget, "hard_budget": hard_budget}
     if thread_dir:
@@ -3875,7 +3881,7 @@ def test_p8_prune_keeps_recent_turns_verbatim():
     (byte-identical tail = cache-friendly)."""
     msgs = [_make_user_msg("start")]
     for i in range(6):
-        msgs.append(_make_big_assistant_msg(["docker_compose"], pad_chars=30000))
+        msgs.append(_make_big_assistant_msg(["docker_compose"], pad_chars=70000))
         msgs.append({"role": "tool", "content": f"OUT {i} " * 1000,
                      "name": "docker_compose", "tool_call_id": f"call_{i}"})
     msgs.append(_make_assistant_msg("done now"))
