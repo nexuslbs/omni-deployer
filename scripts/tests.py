@@ -11685,15 +11685,13 @@ def test_43_appendable_pending_sql():
     thread's parent context (or parented to the running thread) is selected;
     other channels/profiles/statuses/parents are excluded. Also verifies the
     sub_cause recording contract (msg_type/msg_subtype/original_thread_id) and
-    the skipped terminal flip. Test rows are cleaned up afterwards.'''
+    the skipped terminal flip. All writes run inside a transaction that is
+    ROLLED BACK for cleanup (messages is append-only — rows cannot be DELETEd).'''
     db_url = os.environ.get("DATABASE_URL", "")
     assert db_url, "DATABASE_URL not set — run inside the omniagent container"
     import psycopg2
     conn = psycopg2.connect(db_url)
-    conn.autocommit = True
     ch = "g43-" + uuid.uuid4().hex[:8]
-    created_threads = []
-    created_msgs = []
     try:
         cur = conn.cursor()
 
@@ -11702,9 +11700,7 @@ def test_43_appendable_pending_sql():
                 "INSERT INTO threads (status, cause, channel_id, profile, parent_id) "
                 "VALUES (%s,%s,%s,%s,%s) RETURNING id",
                 (status, cause, channel or ch, profile, parent_id))
-            tid = cur.fetchone()[0]
-            created_threads.append(tid)
-            return tid
+            return cur.fetchone()[0]
 
         running = ins_thread("processing", "user", "omni")          # parent NULL
         p_child = ins_thread("pending", "user", "omni", parent_id=running)
@@ -11733,7 +11729,7 @@ def test_43_appendable_pending_sql():
         assert p_other_profile not in found and p_other_chan not in found and \
             p_other_parent not in found and p_not_pending not in found and \
             p_terminal not in found
-        # sub_cause recording contract
+        # sub_cause recording contract (INSERT only — messages is append-only)
         cur.execute(
             "INSERT INTO messages (thread_id, role, content, thread_sequence, "
             "msg_type, msg_subtype, original_thread_id, iteration_number) "
@@ -11741,7 +11737,6 @@ def test_43_appendable_pending_sql():
             "RETURNING id",
             (running, str(p_child), p_child))
         mid = cur.fetchone()[0]
-        created_msgs.append(mid)
         cur.execute(
             "SELECT msg_type, msg_subtype, original_thread_id FROM messages WHERE id = %s",
             (mid,))
@@ -11756,12 +11751,7 @@ def test_43_appendable_pending_sql():
         print(f"PASS: 43-D appendable-pending SQL + sub_cause recording "
               f"(channel {ch})")
     finally:
-        cur = conn.cursor()
-        for mid in created_msgs:
-            cur.execute("DELETE FROM messages WHERE id = %s", (mid,))
-        # delete children before parents (reverse insertion order)
-        for tid in reversed(created_threads):
-            cur.execute("DELETE FROM threads WHERE id = %s", (tid,))
+        conn.rollback()  # undo all test rows (messages is append-only)
         conn.close()
 
 
