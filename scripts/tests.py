@@ -11908,4 +11908,84 @@ test(test_44_tool_caller_omniagent_api)
 test(test_44_plugin_endpoint_via_builtin_tool)
 test(test_44_fetch_method_gating)
 
+
+# ==============================================================
+#  GROUP 45: Wiki data source skill (task_18cd39ea0c185171) - skill file,
+#  guidance convention, live smoke (read index -> find page -> append log)
+# ==============================================================
+
+def test_45_skill_file():
+    # 45-A: profiles/omni/skills/wiki.md exists with frontmatter and a
+    # complete filesystem-tool worked example (Karpathy + Obsidian format).
+    skill = ""
+    with open(f"{WORKSPACE}/profiles/omni/skills/wiki.md", "r", encoding="utf-8") as f:
+        skill = f.read()
+    assert "name: wiki" in skill and "description:" in skill,         f"wiki.md missing frontmatter: {skill[:200]}"
+    assert "## Worked example" in skill, "wiki.md missing worked-example section"
+    assert "filesystem_write" in skill and "append=true" in skill,         "wiki.md missing filesystem_write append=true example"
+    assert "[[wikilinks]]" in skill and "index.md" in skill and "log.md" in skill,         "wiki.md missing Obsidian / Karpathy markers"
+    assert "search_wiki" in skill and "filesystem_search" in skill,         "wiki.md missing when-to-use tool guidance"
+    print("PASS: 45-A wiki.md skill exists (frontmatter, Karpathy layout, Obsidian format, filesystem-tool worked example)")
+
+
+def test_45_guidance():
+    # 45-B: Agent-Guidance-Architecture.md teaches 'check the wiki before
+    # asking the user' (requirement 2) - wiki stays a data source.
+    guide = ""
+    with open(f"{WORKSPACE}/profiles/omni/wiki/Reference/Agent-Guidance-Architecture.md",
+              "r", encoding="utf-8") as f:
+        guide = f.read()
+    assert "Check the wiki before asking the user" in guide,         "Agent-Guidance-Architecture.md missing convention #7"
+    assert "search_wiki" in guide and "index.md" in guide,         "convention #7 must point at search_wiki + index.md"
+    print("PASS: 45-B guidance convention #7 (check wiki before asking user)")
+
+
+def test_45_wiki_live_smoke():
+    # 45-C: live smoke of the skill end-to-end loop against omnidev:
+    # read index.md (filesystem_read) -> find a page (search_wiki +
+    # filesystem_search) -> append log entry (filesystem_write append=true),
+    # then restore log.md so wiki content stays untouched.
+    assert _g24_wait_for_tool("search_wiki"), "search_wiki not registered"
+    wiki_dir = f"{WORKSPACE}/profiles/omni/wiki"
+    log_path = f"{wiki_dir}/log.md"
+    # 1) read the catalog first (skill step 2)
+    resp = _g24_mcp_execute("filesystem_read", {"path": f"{wiki_dir}/index.md"})
+    out = resp.get("content") or resp.get("output") or json.dumps(resp)
+    assert "OmniAgent Wiki" in out or "## Index" in out,         f"filesystem_read index.md failed: {out[:200]}"
+    print("  ok read index.md catalog via filesystem_read")
+    # 2) find a page: search_wiki text + filesystem_search names (skill step 3)
+    resp = _g24_mcp_execute("search_wiki", {"query": "Agent Guidance", "limit": 5})
+    out = resp.get("content") or ""
+    assert "Agent-Guidance-Architecture" in out,         f"search_wiki did not find the page: {out[:300]}"
+    resp = _g24_mcp_execute("filesystem_search",
+                            {"path": wiki_dir, "pattern": "**/*.md"})
+    out = resp.get("content") or ""
+    assert "index.md" in out, f"filesystem_search did not list index.md: {out[:300]}"
+    print("  ok found pages (search_wiki text + filesystem_search names)")
+    # 3) append a marker entry to log.md via filesystem_write append=true
+    with open(log_path, "r", encoding="utf-8") as f:
+        original = f.read()
+    marker = f"g45smoke{uuid.uuid4().hex[:8]}"
+    entry = (f"\n## 2026-08-19 (GROUP 45 smoke)\n"
+             f"- {marker}: appended via filesystem_write append=true (wiki skill step 6).\n")
+    resp = _g24_mcp_execute("filesystem_write",
+                            {"path": log_path, "content": entry, "append": True})
+    assert resp.get("success"), f"filesystem_write append=true failed: {resp}"
+    with open(log_path, "r", encoding="utf-8") as f:
+        after = f.read()
+    assert marker in after, "append=true did not persist the log entry"
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(original)
+    with open(log_path, "r", encoding="utf-8") as f:
+        restored = f.read()
+    assert restored == original and marker not in restored, "log.md not restored after smoke"
+    print("  ok appended log entry via filesystem_write append=true, then restored log.md")
+    print("PASS: 45-C live smoke - read index -> find page -> append log (content restored)")
+
+
+print("GROUP 45: wiki data source skill (Karpathy + Obsidian + filesystem examples)")
+test(test_45_skill_file)
+test(test_45_guidance)
+test(test_45_wiki_live_smoke)
+
 sys.exit(0 if tests_fail == 0 else 1)
