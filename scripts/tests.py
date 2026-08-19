@@ -11709,9 +11709,10 @@ def test_43_appendable_pending_sql():
         running = ins_thread("processing", "user", "omni")          # parent NULL
         p_child = ins_thread("pending", "user", "omni", parent_id=running)
         p_same = ins_thread("pending", "user", "omni")              # same parent (NULL)
+        dummy = ins_thread("processing", "user", "omni", channel=ch + "-x")  # valid FK parent, other channel
         p_other_profile = ins_thread("pending", "user", "other-profile")
         p_other_chan = ins_thread("pending", "user", "omni", channel=ch + "-x")
-        p_other_parent = ins_thread("pending", "user", "omni", parent_id=999999999)
+        p_other_parent = ins_thread("pending", "user", "omni", parent_id=dummy)
         p_not_pending = ins_thread("processing", "user", "omni")
         p_terminal = ins_thread("pending", "user", "omni")
         cur.execute(
@@ -11758,7 +11759,8 @@ def test_43_appendable_pending_sql():
         cur = conn.cursor()
         for mid in created_msgs:
             cur.execute("DELETE FROM messages WHERE id = %s", (mid,))
-        for tid in created_threads:
+        # delete children before parents (reverse insertion order)
+        for tid in reversed(created_threads):
             cur.execute("DELETE FROM threads WHERE id = %s", (tid,))
         conn.close()
 
