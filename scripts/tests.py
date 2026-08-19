@@ -3578,13 +3578,27 @@ def _make_tool_msg(name: str = "tool_a", tool_call_id: str = "call_0") -> dict:
 def _make_user_msg(text: str = "Hello") -> dict:
     return {"role": "user", "content": text}
 
-def _compact_call(messages: list, keep_recent: int = 3) -> dict:
-    """Call the prompt_compact-messages MCP tool and return parsed response."""
+def _compact_call(messages: list, keep_recent: int = 3,
+                 soft_budget: int = TOKEN_SOFT, hard_budget: int = TOKEN_HARD,
+                 thread_dir: str = None, current_iteration: int = 7) -> dict:
+    """Call the prompt_compact-messages MCP tool and return parsed response.
+
+    soft_budget/hard_budget are REQUIRED tool params (token budgets; the
+    omniagent resolves the effective per-thread budgets from model config >
+    provider > global settings and passes them in — the plugin has NO budget
+    config). Tests pass explicit values so they are independent of the
+    deployed settings. thread_dir/current_iteration are optional (durable
+    auto-notes + context dump)."""
+    arguments = {"messages": messages, "keep_recent": keep_recent,
+                 "soft_budget": soft_budget, "hard_budget": hard_budget}
+    if thread_dir:
+        arguments["thread_dir"] = thread_dir
+        arguments["current_iteration"] = current_iteration
     r = urllib.request.urlopen(
         urllib.request.Request(
             f"{BASE}/mcp/execute",
             data=json.dumps({"name": "prompt_compact-messages",
-                             "arguments": {"messages": messages, "keep_recent": keep_recent}}).encode(),
+                             "arguments": arguments}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST"
         ),
@@ -3601,17 +3615,19 @@ def _compact_call(messages: list, keep_recent: int = 3) -> dict:
 # (soft is the reduction target, NOT a trigger). When the size is under the
 # hard budget the tool returns messages=null (no compaction).
 #
-# Tests use the TOKEN budgets (token_budget_soft/hard) — the only budget type
-# left after the char-budget removal — with the chars/4 fallback: the deployed
-# plugin runs with tokenizer_encoding="" so every context size is measured as
-# chars/4 (tokens ≈ chars/4), which is fully deterministic (sum of content
-# chars // 4; a 200K-char context == 50K tokens). The big contexts are
-# generated dynamically in loops (each message differs by index) instead of
-# being hardcoded, so the test file stays small in versioned git.
+# Tests use the TOKEN budgets (soft_budget/hard_budget) — the only budget
+# type left after the char-budget removal — passed as REQUIRED compact-messages
+# PARAMS (the omniagent resolves the per-thread budgets from model config >
+# provider > global settings and passes them in; the plugin is agnostic). The
+# plugin has NO budget config. With the chars/4 fallback the deployed plugin
+# (tokenizer_encoding="") measures every context as chars/4 (tokens ≈ chars/4),
+# fully deterministic (sum of content chars // 4; a 200K-char context == 50K
+# tokens). The big contexts are generated dynamically in loops (each message
+# differs by index) instead of being hardcoded, so the test file stays small
+# in versioned git.
 
-# Token budgets from the deployed plugins.yml prompt config:
-#   token_budget_soft = 50000, token_budget_hard = 100000
-# The tests below are written against these defaults (chars/4 fallback).
+# Budgets used by these tests (explicit values, independent of deployed
+# settings): soft 50000 / hard 100000 tokens (chars/4 fallback).
 TOKEN_SOFT = 50000
 TOKEN_HARD = 100000
 
@@ -3752,7 +3768,8 @@ def test_p7_three_pass_cap_partial_result():
         urllib.request.Request(
             f"{BASE}/mcp/execute",
             data=json.dumps({"name": "prompt_compact-messages",
-                             "arguments": {"messages": msgs, "keep_recent": 3}}).encode(),
+                             "arguments": {"messages": msgs, "keep_recent": 3,
+                                           "soft_budget": TOKEN_SOFT, "hard_budget": TOKEN_HARD}}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST"
         ),
@@ -3819,6 +3836,176 @@ def test_p7_idempotent():
     assert r1["after_count"] == len(r1["messages"])
     assert _msgs_size_tokens(r1["messages"]) <= TOKEN_SOFT, \
         f"Idempotent result should be within soft budget: {_msgs_size(r1['messages'])}"
+
+
+# ── Prune-in-compact tests (budgets as params; tool results drained inside
+#    compact-messages — the thread-700 re-read death-spiral fix moved from
+#    core into the plugin) ─────────────────────────────────────────────
+
+def test_p8_prune_drains_read_results_into_auto_notes():
+    """Over the hard budget, old read-type tool results are drained AND
+    auto-noted into the thread dir (survive pruning) — the plugin owns
+    pruning now; budgets come in as params."""
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="p8-prune-")
+    try:
+        msgs = [_make_user_msg("read the files")]
+        for i in range(6):
+            msgs.append(_make_big_assistant_msg(["filesystem_read"], pad_chars=40000))
+            msgs.append({"role": "tool", "content": ("FILE CONTENT %d " % i) * 2000,
+                         "name": "filesystem_read", "tool_call_id": f"call_{i}"})
+        msgs.append(_make_assistant_msg(["done"]))
+        assert _msgs_size_tokens(msgs) > TOKEN_HARD, "context must exceed hard budget"
+        resp = _compact_call(msgs, keep_recent=2, soft_budget=20000, hard_budget=50000,
+                             thread_dir=tmp)
+        assert resp["was_compacted"], f"should compact over hard budget: {resp}"
+        # Auto-notes must preserve the read content that pruning removed.
+        notes_path = os.path.join(tmp, "auto-notes.md")
+        assert os.path.exists(notes_path), f"auto-notes.md missing: {notes_path}"
+        notes = open(notes_path, encoding="utf-8").read()
+        assert "[engine:auto-note filesystem_read]" in notes, \
+            f"auto-note marker missing: {notes[:200]}"
+        assert "FILE CONTENT" in notes, f"read content missing from auto-notes: {notes[:300]}"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+def test_p8_prune_keeps_recent_turns_verbatim():
+    """Prune inside compact-messages must NOT rewrite surviving tail messages
+    (byte-identical tail = cache-friendly)."""
+    msgs = [_make_user_msg("start")]
+    for i in range(6):
+        msgs.append(_make_big_assistant_msg(["docker_compose"], pad_chars=30000))
+        msgs.append({"role": "tool", "content": f"OUT {i} " * 1000,
+                     "name": "docker_compose", "tool_call_id": f"call_{i}"})
+    msgs.append(_make_assistant_msg("done now"))
+    tail_before = msgs[-1]["content"]
+    assert _msgs_size_tokens(msgs) > TOKEN_HARD
+    resp = _compact_call(msgs, keep_recent=2, soft_budget=20000, hard_budget=50000)
+    assert resp["was_compacted"]
+    arr = resp["messages"]
+    # The very last assistant message must survive byte-identical.
+    assert arr[-1]["content"] == tail_before, \
+        f"tail rewritten: {arr[-1]['content'][:60]} != {tail_before[:60]}"
+
+def test_p8_under_budget_no_prune_no_rewrite():
+    """Under the hard budget → messages=null AND the input is untouched
+    (no-op byte-identical; prefix cache preserved)."""
+    msgs = [_make_user_msg("hi"), _make_assistant_msg(["tool_a"]),
+            _make_tool_msg("tool_a", "call_0"), _make_user_msg("bye")]
+    before = json.dumps(msgs, sort_keys=True)
+    resp = _compact_call(msgs, keep_recent=3, soft_budget=50000, hard_budget=100000)
+    assert not resp["was_compacted"], f"no compaction expected: {resp}"
+    assert resp["messages"] is None, "under budget must return null"
+    after = json.dumps(msgs, sort_keys=True)
+    assert before == after, "under-budget input must remain byte-identical"
+
+def test_p8_missing_budget_params_is_error():
+    """compact-messages REQUIRES soft_budget/hard_budget (plugin has no budget
+    config; budgets are tool params) — missing them is a descriptive error."""
+    r = urllib.request.urlopen(
+        urllib.request.Request(
+            f"{BASE}/mcp/execute",
+            data=json.dumps({"name": "prompt_compact-messages",
+                             "arguments": {"messages": [_make_user_msg("x")],
+                                           "keep_recent": 3}}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        ),
+        timeout=10
+    )
+    result = json.loads(r.read())
+    assert result.get("success"), f"tool-level success expected, got {result}"
+    content = result["content"]
+    data = json.loads(content) if content.startswith("{") else content
+    if isinstance(data, str):
+        assert "budget" in data or "Missing required" in data, f"expected budget error, got {data}"
+    else:
+        # The plugin reports the error inside the result payload.
+        assert "hard_budget" in json.dumps(data), f"expected budget error mention: {data}"
+
+
+# ── Custom-plugin stub test: a DIFFERENT compaction strategy runs through the
+#    SAME interface (proves context management is plugin-owned; the core only
+#    depends on the compact-messages interface: messages + budgets in,
+#    messages array or null out) ──────────────────────────────────────
+
+def test_p9_custom_plugin_stub_interface():
+    """A stub prompt plugin with a completely different compaction strategy
+    (drop-oldest, no summary block) must be callable through the same
+    compact-messages interface. The omni-plugins python `prompt` plugin is a
+    DIFFERENT implementation of the same tool; calling it through
+    /mcp/execute proves the interface is plugin-agnostic."""
+    # The python prompt plugin (tools/prompt/server.py in omni-plugins) is a
+    # separate implementation of compact-messages. It is NOT the bundled rust
+    # plugin. We spawn it as an MCP server and drive the same JSON-RPC
+    # contract (initialize -> tools/call compact-messages with budgets).
+    import subprocess, tempfile, shutil
+    server_py = "/opt/workspace/omni-plugins/tools/prompt/server.py"
+    assert os.path.exists(server_py), f"stub plugin server missing: {server_py}"
+    proc = subprocess.Popen(
+        ["python3", server_py],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+        env={**os.environ, "OMNI_DIR": "/opt/omni",
+             "DATABASE_URL": os.environ.get("DATABASE_URL", "")},
+    )
+    import threading, queue
+    def _read_stdout():
+        for line in proc.stdout:
+            line = line.strip()
+            if line:
+                try:
+                    json.loads(line)
+                except Exception:
+                    continue
+                q.put(line)
+    q = queue.Queue()
+    t = threading.Thread(target=_read_stdout, daemon=True)
+    t.start()
+    def rpc(msg_id, method, params):
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": msg_id,
+                                     "method": method, "params": params}) + "\n")
+        proc.stdin.flush()
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                line = q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            obj = json.loads(line)
+            if obj.get("id") == msg_id:
+                return obj
+        raise AssertionError(f"timeout waiting for rpc {method}")
+    try:
+        rpc(1, "initialize", {"protocolVersion": "2024-11-05",
+                              "capabilities": {}, "clientInfo": {"name": "deploy-tests"}})
+        tools = rpc(2, "tools/list", {})
+        names = [t.get("name", "") for t in tools.get("result", {}).get("tools", [])]
+        assert any("compact" in n for n in names), f"compact tool missing: {names}"
+        msgs = [_make_user_msg("start"), _make_big_assistant_msg(["filesystem_read"], 40000),
+                {"role": "tool", "content": "CUSTOM CONTENT " * 500, "name": "filesystem_read",
+                 "tool_call_id": "call_0"},
+                _make_assistant_msg("done")]
+        # The stub's strategy differs: it returns ITS OWN result shape — but
+        # the interface contract (messages in + budgets in, JSON out) holds.
+        out = rpc(3, "tools/call", {"name": "prompt_compact-messages",
+                                    "arguments": {"messages": msgs, "keep_recent": 1,
+                                                  "soft_budget": 50000, "hard_budget": 100000}})
+        result = out.get("result", {})
+        content = result.get("content", [])
+        text = "".join(c.get("text", "") for c in content) if isinstance(content, list) else str(content)
+        parsed = json.loads(text) if text.startswith("{") else {}
+        # Whatever the stub's strategy, the tool must answer over the same
+        # interface without error and return a JSON payload.
+        assert "was_compacted" in parsed or "messages" in parsed, \
+            f"stub must return the interface contract, got: {text[:300]}"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
 
 
 
@@ -4975,6 +5162,11 @@ if __name__ == "__main__":
         test_p7_idempotent,
         test_p7_progressive_multi_pass,
         test_p7_three_pass_cap_partial_result,
+        test_p8_prune_drains_read_results_into_auto_notes,
+        test_p8_prune_keeps_recent_turns_verbatim,
+        test_p8_under_budget_no_prune_no_rewrite,
+        test_p8_missing_budget_params_is_error,
+        test_p9_custom_plugin_stub_interface,
     ]:
         test(fn)
 
