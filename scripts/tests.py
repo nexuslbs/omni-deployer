@@ -11539,4 +11539,235 @@ test(test_42_unset_omni_dir_errors)
 test(test_42_custom_omni_dir_config)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 43: Sub-prompts — pending user prompts appended to running thread
+#  (task_18cd0d0fb878a9d5). Covers the omniagent implementation:
+#  43-A source audit (migration original_thread_id, DB helpers, settings
+#       wiring, main-loop injection BEFORE the condense call, gate + its
+#       unit tests, config defaults, settings.yml defaults),
+#  43-B live settings API (GET exposes both settings, PUT updates them),
+#  43-C DB schema (messages.original_thread_id BIGINT),
+#  43-D appendable-pending SQL semantics + sub_cause recording on the DB.
+# ═══════════════════════════════════════════════════════════════════════
+
+OMNIAGENT_SRC = "/opt/workspace/omniagent"
+
+def _g43_read(rel):
+    with open(f"{OMNIAGENT_SRC}/{rel}", encoding="utf-8") as f:
+        return f.read()
+
+def test_43_source_audit():
+    '''43-A: the sub-prompts feature is fully wired in the omniagent source:
+    migration column, MessageDb/Message/MessageNew field,
+    insert_sub_cause_message, list_appendable_pending_threads +
+    mark_thread_skipped_for_sub_prompt, main-loop injection placed BEFORE the
+    condense call, settings definitions + writable whitelist + category
+    mapping, AgentConfig defaults, omni-stack settings.yml defaults, and the
+    gate unit tests.'''
+    mig = _g43_read("db-migrations/src/lib.rs")
+    assert "original_thread_id" in mig and \
+        "ADD COLUMN IF NOT EXISTS original_thread_id BIGINT" in mig, \
+        "migration must add messages.original_thread_id BIGINT"
+    types = _g43_read("src/db/types.rs")
+    assert types.count("pub original_thread_id: Option<i64>") >= 3, \
+        "MessageDb/Message/MessageNew must carry original_thread_id"
+    msgs = _g43_read("src/db/messages.rs")
+    assert "pub async fn insert_sub_cause_message" in msgs, \
+        "insert_sub_cause_message missing"
+    assert 'role: "sub_cause"' in msgs and 'msg_type: "sub_cause"' in msgs, \
+        "sub_cause message must set role + msg_type"
+    assert "original_thread_id: Some(pending_thread_id)" in msgs, \
+        "sub_cause must record original_thread_id"
+    thr = _g43_read("src/db/threads.rs")
+    assert "pub async fn list_appendable_pending_threads" in thr
+    assert "t.cause = 'user'" in thr and "t.status = 'pending'" in thr \
+        and "NOT t.terminal" in thr
+    assert "IS NOT DISTINCT FROM" in thr and \
+        "t.parent_id = :running_thread_id" in thr
+    assert "pub async fn mark_thread_skipped_for_sub_prompt" in thr
+    assert 'mark_thread_terminal(pool, pending_id, "skipped")' in thr, \
+        "skipped must go through the terminal choke point"
+    loop = _g43_read("src/agent/main_loop.rs")
+    sp_line = loop.index("list_appendable_pending_threads(")
+    cond_line = loop.index("call condense tool")
+    assert sp_line < cond_line, \
+        f"sub-prompt lookup ({sp_line}) must precede condense ({cond_line})"
+    assert "used_sub_prompt_chars" in loop and "sub_prompts_exhausted" in loop
+    assert "insert_sub_cause_message(" in loop and \
+        "mark_thread_skipped_for_sub_prompt(" in loop
+    assert "pub(crate) fn sub_prompt_gate_ok" in loop and \
+        "mod sub_prompt_gate_tests" in loop
+    settings = _g43_read("src/server/settings.rs")
+    for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent"):
+        assert f'"{key}"' in settings, f"{key} missing from settings.rs"
+    assert '"sub_prompt_max_chars" | "sub_prompt_iteration_percent" => "general"' \
+        in settings, "category mapping to general missing"
+    assert "sub_prompt_settings_are_writable_numbers_in_general" in settings, \
+        "settings unit test missing"
+    cfg = _g43_read("src/agent/config.rs")
+    assert "sub_prompt_max_chars" in cfg and "sub_prompt_iteration_percent" in cfg
+    assert '"4000"' in cfg and '"50"' in cfg, "AgentConfig defaults 4000/50"
+    with open("/opt/workspace/omni-stack/config/settings.yml", encoding="utf-8") as f:
+        sy = f.read()
+    assert "sub_prompt_max_chars" in sy and "sub_prompt_iteration_percent" in sy, \
+        "omni-stack settings.yml defaults missing"
+    print("PASS: 43-A source audit — migration, DB helpers, pre-condense "
+          "injection, settings wiring + defaults all present")
+
+
+def _g43_settings_map():
+    sr = get_json("/settings")
+    sdata = sr.get("data", sr) if isinstance(sr, dict) else sr
+    cats = sdata.get("categories", []) if isinstance(sdata, dict) else []
+    out = {}
+    for c in cats:
+        if not isinstance(c, dict):
+            continue
+        for s in c.get("settings", []):
+            if isinstance(s, dict) and s.get("name"):
+                out[s["name"]] = s.get("value", "")
+    return out
+
+
+def test_43_settings_api():
+    '''43-B: GET /settings exposes sub_prompt_max_chars + sub_prompt_iteration_percent;
+    PUT updates them live; original values are restored afterwards.'''
+    before = _g43_settings_map()
+    assert "sub_prompt_max_chars" in before, \
+        f"sub_prompt_max_chars missing from /settings: {sorted(before)}"
+    assert "sub_prompt_iteration_percent" in before, \
+        f"sub_prompt_iteration_percent missing from /settings: {sorted(before)}"
+    orig_max = before["sub_prompt_max_chars"]
+    orig_pct = before["sub_prompt_iteration_percent"]
+    try:
+        put_json("/settings", {"updates": [
+            {"name": "sub_prompt_max_chars", "value": "7777"},
+            {"name": "sub_prompt_iteration_percent", "value": "77"},
+        ]})
+        after = _g43_settings_map()
+        assert str(after.get("sub_prompt_max_chars")) == "7777", \
+            after.get("sub_prompt_max_chars")
+        assert str(after.get("sub_prompt_iteration_percent")) == "77", \
+            after.get("sub_prompt_iteration_percent")
+        print("PASS: 43-B settings API — GET exposes both settings, PUT "
+              "updates live (7777/77)")
+    finally:
+        put_json("/settings", {"updates": [
+            {"name": "sub_prompt_max_chars", "value": str(orig_max)},
+            {"name": "sub_prompt_iteration_percent", "value": str(orig_pct)},
+        ]})
+        restored = _g43_settings_map()
+        assert str(restored.get("sub_prompt_max_chars")) == str(orig_max), \
+            restored.get("sub_prompt_max_chars")
+        assert str(restored.get("sub_prompt_iteration_percent")) == str(orig_pct), \
+            restored.get("sub_prompt_iteration_percent")
+
+
+def test_43_db_schema():
+    '''43-C: the dev DB messages table has original_thread_id BIGINT (nullable).'''
+    db_url = os.environ.get("DATABASE_URL", "")
+    assert db_url, "DATABASE_URL not set — run inside the omniagent container"
+    import psycopg2
+    with psycopg2.connect(db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_name='messages' AND column_name='original_thread_id'")
+        rows = cur.fetchall()
+    assert len(rows) == 1, f"original_thread_id column not found: {rows}"
+    assert rows[0][0] == "bigint" and rows[0][1] == "YES", rows
+    print("PASS: 43-C DB schema — messages.original_thread_id BIGINT NULL present")
+
+
+def test_43_appendable_pending_sql():
+    '''43-D: replicate list_appendable_pending_threads WHERE semantics against the
+    dev DB: a pending user thread in the same channel/profile with the running
+    thread's parent context (or parented to the running thread) is selected;
+    other channels/profiles/statuses/parents are excluded. Also verifies the
+    sub_cause recording contract (msg_type/msg_subtype/original_thread_id) and
+    the skipped terminal flip. Test rows are cleaned up afterwards.'''
+    db_url = os.environ.get("DATABASE_URL", "")
+    assert db_url, "DATABASE_URL not set — run inside the omniagent container"
+    import psycopg2
+    conn = psycopg2.connect(db_url)
+    conn.autocommit = True
+    ch = "g43-" + uuid.uuid4().hex[:8]
+    created_threads = []
+    created_msgs = []
+    try:
+        cur = conn.cursor()
+
+        def ins_thread(status, cause, profile, parent_id=None, channel=None):
+            cur.execute(
+                "INSERT INTO threads (status, cause, channel_id, profile, parent_id) "
+                "VALUES (%s,%s,%s,%s,%s) RETURNING id",
+                (status, cause, channel or ch, profile, parent_id))
+            tid = cur.fetchone()[0]
+            created_threads.append(tid)
+            return tid
+
+        running = ins_thread("processing", "user", "omni")          # parent NULL
+        p_child = ins_thread("pending", "user", "omni", parent_id=running)
+        p_same = ins_thread("pending", "user", "omni")              # same parent (NULL)
+        p_other_profile = ins_thread("pending", "user", "other-profile")
+        p_other_chan = ins_thread("pending", "user", "omni", channel=ch + "-x")
+        p_other_parent = ins_thread("pending", "user", "omni", parent_id=999999999)
+        p_not_pending = ins_thread("processing", "user", "omni")
+        p_terminal = ins_thread("pending", "user", "omni")
+        cur.execute(
+            "UPDATE threads SET terminal = true, status = 'skipped' WHERE id = %s",
+            (p_terminal,))
+        cur.execute(
+            "SELECT t.id FROM threads t "
+            "WHERE t.channel_id = %s AND t.profile = %s AND t.cause = 'user' "
+            "  AND t.status = 'pending' AND NOT t.terminal AND t.id <> %s "
+            "  AND (t.parent_id IS NOT DISTINCT FROM "
+            "       (SELECT parent_id FROM threads WHERE id = %s) "
+            "       OR t.parent_id = %s) "
+            "ORDER BY t.id ASC",
+            (ch, "omni", running, running, running))
+        found = [r[0] for r in cur.fetchall()]
+        assert found == sorted([p_child, p_same]), \
+            f"expected {sorted([p_child, p_same])} got {found}"
+        assert p_other_profile not in found and p_other_chan not in found and \
+            p_other_parent not in found and p_not_pending not in found and \
+            p_terminal not in found
+        # sub_cause recording contract
+        cur.execute(
+            "INSERT INTO messages (thread_id, role, content, thread_sequence, "
+            "msg_type, msg_subtype, original_thread_id, iteration_number) "
+            "VALUES (%s,'sub_cause','appended sub-prompt',1,'sub_cause',%s,%s,1) "
+            "RETURNING id",
+            (running, str(p_child), p_child))
+        mid = cur.fetchone()[0]
+        created_msgs.append(mid)
+        cur.execute(
+            "SELECT msg_type, msg_subtype, original_thread_id FROM messages WHERE id = %s",
+            (mid,))
+        row = cur.fetchone()
+        assert row == ("sub_cause", str(p_child), p_child), row
+        # skipped flip via the terminal choke-point semantics
+        cur.execute(
+            "UPDATE threads SET status='skipped', terminal=true, ended_at=NOW() "
+            "WHERE id=%s AND NOT terminal", (p_child,))
+        cur.execute("SELECT status, terminal FROM threads WHERE id = %s", (p_child,))
+        assert cur.fetchone() == ("skipped", True)
+        print(f"PASS: 43-D appendable-pending SQL + sub_cause recording "
+              f"(channel {ch})")
+    finally:
+        cur = conn.cursor()
+        for mid in created_msgs:
+            cur.execute("DELETE FROM messages WHERE id = %s", (mid,))
+        for tid in created_threads:
+            cur.execute("DELETE FROM threads WHERE id = %s", (tid,))
+        conn.close()
+
+
+print("GROUP 43: Sub-prompts — append pending user prompts to running thread")
+test(test_43_source_audit)
+test(test_43_settings_api)
+test(test_43_db_schema)
+test(test_43_appendable_pending_sql)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
