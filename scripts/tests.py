@@ -6416,6 +6416,10 @@ def test_20_2_channels():
     print(f"✓ Channels: {len(ch)} found")
     if ch:
         print(f"  first: id={ch[0].get('id')}, name={ch[0].get('name')}")
+        # task_18cd0a9e3b7a7e1a: channel `cause` removed from the model
+        # (channels.yml schema + API response) — no entry may carry it.
+        bad = [c.get("id") for c in ch if "cause" in c]
+        assert not bad, f"channel entries must not carry a 'cause' key: {bad}"
 
 test(test_20_2_channels)
 
