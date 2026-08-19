@@ -1566,7 +1566,7 @@ def test_dashboard_plugin_filters():
     # Messages filters
     for qs in [
         "?role=user",
-        "?channel_id=1",
+        "?channel=1",
         "?role=assistant&provider=openai",
         "?model=gpt-4&type=text",
         "?seq0=true&order=asc",
@@ -2945,7 +2945,7 @@ def test_mm9_e2e():
     assert channel_id is not None, "No mattermost channel found in omniagent channels after setup"
 
     # 7. Patch channel to use noop-full provider with test-model-1 (default echo model)
-    patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}", data=json.dumps({"current_provider": "noop-full", "current_model": "test-model-1"}).encode(), method="PATCH", headers={"Content-Type": "application/json"})
+    patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}", data=json.dumps({"provider": "noop-full", "model": "test-model-1"}).encode(), method="PATCH", headers={"Content-Type": "application/json"})
     patch_resp = urllib.request.urlopen(patch_req, timeout=10)
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
     print("[channel patched to noop-full/test-model-1]")
@@ -3087,7 +3087,7 @@ def test_fn_9b_provider_source_awareness():
 
     # Patch channel to use noop/test-model-1
     patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}",
-        data=json.dumps({"current_provider": "noop", "current_model": "test-model-1"}).encode(),
+        data=json.dumps({"provider": "noop", "model": "test-model-1"}).encode(),
         method="PATCH", headers={"Content-Type": "application/json"})
     patch_resp = urllib.request.urlopen(patch_req, timeout=10)
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
@@ -3187,7 +3187,7 @@ def test_fn_9b_provider_source_awareness():
 
     # Patch channel to noop/test-model-1
     patch_req = urllib.request.Request(f"{BASE}/channels/{channel_id}",
-        data=json.dumps({"current_provider": "noop", "current_model": "test-model-1"}).encode(),
+        data=json.dumps({"provider": "noop", "model": "test-model-1"}).encode(),
         method="PATCH", headers={"Content-Type": "application/json"})
     patch_resp = urllib.request.urlopen(patch_req, timeout=10)
     assert patch_resp.status == 200, f"channel PATCH returned {patch_resp.status}"
@@ -3976,7 +3976,7 @@ def _wf_bootstrap_test_channel():
     # stable within a run. Only provider/model are patched (permanent).
     urllib.request.urlopen(urllib.request.Request(
         f"{BASE}/channels/{cid}",
-        data=json.dumps({"current_provider": "noop", "current_model": "test-tool-caller"}).encode(),
+        data=json.dumps({"provider": "noop", "model": "test-tool-caller"}).encode(),
         method="PATCH", headers={"Content-Type": "application/json"}), timeout=10).read()
     print(f"[wf-test: omniagent channel {cid} bootstrapped "
           "(noop/test-tool-caller, resource_identifier={new_ch.get('resource_identifier')})]")
@@ -4004,10 +4004,10 @@ def _wf_dedicated_channel():
     if ch is None:
         print("[wf-test: dedicated wf-test channel NOT found — bootstrapping]")
         ch = _wf_bootstrap_test_channel()
-    assert ch.get("current_provider") == "noop" and ch.get("current_model") == "test-tool-caller", (
+    assert ch.get("provider") == "noop" and ch.get("model") == "test-tool-caller", (
         f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
-        f"current_provider={ch.get('current_provider')!r}, "
-        f"current_model={ch.get('current_model')!r} — expected noop/test-tool-caller. "
+        f"provider={ch.get('provider')!r}, "
+        f"model={ch.get('model')!r} — expected noop/test-tool-caller. "
         "Refusing to patch it or any other channel."
     )
     return ch["id"]
@@ -6458,9 +6458,9 @@ def test_20_5_overview():
     print(f"✓ Overview entries: {len(d)} total")
     if d:
         entry = d[0]
-        for key in ["id", "channel_name", "status", "content_preview"]:
+        for key in ["id", "channel", "status", "content_preview"]:
             assert key in entry, f"Missing '{key}': {list(entry.keys())}"
-        print(f"  first: id={entry.get('id')} channel={entry.get('channel_name')} status={entry.get('status')}")
+        print(f"  first: id={entry.get('id')} channel={entry.get('channel')} status={entry.get('status')}")
     dash = get_data("/overview/dashboard")
     assert isinstance(dash, dict), f"/overview/dashboard should return a dict, got: {type(dash).__name__}"
     for key in ["kpis", "threads_over_time", "status_distribution", "token_trend", "recent_activity", "channel_health", "top_tools"]:
@@ -6567,7 +6567,7 @@ def test_20_8_schedule_crud():
     global _schedule_id
     import uuid
     name = f"test-sched-{uuid.uuid4().hex[:8]}"
-    r = post_json("/schedule", {"name": name, "schedule": "0 6 * * *", "prompt": "test", "channel_id": "cron", "enabled": False})
+    r = post_json("/schedule", {"name": name, "cron": "0 6 * * *", "prompt": "test", "channel": "cron", "enabled": False})
     sid = r.get("data", {}).get("id") or r.get("id")
     assert sid, f"No id: {r}"
     _schedule_id = sid
@@ -7003,7 +7003,7 @@ def _wf_cleanup(keys, task_ids):
 
 def _wf_create_task(title, key, script, cid):
     body = {"title": title, "status": "todo",
-            "workflow_id": key, "channel_id": cid, "body": script}
+            "workflow": key, "channel": cid, "body": script}
     # Boards feature gate: when config/boards.yml exists (omnidev dev stack),
     # the dispatch gate (server/kanban.rs:2336) skips tasks with no/unknown
     # board — so workflow-test tasks need a VALID board to ever dispatch.
@@ -7404,7 +7404,7 @@ def _p_create_plain_task(title, script, cid):
     # Create a PLAIN kanban task (NO workflow_id) in the dedicated wf-test channel.
     # Mirrors _wf_create_task but omits workflow_id: the engine must run it without
     # any workflow semantics (R8-N plain-task path).
-    body = {"title": title, "status": "todo", "channel_id": cid, "body": script}
+    body = {"title": title, "status": "todo", "channel": cid, "body": script}
     # Boards feature gate: with boards.yml present the dispatch gate skips
     # boardless tasks, and boards main/dev would inject workflow
     # omniagent-dev. Plain tasks use the workflow-less 'plain' board so the
@@ -7435,7 +7435,7 @@ def test_26_plain_kanban_terminal_fail_thread_blocked():
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=180)
         assert st == "blocked", f"A: plain fail task must land on 'blocked', got '{st}' (gd={gd})"
-        assert gd.get("workflow_id") is None, f"A: plain task must have no workflow_id, got {gd.get('workflow_id')!r}"
+        assert gd.get("workflow") is None, f"A: plain task must have no workflow, got {gd.get('workflow')!r}"
         assert gd.get("thread_status") in (None, ""), f"A: zombie thread_status {gd.get('thread_status')!r}"
         rows = _wf_history_rows(tid)
         assert rows, f"A: no workflow history rows for task {tid}"
@@ -7444,7 +7444,7 @@ def test_26_plain_kanban_terminal_fail_thread_blocked():
         assert thr, f"A: no step threads for task {tid}"
         assert all(t["workflow_id"] is None for t in thr), f"A: plain-task threads must have NULL workflow_id: {thr}"
         assert all(t["status"] != "running" for t in thr), f"A: thread left zombie in 'running': {thr}"
-        print(f"A PASS: task={tid} status={gd.get('status')} workflow_id={gd.get('workflow_id')!r} thread_status={gd.get('thread_status')!r}")
+        print(f"A PASS: task={tid} status={gd.get('status')} workflow={gd.get('workflow')!r} thread_status={gd.get('thread_status')!r}")
         print(f"A PASS: last_workflow_row={rows[-1]}")
         print(f"A PASS: threads={thr}")
     finally:
@@ -7466,7 +7466,7 @@ def test_26_plain_kanban_terminal_clean_completion_review():
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid, {"review", "blocked", "done"}, timeout=180)
         assert st == "review", f"B: plain clean task must land on 'review', got '{st}' (gd={gd})"
-        assert gd.get("workflow_id") is None, f"B: plain task must have no workflow_id, got {gd.get('workflow_id')!r}"
+        assert gd.get("workflow") is None, f"B: plain task must have no workflow, got {gd.get('workflow')!r}"
         rows = _wf_history_rows(tid)
         assert rows, f"B: no workflow history rows for task {tid}"
         assert rows[-1]["final_board"] == "review", f"B: last workflow row must end on 'review', got {rows[-1]}"
@@ -7475,7 +7475,7 @@ def test_26_plain_kanban_terminal_clean_completion_review():
         assert thr, f"B: no step threads for task {tid}"
         assert all(t["workflow_id"] is None for t in thr), f"B: plain-task threads must have NULL workflow_id: {thr}"
         assert all(t["status"] == "completed" for t in thr), f"B: thread statuses must be 'completed': {thr}"
-        print(f"B PASS: task={tid} status={gd.get('status')} workflow_id={gd.get('workflow_id')!r}")
+        print(f"B PASS: task={tid} status={gd.get('status')} workflow={gd.get('workflow')!r}")
         print(f"B PASS: last_workflow_row={rows[-1]}")
         print(f"B PASS: threads={thr}")
     finally:
@@ -7602,7 +7602,7 @@ def _h27_run_cron(tag):
     name = f"g27-{tag}-{int(time.time() * 1000)}"
     st, resp = _h27_api("POST", "/schedule", {
         "name": name, "schedule": "0 0 1 1 *", "prompt": f"g27 {tag} run",
-        "mode": "agentic", "profile": "omni", "channel_id": "cron"})
+        "mode": "agentic", "profile": "omni", "channel": "cron"})
     assert st == 200, f"POST /schedule -> {st}: {resp}"
     d = resp.get("data", resp)
     assert d.get("id"), f"POST /schedule returned no id: {resp}"
@@ -7819,7 +7819,7 @@ def test_27_hooks_infinite_loop_protection():
     hid_obs = _h27_create_hook(name="g27-obs", event="new_message", scope="global",
                                count=100000, mode="agentic", prompt="G27-OBS", profile="omni")
     hid_trig = _h27_create_hook(name="g27-trig", event="thread_started", scope="global",
-                                count=1, mode="agentic", prompt="G27-TRIG", profile="omni", channel_id="cron")
+                                count=1, mode="agentic", prompt="G27-TRIG", profile="omni", channel="cron")
     pre_trig = _h27_pre_threads("G27-TRIG")
     try:
         # Drain the EXECUTOR backlog: cron threads from earlier tests fail
@@ -8220,9 +8220,9 @@ def _g29_insert_pending_thread(task_id, cid, step="running", template="dev-execu
 
 
 def _g29_make_task(title, status="todo", workflow_id="omniagent-dev", cid="kanban"):
-    body = {"title": title, "status": status, "channel_id": cid}
+    body = {"title": title, "status": status, "channel": cid}
     if workflow_id:
-        body["workflow_id"] = workflow_id
+        body["workflow"] = workflow_id
     # Boards feature gate: with boards.yml present the dispatch gate skips
     # boardless tasks — use the first valid board (the task's explicit
     # channel/workflow win over the board's fallbacks). PLAIN tasks
@@ -8835,11 +8835,11 @@ def _g31_board_keys():
 def _g31_make_task(title, status="todo", board=None, cid=None, workflow_id="omniagent-dev"):
     body = {"title": title, "status": status}
     if cid is not None:
-        body["channel_id"] = cid
+        body["channel"] = cid
     if board is not None:
         body["board"] = board
     if workflow_id:
-        body["workflow_id"] = workflow_id
+        body["workflow"] = workflow_id
     r = post_json("/kanban/tasks", body)
     d = r.get("data", r)
     assert d.get("id"), f"task create failed: {r}"
@@ -8905,13 +8905,13 @@ def test_31_dispatch_skips_invalid_board():
     try:
         # API create validation (boards enabled): missing board -> 400
         st, resp = _h27_api("POST", "/kanban/tasks", {
-            "title": f"g31-b-{uuid.uuid4().hex[:8]}", "status": "todo", "channel_id": "kanban"})
+            "title": f"g31-b-{uuid.uuid4().hex[:8]}", "status": "todo", "channel": "kanban"})
         assert st == 400 and "board is required" in str(resp), \
             f"create without board must 400 with 'board is required', got {st} {resp}"
         # unknown board -> 400
         st, resp = _h27_api("POST", "/kanban/tasks", {
             "title": f"g31-b-{uuid.uuid4().hex[:8]}", "status": "todo",
-            "channel_id": "kanban", "board": "no-such-board"})
+            "channel": "kanban", "board": "no-such-board"})
         assert st == 400 and "not found in boards.yml" in str(resp), \
             f"create with unknown board must 400 with 'not found in boards.yml', got {st} {resp}"
         # valid board -> created
@@ -10818,7 +10818,7 @@ def test_39_schedule_delete():
     sid = None
     try:
         r = post_json("/schedule", {"name": name, "schedule": "0 4 * * *",
-                                    "prompt": "g39 delete test", "channel_id": "cron",
+                                    "prompt": "g39 delete test", "channel": "cron",
                                     "enabled": False})
         sid = r.get("data", {}).get("id") or r.get("id")
         assert sid, f"no id from POST /schedule: {r}"
@@ -10870,7 +10870,7 @@ def test_39_omniagent_api_generic_tool():
         resp = _g24_mcp_execute("builtin_omniagent-api",
                                 {"method": "POST", "path": "/schedule",
                                  "body": {"name": sname, "schedule": "0 5 * * *",
-                                          "prompt": "g39 api", "channel_id": "cron",
+                                          "prompt": "g39 api", "channel": "cron",
                                           "enabled": False}})
         out = resp.get("content") or ""
         assert "HTTP 200" in out, f"schedule create via generic tool: {out[:300]}"
