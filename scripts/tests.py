@@ -3601,25 +3601,26 @@ def _compact_call(messages: list, keep_recent: int = 3) -> dict:
 # (soft is the reduction target, NOT a trigger). When the size is under the
 # hard budget the tool returns messages=null (no compaction).
 #
-# Tests use the CHAR budgets (char_budget_soft/hard) — not token budgets —
-# because the char count is fully deterministic (sum of content.len()),
-# while token estimates (content.len()/4) would couple the assertions to
-# tokenizer configuration and make them brittle. The big contexts are
+# Tests use the TOKEN budgets (token_budget_soft/hard) — the only budget type
+# left after the char-budget removal — with the chars/4 fallback: the deployed
+# plugin runs with tokenizer_encoding="" so every context size is measured as
+# chars/4 (tokens ≈ chars/4), which is fully deterministic (sum of content
+# chars // 4; a 200K-char context == 50K tokens). The big contexts are
 # generated dynamically in loops (each message differs by index) instead of
 # being hardcoded, so the test file stays small in versioned git.
 
-# Default char budgets from PluginConfig::default() (char mode: the deployed
-# plugin runs with tokenizer_encoding="" so char budgets apply):
-#   char_budget_soft = 350000, char_budget_hard = 500000
-# The tests below are written against these defaults.
-CHAR_SOFT = 350000
-CHAR_HARD = 500000
+# Token budgets from the deployed plugins.yml prompt config:
+#   token_budget_soft = 50000, token_budget_hard = 100000
+# The tests below are written against these defaults (chars/4 fallback).
+TOKEN_SOFT = 50000
+TOKEN_HARD = 100000
 
 def _make_big_context(pairs=8, pad_chars=70000):
     """Dynamically build a large conversation whose total content exceeds the
-    hard char budget. Each message differs (index-suffixed tool names and
+    hard token budget. Each message differs (index-suffixed tool names and
     padded content) so the context is realistic and the file stays small —
-    nothing is hardcoded. 8 pairs × 70k ≈ 560k chars > 500k hard."""
+    nothing is hardcoded. 8 pairs × 70k ≈ 560k chars ≈ 140k tokens (chars/4)
+    > 100k hard."""
     msgs = [_make_user_msg("Start")]
     for i in range(pairs):
         tool_name = f"tool_{i:02d}"
@@ -3638,6 +3639,14 @@ def _make_big_assistant_msg(tool_names, pad_chars=70000):
 def _msgs_size(msgs):
     return sum(len(m.get("content", "")) for m in msgs)
 
+
+def _msgs_size_tokens(msgs):
+    """Deterministic chars/4 token estimate — the plugin's no-tokenizer
+    fallback (tokens ≈ chars/4). Content chars are a lower bound of the
+    plugin's measure (which also counts tool-call names/args), so `// 4`
+    stays safely on the asserted side of the budgets below."""
+    return _msgs_size(msgs) // 4
+
 def test_p7_no_compaction_needed():
     """Under the hard budget → no compaction, messages=null"""
     msgs = [_make_user_msg(), _make_assistant_msg(["tool_a"]), _make_tool_msg("tool_a", "call_0"),
@@ -3651,7 +3660,7 @@ def test_p7_compaction_reduces_count():
     """Over the hard budget → compacts, reducing size to ≤ soft budget"""
     msgs = _make_big_context(pairs=8, pad_chars=70000)
     before = len(msgs)  # 1 user + 8 pairs = 17
-    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    assert _msgs_size_tokens(msgs) > TOKEN_HARD, "Test context must exceed hard token budget"
     resp = _compact_call(msgs, keep_recent=3)
     assert resp["was_compacted"], "Should have compacted (over hard budget)"
     assert resp["before_count"] == before
@@ -3659,8 +3668,8 @@ def test_p7_compaction_reduces_count():
     assert resp["messages"] is not None, "Should return the compacted array"
     # Soft budget is the reduction target: over-hard input must be reduced
     # to below-soft output.
-    assert _msgs_size(resp["messages"]) <= CHAR_SOFT, \
-        f"Size should be reduced to ≤ soft budget: {_msgs_size(resp['messages'])}"
+    assert _msgs_size_tokens(resp["messages"]) <= TOKEN_SOFT, \
+        f"Size should be reduced to ≤ soft token budget: {_msgs_size_tokens(resp['messages'])}"
 
 def test_p7_keep_recent_1():
     """keep_recent=1 compacts more aggressively than keep_recent=3"""
@@ -3685,8 +3694,8 @@ def test_p7_tool_names_preserved():
         msgs.append(_make_big_assistant_msg(["search_docs", "read_file"]))
         msgs.append(_make_tool_msg("search_docs", f"call_{i}a"))
         msgs.append(_make_tool_msg("read_file", f"call_{i}b"))
-    # 8 pairs × ~70k = ~560k chars > 500k hard budget
-    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    # 8 pairs × ~70k = ~560k chars ≈ 140k tokens (chars/4) > 100k hard budget
+    assert _msgs_size_tokens(msgs) > TOKEN_HARD, "Test context must exceed hard token budget"
     resp = _compact_call(msgs, keep_recent=2)
     assert resp["was_compacted"], f"Should compact over hard budget: {resp}"
     # NOTE: compact_old_assistant_messages now writes ONE frozen system-message
@@ -3703,8 +3712,8 @@ def test_p7_compact_multiple_tools():
     for i in range(8):
         msgs.append(_make_big_assistant_msg(["tool_a"]))
         msgs.append(_make_tool_msg("tool_a", f"call_{i}"))
-    # 8 pairs × ~70k = ~560k chars > 500k hard budget
-    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    # 8 pairs × ~70k = ~560k chars ≈ 140k tokens (chars/4) > 100k hard budget
+    assert _msgs_size_tokens(msgs) > TOKEN_HARD, "Test context must exceed hard token budget"
     resp = _compact_call(msgs, keep_recent=1)
     assert resp["was_compacted"], f"Expected compaction: {resp['before_count']} -> {resp['after_count']}"
     assert resp["after_count"] < resp["before_count"], f"Count did not reduce: {resp}"
@@ -3715,28 +3724,30 @@ def test_p7_compact_multiple_tools():
 def test_p7_progressive_multi_pass():
     """When one pass can't reach the soft budget, compaction continues with a
     progressively smaller keep_recent (soft = reduction target). This context
-    needs all 3 passes: 8 pairs x 180k = 1.44M chars. keep=3 leaves 3x180k=540k
-    (> 350k soft), keep=2 leaves 360k (> 350k), keep=1 leaves 180k (<= 350k)."""
+    needs all 3 passes: 8 pairs x 180k = 1.44M chars = 360k tokens (chars/4).
+    keep=3 leaves 135k tokens (> 50k soft), keep=2 leaves 90k (> 50k),
+    keep=1 leaves 45k (<= 50k)."""
     msgs = _make_big_context(pairs=8, pad_chars=180000)
-    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    assert _msgs_size_tokens(msgs) > TOKEN_HARD, "Test context must exceed hard token budget"
     resp = _compact_call(msgs, keep_recent=3)
     assert resp["was_compacted"], f"Should have compacted: {resp}"
     assert resp["messages"] is not None
     # Reached the soft budget after progressive passes (no error).
-    assert _msgs_size(resp["messages"]) <= CHAR_SOFT, \
-        f"Size should be reduced to ≤ soft budget: {_msgs_size(resp['messages'])}"
+    assert _msgs_size_tokens(resp["messages"]) <= TOKEN_SOFT, \
+        f"Size should be reduced to ≤ soft token budget: {_msgs_size_tokens(resp['messages'])}"
 
 def test_p7_three_pass_cap_partial_result():
     """After 3 progressively more aggressive passes the size is STILL over the
     soft budget with material left to compact -> the tool returns the PARTIAL
     result (is_error=false, was_compacted=true) instead of erroring or looping
     forever. The caller applies the partial reduction, which gets the size under
-    the HARD trigger budget (500k), so later iterations stop re-triggering
-    compaction. 4 pairs x 400k = 1.6M chars (kept under the ~2MB HTTP body
-    limit): keep=3 leaves 1.2M, keep=2 leaves 800k, keep=1 leaves 400k — all >
-    350k soft, so the 3-pass cap fires and returns the partial result."""
-    msgs = _make_big_context(pairs=4, pad_chars=400000)
-    assert _msgs_size(msgs) > CHAR_HARD, "Test context must exceed hard budget"
+    the HARD trigger budget (100k tokens), so later iterations stop re-triggering
+    compaction. 4 pairs x 300k = 1.2M chars = 300k tokens (kept under the ~2MB
+    HTTP body limit): keep=3 leaves 225k tokens, keep=2 leaves 150k, keep=1
+    leaves 75k — all > 50k soft, so the 3-pass cap fires and returns the
+    partial result."""
+    msgs = _make_big_context(pairs=4, pad_chars=300000)
+    assert _msgs_size_tokens(msgs) > TOKEN_HARD, "Test context must exceed hard token budget"
     r = urllib.request.urlopen(
         urllib.request.Request(
             f"{BASE}/mcp/execute",
@@ -3759,12 +3770,12 @@ def test_p7_three_pass_cap_partial_result():
     assert content.get("messages") is not None, \
         f"Expected compacted messages array (partial result applied): {content}"
     # The partial reduction must get the size under the HARD trigger budget
-    # (char_budget_hard=500k) even if still over the SOFT target (350k).
+    # (token_budget_hard=100k) even if still over the SOFT target (50k).
     after_size = _msgs_size(content["messages"])
     assert after_size < _msgs_size(msgs), \
         f"Partial result must be smaller than input: {after_size} vs {_msgs_size(msgs)}"
-    assert after_size <= CHAR_HARD, \
-        f"Partial result must be under the hard trigger budget: {after_size} > {CHAR_HARD}"
+    assert _msgs_size_tokens(content["messages"]) <= TOKEN_HARD, \
+        f"Partial result must be under the hard trigger budget (chars/4): {_msgs_size_tokens(content['messages'])} > {TOKEN_HARD}"
 
 def test_p7_missing_messages_field():
     """Missing messages field returns descriptive error"""
