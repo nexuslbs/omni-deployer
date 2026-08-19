@@ -11762,4 +11762,139 @@ test(test_43_db_schema)
 test(test_43_appendable_pending_sql)
 
 
+# ── GROUP 44: builtin omniagent-api via test-tool-caller + fetch method gating ──
+def test_44_tool_caller_omniagent_api():
+    """44-A: test-tool-caller channel script drives builtin_omniagent-api end
+    to end: GET /kanban/tasks, POST /kanban/tasks (create), GET again —
+    proving the builtin tool reaches the real API with no host/scheme/port
+    knowledge. Follows the GROUP 12/13 pattern: JSON script posted to the
+    DEDICATED wf-test channel (pinned noop/test-tool-caller); NEVER patches
+    any live channel."""
+    import urllib.request, urllib.error, time, uuid
+    MM = "http://mattermost:8065"
+    _wf_dedicated_channel()  # ensure the dedicated wf-test channel is bootstrapped
+    mm_channel_id = _wf_dedicated_mm_channel_id()
+    admin_data = json.dumps({"login_id": "lucasbasquerotto",
+                             "password": "Mattermost_Fresh_Start_1"}).encode()
+    admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data,
+                                       method="POST",
+                                       headers={"Content-Type": "application/json"})
+    admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+    test_token = _mm_login(MM, "testuser", "Mattermost_Fresh_Start_1")
+    title = f"g44tt{uuid.uuid4().hex[:8]}"
+    script = json.dumps([
+        {"name": "list1", "tool": "builtin_omniagent-api",
+         "arguments": {"method": "GET", "path": "/kanban/tasks"}},
+        {"name": "create", "tool": "builtin_omniagent-api",
+         "arguments": {"method": "POST", "path": "/kanban/tasks",
+                       "body": {"title": title, "status": "todo",
+                                "board": "default", "profile": "omni"}}},
+        {"name": "list2", "tool": "builtin_omniagent-api",
+         "arguments": {"method": "GET", "path": "/kanban/tasks"}},
+    ])
+    msg_data = json.dumps({"channel_id": mm_channel_id, "message": script}).encode()
+    msg_req = urllib.request.Request(f"{MM}/api/v4/posts", data=msg_data, method="POST",
+                                     headers={"Content-Type": "application/json",
+                                              "Authorization": f"Bearer {test_token}"})
+    urllib.request.urlopen(msg_req, timeout=10).read()
+    print("  [44-A: JSON script posted to wf-test channel, polling...]")
+    http200s = 0
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        time.sleep(4)
+        posts_resp = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts",
+            headers={"Authorization": f"Bearer {admin_token}"}), timeout=10).read())
+        msgs = [p.get("message", "") for p in posts_resp.get("posts", {}).values()]
+        http200s = sum(m.count("HTTP 200") for m in msgs)
+        if http200s >= 2 and any(title in m for m in msgs):
+            print(f"  [44-A: {http200s}x 'HTTP 200' + created title observed]")
+            break
+    else:
+        assert False, (f"expected >=2 'HTTP 200' and title {title} in wf-test channel "
+                       f"responses; saw {http200s}")
+    # Cleanup: find the created task via the API and delete it
+    try:
+        resp = _g24_mcp_execute("builtin_omniagent-api",
+                                {"method": "GET", "path": "/kanban/tasks"})
+        out = resp.get("content") or ""
+        data = json.loads(out.split("\n", 1)[1] if "\n" in out else out)
+        tid = next((t.get("id") for t in (data.get("data") or [])
+                    if t.get("title") == title), None)
+        if tid:
+            _g24_mcp_execute("builtin_omniagent-api",
+                             {"method": "DELETE", "path": f"/kanban/tasks/{tid}"})
+            print(f"  ✓ cleaned up task {tid}")
+    except Exception as e:
+        print(f"  [cleanup warning: {e}]")
+    print("PASS: 44-A test-tool-caller drives builtin_omniagent-api (kanban GET+create)")
+
+
+def test_44_plugin_endpoint_via_builtin_tool():
+    """44-B: enable/disable a plugin THROUGH the builtin tool — proves the
+    mutating plugin lifecycle endpoint works with just method+path. Uses the
+    GROUP 12 safety pattern: disable then immediately re-enable the noop
+    provider."""
+    import time as _t44b
+    resp = _g24_mcp_execute("builtin_omniagent-api",
+                            {"method": "POST",
+                             "path": "/api/plugins/providers/bundled/noop/disable"})
+    out = resp.get("content") or ""
+    assert "HTTP 200" in out, f"noop disable via builtin tool: {out[:300]}"
+    _t44b.sleep(1)
+    resp = _g24_mcp_execute("builtin_omniagent-api",
+                            {"method": "POST",
+                             "path": "/api/plugins/providers/bundled/noop/enable"})
+    out = resp.get("content") or ""
+    assert "HTTP 200" in out, f"noop enable via builtin tool: {out[:300]}"
+    print("PASS: 44-B plugin enable/disable via builtin_omniagent-api")
+
+
+def test_44_fetch_method_gating():
+    """44-C: fetch plugin method gating. Default config (allow_unsafe_methods
+    absent/false): POST/PUT/PATCH/DELETE rejected with a clear error BEFORE any
+    request is sent. With allow_unsafe_methods=true the request is actually
+    performed. Config is restored afterwards (config/plugins.yml back to {})."""
+    import time as _t44c
+    # 1) default: POST rejected before sending
+    resp = _g24_mcp_execute("fetch_fetch", {"url": "http://localhost:8080/kanban/tasks",
+                                            "method": "POST"})
+    content = resp.get("content") or ""
+    assert "not allowed" in content.lower(), \
+        f"expected method-gate error, got: {content[:300]}"
+    print("  ✓ default config rejects POST before sending")
+    # 2) default: GET still works (backward compatible)
+    resp = _g24_mcp_execute("fetch_fetch", {"url": "http://localhost:8080/kanban/tasks"})
+    content = resp.get("content") or ""
+    assert "HTTP 200" in content, f"GET via fetch failed: {content[:300]}"
+    print("  ✓ GET still works with default config")
+    # 3) allow_unsafe_methods=true → POST is actually sent
+    try:
+        api_post_body("/plugins/tools/built-in/fetch/config",
+                      {"config": {"allow_unsafe_methods": "true"}})
+    except Exception as e:
+        print(f"  [config set warning: {e}]")
+    _t44c.sleep(5)
+    resp = _g24_mcp_execute("fetch_fetch", {"url": "http://localhost:8080/kanban/tasks",
+                                            "method": "POST"})
+    content = resp.get("content") or ""
+    assert "not allowed" not in content.lower(), \
+        f"POST still gated after allow_unsafe_methods=true: {content[:300]}"
+    print(f"  ✓ allow_unsafe_methods=true: POST sent ({content.splitlines()[0][:60]})")
+    # 4) restore default config and confirm GET still works
+    try:
+        api_post_body("/plugins/tools/built-in/fetch/config", {"config": {}})
+    except Exception as e:
+        print(f"  [config restore warning: {e}]")
+    _t44c.sleep(5)
+    resp = _g24_mcp_execute("fetch_fetch", {"url": "http://localhost:8080/kanban/tasks"})
+    assert "HTTP 200" in (resp.get("content") or ""), "GET after config restore failed"
+    print("PASS: 44-C fetch method gating (default rejects, allow_unsafe_methods=true sends)")
+
+
+print("GROUP 44: builtin_omniagent-api via test-tool-caller + fetch allow_unsafe_methods")
+test(test_44_tool_caller_omniagent_api)
+test(test_44_plugin_endpoint_via_builtin_tool)
+test(test_44_fetch_method_gating)
+
 sys.exit(0 if tests_fail == 0 else 1)
