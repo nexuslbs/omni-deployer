@@ -12855,4 +12855,73 @@ test(test_47_explicit_task_fields_win_over_board)
 test(test_47_unknown_board_fail_loud)
 print("GROUP 47: resolve fallback fields ONCE at load — kanban task defaults (task->board->channel->global)")
 
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+#  GROUP 48: Single-instance advisory lock + CLI arg handling
+#  (task_18cd504116eb487b). The incident: `docker exec ... omniagent --version`
+#  booted a SECOND instance that ran startup recovery (marked live threads
+#  skipped) before failing to bind the port -> zombie executor + duplicate
+#  thread. Fix: (1) --version/--help/unknown args print+exit, never boot;
+#  (2) pg_try_advisory_lock on a dedicated connection BEFORE startup recovery;
+#  a second instance against an already-owned DB refuses to start with NO
+#  DB writes.
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+OMNIAGENT_BIN = "/target/release/omniagent"
+
+def _g48_acquire_lock():
+    """Acquire the app advisory lock on a DEDICATED connection (held open).
+    Simulates a live first instance holding the single-instance guard."""
+    import psycopg2
+    conn = psycopg2.connect(os.environ.get("DATABASE_URL", ""))
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(72700123)")
+        ok = cur.fetchone()[0]
+    return conn, ok
+
+def test_48_cli_version():
+    """48-A: --version prints version and exits 0 (does NOT boot)."""
+    r = sh(f"{OMNIAGENT_BIN} --version")
+    assert r.returncode == 0, f"48-A: --version exit {r.returncode}: {r.stdout}{r.stderr}"
+    assert "omniagent" in r.stdout, f"48-A: version string missing: {r.stdout}"
+    print(f"PASS: 48-A --version prints '{r.stdout.strip()}' and exits 0")
+
+def test_48_cli_help():
+    """48-B: --help prints usage and exits 0."""
+    r = sh(f"{OMNIAGENT_BIN} --help")
+    assert r.returncode == 0, f"48-B: --help exit {r.returncode}: {r.stdout}{r.stderr}"
+    assert "USAGE" in r.stdout and "--version" in r.stdout, f"48-B: usage text missing: {r.stdout}"
+    print("PASS: 48-B --help prints usage and exits 0")
+
+def test_48_cli_unknown():
+    """48-C: unknown arg -> clear error, non-zero exit (never boots)."""
+    r = sh(f"{OMNIAGENT_BIN} --bogus")
+    assert r.returncode != 0, f"48-C: --bogus must exit non-zero: {r.stdout}"
+    assert "unknown argument" in (r.stdout + r.stderr).lower(), \
+        f"48-C: no 'unknown argument' error: {r.stdout}{r.stderr}"
+    print(f"PASS: 48-C unknown arg -> error, exit {r.returncode}")
+
+def test_48_advisory_lock_refuses_second():
+    """48-D: second instance against an already-owned DB refuses to start."""
+    conn, ok = _g48_acquire_lock()
+    assert ok, "48-D: could not acquire advisory lock for test"
+    try:
+        r = sh(f"{OMNIAGENT_BIN} 2>&1; echo RC=$?")
+        out = r.stdout + r.stderr
+        assert "another omniagent instance is already running" in out, \
+            f"48-D: expected lock-refusal message, got: {out}"
+        m = re.search(r"RC=(\d+)", out)
+        assert m and m.group(1) != "0", f"48-D: second instance must exit non-zero: {out}"
+        print("PASS: 48-D second instance refuses to start (advisory lock held, no boot)")
+    finally:
+        conn.close()  # releases the advisory lock
+
+
+test(test_48_cli_version)
+test(test_48_cli_help)
+test(test_48_cli_unknown)
+test(test_48_advisory_lock_refuses_second)
+print("GROUP 48: single-instance advisory lock + CLI arg handling (task_18cd504116eb487b)")
+
 sys.exit(0 if tests_fail == 0 else 1)
