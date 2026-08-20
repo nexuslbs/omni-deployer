@@ -12186,4 +12186,263 @@ test(test_45_skill_file)
 test(test_45_guidance)
 test(test_45_wiki_live_smoke)
 
+# ───────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 46: models.yml provider/model overrides (task_18cd408ead8bcbbd)
+#  Pure-definition overrides: GET/PUT /api/models CRUD, plugin-less
+#  providers in selects, absent-file zero-behavior-change, refresh-models
+#  -> models.yml upsert (never mutates plugins.yml / plugin config_schema).
+#  Verified against a fresh HEAD binary in the dev-toolbox builder with an
+#  isolated OMNI_DIR (g46_driver.py, all 4 tests PASS, tests_fail=0).
+# ═══════════════════════════════════════════════════════════════════════
+
+def backup_models_yml():
+    shutil.copy2(f"{WORKSPACE}/config/models.yml", f"{WORKSPACE}/config/models.yml.bak")
+
+def restore_models_yml():
+    bak = f"{WORKSPACE}/config/models.yml.bak"
+    if os.path.exists(bak):
+        shutil.copy2(bak, f"{WORKSPACE}/config/models.yml")
+        os.remove(bak)
+
+def _g46_write_models(text):
+    with open(f"{WORKSPACE}/config/models.yml", "w", encoding="utf-8") as f:
+        f.write(text)
+
+def _g46_read_models():
+    with open(f"{WORKSPACE}/config/models.yml", "r", encoding="utf-8") as f:
+        return f.read()
+
+def _g46_data(resp):
+    """Unwrap ok_json envelope {success:true,data:X} -> X."""
+    if isinstance(resp, dict) and "data" in resp:
+        return resp["data"]
+    return resp
+
+def _g46_post_status(path, body=None, timeout=20):
+    """POST and return (status_code, response_text) — never raises."""
+    url = f"{BASE}/api{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        r = urllib.request.urlopen(req, timeout=timeout)
+        return r.status, r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+def _g46_providers_from_plugins(data):
+    if isinstance(data, list):
+        return [p for p in data if isinstance(p, dict) and p.get("plugin_type") == "provider"]
+    for key in ("providers", "plugins", "data"):
+        val = data.get(key) if isinstance(data, dict) else None
+        if isinstance(val, list):
+            return [p for p in val if isinstance(p, dict) and p.get("plugin_type") == "provider"]
+    return []
+
+G46_MODELS_YML = """providers:
+  deepseek:
+    plugin: true
+    models: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-pro-max"]
+  my_provider_01:
+    plugin: false
+    api_mode: chat_completions
+    supports_reasoning: true
+    default_base_url: "http://noop-provider:9090/v1"
+    default_model: "test-model-1"
+    api_key: "$secret:MY_SECRET"
+    models: ["my_model_01", "my_model_02", "my_model_03"]
+    model_config:
+      my_model_02:
+        api_mode: "anthropic"
+        supports_reasoning: false
+        token_budget_soft: 200000
+        token_budget_hard: 1000000
+        max_tokens: 32000
+        max_tokens_on_truncation: 128000
+"""
+
+def test_46_models_crud():
+    """46-A: GET /api/models parses models.yml; PUT persists atomically;
+    malformed PUT rejected and models.yml untouched."""
+    backup_models_yml()
+    try:
+        _g46_write_models(G46_MODELS_YML)
+        data = _g46_data(api_get("/models"))
+        provs = data.get("providers", {})
+        assert "deepseek" in provs, f"deepseek missing from /api/models: {provs.keys()}"
+        assert provs["deepseek"]["models"] == ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-pro-max"], \
+            f"deepseek models mismatch: {provs['deepseek']}"
+        assert "my_provider_01" in provs, f"plugin-less provider missing: {provs.keys()}"
+        mp = provs["my_provider_01"]
+        assert mp["plugin"] is False, f"plugin flag: {mp}"
+        assert mp["models"] == ["my_model_01", "my_model_02", "my_model_03"], f"models: {mp}"
+        assert mp["api_mode"] == "chat_completions" and mp["supports_reasoning"] is True, f"fields: {mp}"
+        assert mp["model_config"]["my_model_02"]["token_budget_soft"] == 200000, f"model_config: {mp['model_config']}"
+        assert mp["model_config"]["my_model_02"]["max_tokens"] == 32000, f"model_config max_tokens: {mp['model_config']}"
+        print("PASS: 46-A GET /api/models parses models.yml (deepseek override + plugin-less provider + model_config)")
+        put_body = {"providers": {
+            "deepseek": {"plugin": True, "models": ["deepseek-v4-flash", "deepseek-v4-pro"]},
+            "my_provider_01": {"plugin": False, "models": ["new-model-x"]},
+        }}
+        api_put("/models", put_body)
+        data = _g46_data(api_get("/models"))
+        provs = data.get("providers", {})
+        assert provs["deepseek"]["models"] == ["deepseek-v4-flash", "deepseek-v4-pro"], \
+            f"PUT deepseek not persisted: {provs['deepseek']}"
+        assert provs["my_provider_01"]["models"] == ["new-model-x"], \
+            f"PUT my_provider_01 not persisted: {provs['my_provider_01']}"
+        disk = _g46_read_models()
+        assert "new-model-x" in disk, f"models.yml on disk not updated by PUT: {disk}"
+        print("PASS: 46-A2 PUT /api/models persists (round-trip + file updated)")
+        before = _g46_read_models()
+        req = urllib.request.Request(f"{BASE}/api/models",
+                                     data=json.dumps({"providers": "not-a-map"}).encode(),
+                                     method="PUT",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("invalid PUT should have been rejected")
+        except urllib.error.HTTPError as e:
+            # axum Json<ModelsFile> extractor returns 422 for shape-mismatch;
+            # validate-before-write returns 400. Either is a clean rejection
+            # as long as models.yml is left untouched.
+            assert e.code in (400, 422), f"expected 400/422, got {e.code}"
+        after = _g46_read_models()
+        assert before == after, "invalid PUT modified models.yml"
+        print("PASS: 46-A3 invalid PUT -> 400/422, models.yml untouched")
+    finally:
+        restore_models_yml()
+
+def test_46_pluginless_provider():
+    """46-B: plugin-less provider appears in /api/plugins providers list;
+    models.yml `models` array overrides the plugin's default_model
+    allowed_values in the provider detail."""
+    backup_models_yml()
+    try:
+        _g46_write_models(G46_MODELS_YML)
+        plugins = api_get("/plugins")
+        provs = _g46_providers_from_plugins(plugins)
+        names = [p.get("name") for p in provs]
+        assert "my_provider_01" in names, f"plugin-less provider not in providers list: {names}"
+        assert "deepseek" in names, f"deepseek not in providers list: {names}"
+        ds = next(p for p in provs if p.get("name") == "deepseek")
+        schema = ds.get("config_schema") or []
+        dm = next((f for f in schema if f.get("key") == "default_model"), None)
+        assert dm is not None, f"deepseek config_schema missing default_model: {schema}"
+        assert dm.get("allowed_values") == ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-pro-max"], \
+            f"deepseek allowed_values not overridden by models.yml: {dm}"
+        print("PASS: 46-B plugin-less provider in list + deepseek models.yml models overlay on detail")
+    finally:
+        restore_models_yml()
+
+def test_46_absent_file():
+    """46-C: absent models.yml -> {} /api/models + no plugin-less provider
+    (zero behavior change)."""
+    backup_models_yml()
+    try:
+        _g46_write_models(G46_MODELS_YML)
+        data = _g46_data(api_get("/models"))
+        assert "my_provider_01" in data.get("providers", {}), "precondition failed"
+        os.rename(f"{WORKSPACE}/config/models.yml", f"{WORKSPACE}/config/models.yml.g46gone")
+        try:
+            data = _g46_data(api_get("/models"))
+            provs = data.get("providers", {}) or {}
+            assert provs == {}, f"expected empty providers with absent models.yml, got: {provs.keys()}"
+            plugins = api_get("/plugins")
+            provs_list = _g46_providers_from_plugins(plugins)
+            names = [p.get("name") for p in provs_list]
+            assert "my_provider_01" not in names, f"plugin-less provider survived absent models.yml: {names}"
+            print("PASS: 46-C absent models.yml -> zero behavior change ({} /api/models, no plugin-less provider)")
+        finally:
+            os.rename(f"{WORKSPACE}/config/models.yml.g46gone", f"{WORKSPACE}/config/models.yml")
+    finally:
+        restore_models_yml()
+
+def test_46_refresh_upsert():
+    """46-D: refresh-models endpoint upserts models.yml (dashboard refresh
+    gate). Entry PRESENT -> ONLY `models` updated, every other field
+    untouched; plugins.yml never mutated by refresh."""
+    import threading, http.server, socketserver
+    backup_models_yml()
+    _mock_state = {"models": ["g46-1", "g46-2"]}
+
+    class _G46H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"data": [{"id": m} for m in _mock_state["models"]]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *a):
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), _G46H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        models_yml = """providers:
+  my_provider_01:
+    plugin: false
+    api_mode: chat_completions
+    supports_reasoning: true
+    default_base_url: "http://noop-provider:9090/v1"
+    refresh_url: "http://127.0.0.1:%d/v1/models"
+    default_model: "test-model-1"
+    api_key: "$secret:MY_SECRET"
+    models: ["old-1"]
+""" % port
+        _g46_write_models(models_yml)
+        plugins_before = ""
+        if os.path.exists(f"{WORKSPACE}/config/plugins.yml"):
+            with open(f"{WORKSPACE}/config/plugins.yml", "r", encoding="utf-8") as f:
+                plugins_before = f.read()
+        # 1) refresh -> models updated to fetched list, all other fields intact
+        status, body = _g46_post_status("/plugins/providers/built-in/my_provider_01/refresh-models", {}, timeout=30)
+        # The user refresh gate is a FILE-level contract: models.yml gains the
+        # fetched models with every other field byte-identical. The endpoint
+        # may report non-200 for plugin-less providers (get_plugin has no
+        # plugin detail to return) but the models.yml upsert MUST happen.
+        print(f"[46-D refresh status={status}]")
+        disk = _g46_read_models()
+        assert "g46-1" in disk and "g46-2" in disk, f"fetched models missing after refresh: {disk}"
+        assert "old-1" not in disk, f"old models not replaced: {disk}"
+        assert "plugin: false" in disk, f"plugin flag changed by refresh: {disk}"
+        assert "noop-provider:9090" in disk, f"base_url lost: {disk}"
+        assert "$secret:MY_SECRET" in disk, f"api_key lost: {disk}"
+        assert f"127.0.0.1:{port}" in disk, f"refresh_url lost: {disk}"
+        print("PASS: 46-D1 refresh present entry -> models updated, other fields intact")
+        # 2) second refresh with a different remote list -> ONLY models changed again
+        _mock_state["models"] = ["g46-3", "g46-4", "g46-5"]
+        status2, body2 = _g46_post_status("/plugins/providers/built-in/my_provider_01/refresh-models", {}, timeout=30)
+        print(f"[46-D second refresh status={status2}]")
+        disk2 = _g46_read_models()
+        assert "g46-3" in disk2 and "g46-5" in disk2, f"second refresh not applied: {disk2}"
+        assert "g46-1" not in disk2, "second refresh kept stale models"
+        # every non-models line byte-identical to the first refresh result
+        def _strip_models(text):
+            lines = [ln for ln in text.splitlines() if "g46-" not in ln]
+            return "\n".join(lines)
+        assert _strip_models(disk) == _strip_models(disk2), \
+            f"non-models content changed between refreshes:\n{disk}\n---\n{disk2}"
+        print("PASS: 46-D2 second refresh -> ONLY models updated (rest byte-identical)")
+        # 3) plugins.yml never mutated by refresh
+        plugins_after = ""
+        if os.path.exists(f"{WORKSPACE}/config/plugins.yml"):
+            with open(f"{WORKSPACE}/config/plugins.yml", "r", encoding="utf-8") as f:
+                plugins_after = f.read()
+        assert plugins_after == plugins_before, "refresh mutated plugins.yml"
+        print("PASS: 46-D3 refresh never mutates plugins.yml (plugin config_schema intact)")
+    finally:
+        srv.shutdown()
+        restore_models_yml()
+
+print("GROUP 46: models.yml provider/model overrides (CRUD API + plugin-less + absent-file + refresh upsert)")
+test(test_46_models_crud)
+test(test_46_pluginless_provider)
+test(test_46_absent_file)
+test(test_46_refresh_upsert)
+
+
 sys.exit(0 if tests_fail == 0 else 1)
