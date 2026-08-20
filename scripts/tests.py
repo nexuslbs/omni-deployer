@@ -12728,6 +12728,47 @@ def test_47_status_change_dispatch_board_task():
         _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
+def test_47_redispatch_board_task():
+    """47-F: POST /kanban/tasks/{id}/redispatch on a board task in 'testing'
+    (raw workflow_id NULL) -> the role gate resolves the workflow from the
+    BOARD, finds the tester role, and creates a workflow_step='testing'
+    thread. Before the fix the role gate read the RAW workflow_id (NULL) and
+    answered {"redispatch": false, "reason": "no role to run"}."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
+    key = "g47f_" + uuid.uuid4().hex[:8]
+    wf = "g47fwf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": True})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-f-{uuid.uuid4().hex[:8]}", key, status="testing")
+        tids.append(tid)
+        st, r = _g47_req("POST", f"/kanban/tasks/{tid}/redispatch")
+        assert st == 200, f"47-F: redispatch failed: {st} {r}"
+        assert r.get("redispatch") is True, f"47-F: redispatch expected True: {r}"
+        trows = _g47_thread_rows(tid)
+        assert trows, f"47-F: expected a thread row after redispatch: {trows}"
+        assert trows[-1][0] == "testing", f"47-F: workflow_step=testing expected: {trows}"
+        assert trows[-1][1] == wf, f"47-F: workflow from BOARD expected: {trows}"
+        assert trows[-1][2] == "kanban", f"47-F: channel from BOARD expected: {trows}"
+        assert trows[-1][3] == "omni", f"47-F: profile from BOARD expected: {trows}"
+        print("PASS: 47-F redispatch on board task -> tester thread "
+              f"(workflow={trows[-1][1]} channel={trows[-1][2]} profile={trows[-1][3]})")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
+
+
+
 def test_47_explicit_task_fields_win_over_board():
     """47-E: task with EXPLICIT channel/workflow on a board keeps the EXPLICIT
     values (task > board precedence — non-board behavior unchanged). Board
@@ -12808,6 +12849,7 @@ test(test_47_review_rework_board_task)
 test(test_47_review_retest_board_task)
 test(test_47_review_block_board_task)
 test(test_47_status_change_dispatch_board_task)
+test(test_47_redispatch_board_task)
 test(test_47_explicit_task_fields_win_over_board)
 test(test_47_unknown_board_fail_loud)
 print("GROUP 47: resolve fallback fields ONCE at load — kanban task defaults (task->board->channel->global)")
