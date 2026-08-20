@@ -12543,7 +12543,7 @@ def _g47_history_comments(task_id):
         "ORDER BY id", (task_id,))
 
 
-def _g47_cleanup(tids, board_key, wf_keys, bfile, orig):
+def _g47_cleanup(tids, board_key, wf_keys, bfile, orig, wfile=None, wforig=None):
     for t in tids:
         try:
             _g47_sql("DELETE FROM threads WHERE task_id = %s", (t,))
@@ -12564,6 +12564,9 @@ def _g47_cleanup(tids, board_key, wf_keys, bfile, orig):
             pass
     with open(bfile, "w") as f:
         f.write(orig)
+    if wfile is not None and wforig is not None:
+        with open(wfile, "w") as f:
+            f.write(wforig)
 
 
 def test_47_review_rework_board_task():
@@ -12577,6 +12580,9 @@ def test_47_review_rework_board_task():
     bfile = _g47_boards_file()
     with open(bfile) as f:
         orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
     key = "g47a_" + uuid.uuid4().hex[:8]
     wf = "g47awf_" + uuid.uuid4().hex[:8]
     tids = []
@@ -12610,7 +12616,7 @@ def test_47_review_rework_board_task():
         print(f"PASS: 47-A board task reviewer rework -> running + NEW executor thread #{th_id} "
               f"(workflow={trows[-1][1]} channel={trows[-1][2]} profile={trows[-1][3]} plan={trows[-1][4]})")
     finally:
-        _g47_cleanup(tids, key, [wf], bfile, orig)
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
 def test_47_review_retest_board_task():
@@ -12622,6 +12628,9 @@ def test_47_review_retest_board_task():
     bfile = _g47_boards_file()
     with open(bfile) as f:
         orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
     key = "g47b_" + uuid.uuid4().hex[:8]
     wf = "g47bwf_" + uuid.uuid4().hex[:8]
     tids = []
@@ -12644,7 +12653,7 @@ def test_47_review_retest_board_task():
         assert trows[-1][2] == "kanban", f"47-B: channel from BOARD expected: {trows}"
         print(f"PASS: 47-B board task reviewer retest -> testing + NEW tester thread #{th_id}")
     finally:
-        _g47_cleanup(tids, key, [wf], bfile, orig)
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
 def test_47_review_block_board_task():
@@ -12656,6 +12665,9 @@ def test_47_review_block_board_task():
     bfile = _g47_boards_file()
     with open(bfile) as f:
         orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
     key = "g47c_" + uuid.uuid4().hex[:8]
     wf = "g47cwf_" + uuid.uuid4().hex[:8]
     tids = []
@@ -12675,7 +12687,7 @@ def test_47_review_block_board_task():
         assert not trows, f"47-C: no thread row expected after block: {trows}"
         print("PASS: 47-C board task reviewer block -> blocked, no new thread (unchanged semantics)")
     finally:
-        _g47_cleanup(tids, key, [wf], bfile, orig)
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
 def test_47_status_change_dispatch_board_task():
@@ -12688,6 +12700,9 @@ def test_47_status_change_dispatch_board_task():
     bfile = _g47_boards_file()
     with open(bfile) as f:
         orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
     key = "g47d_" + uuid.uuid4().hex[:8]
     wf = "g47dwf_" + uuid.uuid4().hex[:8]
     tids = []
@@ -12710,7 +12725,7 @@ def test_47_status_change_dispatch_board_task():
         print(f"PASS: 47-D status-change dispatch on board task -> thread row "
               f"(workflow={trows[-1][1]} channel={trows[-1][2]} profile={trows[-1][3]})")
     finally:
-        _g47_cleanup(tids, key, [wf], bfile, orig)
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
 def test_47_explicit_task_fields_win_over_board():
@@ -12723,6 +12738,9 @@ def test_47_explicit_task_fields_win_over_board():
     bfile = _g47_boards_file()
     with open(bfile) as f:
         orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
     key = "g47e_" + uuid.uuid4().hex[:8]
     wf = "g47ewf_" + uuid.uuid4().hex[:8]
     tids = []
@@ -12747,7 +12765,7 @@ def test_47_explicit_task_fields_win_over_board():
         print(f"PASS: 47-E explicit task channel/workflow win over board (thread #{th_id} "
               f"channel={trows[-1][2]} workflow={trows[-1][1]})")
     finally:
-        _g47_cleanup(tids, key, [wf], bfile, orig)
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
 def test_47_unknown_board_fail_loud():
@@ -12760,6 +12778,9 @@ def test_47_unknown_board_fail_loud():
     bfile = _g47_boards_file()
     with open(bfile) as f:
         orig = f.read()
+    wfile = f"{WORKSPACE}/config/workflows.yml"
+    with open(wfile) as f:
+        wforig = f.read()
     key = "g47f_" + uuid.uuid4().hex[:8]
     wf = "g47fwf_" + uuid.uuid4().hex[:8]
     tids = []
@@ -12780,7 +12801,7 @@ def test_47_unknown_board_fail_loud():
         assert not trows, f"47-F: no thread may be created on unknown board: {trows}"
         print(f"PASS: 47-F unknown board -> explicit error at resolution (HTTP {st}: {str(r)[:100]})")
     finally:
-        _g47_cleanup(tids, key, [wf], bfile, orig)
+        _g47_cleanup(tids, key, [wf], bfile, orig, wfile, wforig)
 
 
 test(test_47_review_rework_board_task)
