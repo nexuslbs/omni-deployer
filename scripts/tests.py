@@ -12755,7 +12755,8 @@ def test_47_redispatch_board_task():
         tids.append(tid)
         st, r = _g47_req("POST", f"/kanban/tasks/{tid}/redispatch")
         assert st == 200, f"47-F: redispatch failed: {st} {r}"
-        assert r.get("redispatch") is True, f"47-F: redispatch expected True: {r}"
+        d = r.get("data", r) if isinstance(r, dict) else r
+        assert d.get("redispatch") is True, f"47-F: redispatch expected True: {r}"
         trows = _g47_thread_rows(tid)
         assert trows, f"47-F: expected a thread row after redispatch: {trows}"
         assert trows[-1][0] == "testing", f"47-F: workflow_step=testing expected: {trows}"
