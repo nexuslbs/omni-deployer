@@ -1721,26 +1721,25 @@ def run_tests():
     registered = _get_registered_tools()
     print(f"  After restart: {len(registered)} registered tools")
 
-    # 0d. Ensure noop provider is installed and enabled
-    print("\n[Ensuring noop provider...]")
+    # 0d. Ensure noop provider is installed and enabled, sourced from
+    # omni-plugins (noop/noop-full are TEST providers that live ONLY in the
+    # omni-plugins repo — they must not come from the omniagent image's
+    # built-in/bundled copies). Install via install-git from omni-plugins;
+    # file:// (offline, bind-mounted) first, HTTPS github as fallback.
+    print("\n[Ensuring noop provider (omni-plugins source)...]")
     try:
-        r = oc("curl -sf http://localhost:8080/api/plugins/providers/built-in/noop")
-        if r.returncode != 0:
-            print("  Installing noop provider...")
-            omni_plugins_dir = "/opt/workspace/omni-plugins"
-            payload = json.dumps({"url": f"file://{omni_plugins_dir}", "name": "noop", "path": "providers/noop"})
-            oc_write("/tmp/_install_noop.json", payload)
-            r2 = oc("curl -sf -X POST http://localhost:8080/api/plugins/install-git -H 'Content-Type: application/json' -d @/tmp/_install_noop.json")
-            if r2.returncode != 0:
-                payload2 = json.dumps({"url": "https://github.com/nexuslbs/omni-plugins.git", "name": "noop", "path": "providers/noop"})
-                oc_write("/tmp/_install_noop2.json", payload2)
-                r2 = oc("curl -sf -X POST http://localhost:8080/api/plugins/install-git -H 'Content-Type: application/json' -d @/tmp/_install_noop2.json")
-            if r2.returncode == 0:
-                print("  noop provider installed")
-            else:
-                print("  WARNING: Could not install noop provider")
+        omni_plugins_dir = "/opt/workspace/omni-plugins"
+        payload = json.dumps({"url": f"file://{omni_plugins_dir}", "name": "noop", "path": "providers/noop"})
+        oc_write("/tmp/_install_noop.json", payload)
+        r2 = oc("curl -sf -X POST http://localhost:8080/api/plugins/install-git -H 'Content-Type: application/json' -d @/tmp/_install_noop.json")
+        if r2.returncode != 0:
+            payload2 = json.dumps({"url": "https://github.com/nexuslbs/omni-plugins.git", "name": "noop", "path": "providers/noop"})
+            oc_write("/tmp/_install_noop2.json", payload2)
+            r2 = oc("curl -sf -X POST http://localhost:8080/api/plugins/install-git -H 'Content-Type: application/json' -d @/tmp/_install_noop2.json")
+        if r2.returncode == 0:
+            print("  noop provider installed from omni-plugins")
         else:
-            print("  ✓ providers/noop enabled")
+            print("  WARNING: Could not install noop provider from omni-plugins")
     except Exception as e:
         print(f"  WARNING: noop check: {str(e)[:80]}")
 
