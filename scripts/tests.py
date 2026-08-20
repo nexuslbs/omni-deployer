@@ -12445,4 +12445,350 @@ test(test_46_absent_file)
 test(test_46_refresh_upsert)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 47: Resolve fallback fields ONCE at load — kanban task defaults
+#  (task_18cd45eecd7f6dab). Board tasks carry NULL workflow_id/channel_id/
+#  profile/plan; the board (boards.yml) supplies the effective values. The
+#  live bug: fail routing read kanban_tasks.workflow_id raw -> board tasks
+#  had has_wf=false -> reviewer reject landed on 'blocked' instead of an
+#  executor rework thread. POST /review exercises the SAME task-defaults
+#  resolution (manual_review_decision) as the reviewer fail-tool path.
+#  API + SQL only (no mattermost/agent threads needed). Temp workflows
+#  carry provider/model per role (GROUP 41 pattern) + tester/reviewer
+#  templates (server validation) — the board's workflow must be
+#  role-specified for thread creation.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _g47_boards_file():
+    return f"{WORKSPACE}/config/boards.yml"
+
+
+def _g47_boards_enabled():
+    return os.path.exists(_g47_boards_file())
+
+
+def _g47_sql(q, params=None):
+    import psycopg2
+    conn = psycopg2.connect(os.environ.get(
+        "DATABASE_URL",
+        "postgres://omniagent:5dd29b09f6cf06d529e246e10eb002f7bbe5f15568578080@postgres:5432/omniagent"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(q, params)
+            if cur.description:
+                return cur.fetchall()
+            conn.commit()
+            return []
+    finally:
+        conn.close()
+
+
+def _g47_req(method, path, body=None):
+    """Raw HTTP helper returning (status, parsed json); non-2xx is data, not an exception."""
+    import urllib.request, urllib.error
+    req = urllib.request.Request(f"{BASE}{path}", method=method)
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, data=data, timeout=30) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw.strip() else {})
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        return e.code, (json.loads(raw) if raw.strip() else {})
+
+
+def _g47_put_wf(key):
+    """Temp workflow with provider/model on every role (GROUP 41/22 pattern).
+    tester/reviewer get templates (server-side validation requires them when
+    the role is present). NO plan_mode — so a role with plan_mode unset falls
+    back to the task's resolved plan (the board's plan flag propagates)."""
+    roles = {
+        "executor": {"provider": "noop", "model": "test-tool-caller"},
+        "tester": {"provider": "noop", "model": "test-tool-caller", "template": "wf_tester.md"},
+        "reviewer": {"provider": "noop", "model": "test-tool-caller", "template": "wf_reviewer.md"},
+    }
+    st, r = _g47_req("PUT", f"/workflows/{key}",
+                     {"retries": 3, "clear_executions_on_review": False, "roles": roles})
+    assert st == 200, f"PUT /workflows/{key} failed: {st} {r}"
+
+
+def _g47_make_task(title, board, cid=None, workflow_id=None, status="backlog"):
+    """Create a kanban task. cid/workflow_id None => task carries NO explicit
+    channel/workflow (board supplies them). status=backlog so the auto-
+    dispatcher does NOT race the test (dispatch only promotes 'todo')."""
+    body = {"title": title, "status": status, "board": board}
+    if cid is not None:
+        body["channel"] = cid
+    if workflow_id:
+        body["workflow"] = workflow_id
+    st, r = _g47_req("POST", "/kanban/tasks", body)
+    assert st == 200, f"task create failed: {st} {r}"
+    d = r.get("data", r) if isinstance(r, dict) else r
+    assert d.get("id"), f"task create: no id in {r}"
+    return d["id"]
+
+
+def _g47_thread_rows(task_id):
+    return _g47_sql(
+        "SELECT workflow_step, workflow_id, channel_id, profile, plan FROM threads "
+        "WHERE task_id = %s ORDER BY id", (task_id,))
+
+
+def _g47_history_comments(task_id):
+    return _g47_sql(
+        "SELECT comment FROM kanban_history WHERE kanban_task_id = %s AND action = 'workflow' "
+        "ORDER BY id", (task_id,))
+
+
+def _g47_cleanup(tids, board_key, wf_keys, bfile, orig):
+    for t in tids:
+        try:
+            _g47_sql("DELETE FROM threads WHERE task_id = %s", (t,))
+        except Exception:
+            pass
+        try:
+            _g47_sql("DELETE FROM kanban_tasks WHERE id = %s", (t,))
+        except Exception:
+            pass
+    try:
+        _g47_req("DELETE", f"/boards/{board_key}")
+    except Exception:
+        pass
+    for w in wf_keys:
+        try:
+            _g47_req("DELETE", f"/workflows/{w}")
+        except Exception:
+            pass
+    with open(bfile, "w") as f:
+        f.write(orig)
+
+
+def test_47_review_rework_board_task():
+    """47-A (THE BUG): board task (workflow_id NULL) + reviewer 'rework' ->
+    status running + NEW executor thread (workflow_step=running) with
+    workflow/channel/profile/plan resolved from the BOARD; kanban_history
+    shows 'Creating thread'. Before the fix: has_wf=false -> 'blocked'."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    key = "g47a_" + uuid.uuid4().hex[:8]
+    wf = "g47awf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": True})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-a-{uuid.uuid4().hex[:8]}", key)
+        tids.append(tid)
+        rows = _g47_sql("SELECT workflow_id, channel_id, profile, board FROM kanban_tasks WHERE id = %s", (tid,))
+        assert rows and rows[0][0] is None, f"47-A: expected NULL workflow_id, got {rows}"
+        assert rows[0][1] is None, f"47-A: expected NULL channel_id, got {rows}"
+        assert rows[0][3] == key, f"47-A: expected board {key}, got {rows}"
+        st, r = _g47_req("POST", "/review", {"task_id": tid, "decision": "rework"})
+        assert st == 200, f"47-A: POST /review rework failed: {st} {r}"
+        d = r.get("data", r) if isinstance(r, dict) else r
+        assert d.get("status") == "running", f"47-A: expected running, got {d}"
+        th_id = d.get("thread_id")
+        assert th_id, f"47-A: expected a NEW thread id, got {d}"
+        trows = _g47_thread_rows(tid)
+        assert trows, f"47-A: no thread row for task {tid}: {trows}"
+        assert trows[-1][0] == "running", f"47-A: workflow_step=running expected: {trows}"
+        assert trows[-1][1] == wf, f"47-A: workflow from BOARD expected: {trows}"
+        assert trows[-1][2] == "kanban", f"47-A: channel from BOARD expected: {trows}"
+        assert trows[-1][3] == "omni", f"47-A: profile from BOARD expected: {trows}"
+        assert trows[-1][4] is True, f"47-A: plan from BOARD expected: {trows}"
+        comments = [c[0] for c in _g47_history_comments(tid)]
+        assert any("Manual review decision: rework. Creating thread" in c for c in comments), \
+            f"47-A: history must show 'Creating thread': {comments}"
+        print(f"PASS: 47-A board task reviewer rework -> running + NEW executor thread #{th_id} "
+              f"(workflow={trows[-1][1]} channel={trows[-1][2]} profile={trows[-1][3]} plan={trows[-1][4]})")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig)
+
+
+def test_47_review_retest_board_task():
+    """47-B: board task + reviewer 'retest' -> status testing + NEW tester
+    thread (workflow_step=testing) resolved from the board."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    key = "g47b_" + uuid.uuid4().hex[:8]
+    wf = "g47bwf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": True})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-b-{uuid.uuid4().hex[:8]}", key)
+        tids.append(tid)
+        st, r = _g47_req("POST", "/review", {"task_id": tid, "decision": "retest"})
+        assert st == 200, f"47-B: POST /review retest failed: {st} {r}"
+        d = r.get("data", r) if isinstance(r, dict) else r
+        assert d.get("status") == "testing", f"47-B: expected testing, got {d}"
+        th_id = d.get("thread_id")
+        assert th_id, f"47-B: expected a NEW tester thread, got {d}"
+        trows = _g47_thread_rows(tid)
+        assert trows and trows[-1][0] == "testing", f"47-B: workflow_step=testing expected: {trows}"
+        assert trows[-1][1] == wf, f"47-B: workflow from BOARD expected: {trows}"
+        assert trows[-1][2] == "kanban", f"47-B: channel from BOARD expected: {trows}"
+        print(f"PASS: 47-B board task reviewer retest -> testing + NEW tester thread #{th_id}")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig)
+
+
+def test_47_review_block_board_task():
+    """47-C: board task + reviewer explicit 'block' -> status blocked, NO
+    new thread (block decision semantics unchanged)."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    key = "g47c_" + uuid.uuid4().hex[:8]
+    wf = "g47cwf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": True})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-c-{uuid.uuid4().hex[:8]}", key)
+        tids.append(tid)
+        st, r = _g47_req("POST", "/review", {"task_id": tid, "decision": "block"})
+        assert st == 200, f"47-C: POST /review block failed: {st} {r}"
+        d = r.get("data", r) if isinstance(r, dict) else r
+        assert d.get("status") == "blocked", f"47-C: expected blocked, got {d}"
+        assert d.get("thread_id") is None, f"47-C: block must NOT create a thread: {d}"
+        trows = _g47_thread_rows(tid)
+        assert not trows, f"47-C: no thread row expected after block: {trows}"
+        print("PASS: 47-C board task reviewer block -> blocked, no new thread (unchanged semantics)")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig)
+
+
+def test_47_status_change_dispatch_board_task():
+    """47-D: status-change dispatch (PATCH status=running) on a board task
+    with NULL workflow_id/channel_id -> the role thread resolves channel +
+    workflow from the BOARD."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    key = "g47d_" + uuid.uuid4().hex[:8]
+    wf = "g47dwf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": True})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-d-{uuid.uuid4().hex[:8]}", key)
+        tids.append(tid)
+        st, r = _g47_req("PATCH", f"/kanban/tasks/{tid}/status", {"status": "running"})
+        assert st == 200, f"47-D: PATCH status=running failed: {st} {r}"
+        trows = _g47_thread_rows(tid)
+        assert trows, f"47-D: expected a thread row after PATCH running: {trows}"
+        assert trows[-1][0] == "running", f"47-D: workflow_step=running expected: {trows}"
+        assert trows[-1][1] == wf, f"47-D: workflow from BOARD expected: {trows}"
+        assert trows[-1][2] == "kanban", f"47-D: channel from BOARD expected: {trows}"
+        assert trows[-1][3] == "omni", f"47-D: profile from BOARD expected: {trows}"
+        assert trows[-1][4] is True, f"47-D: plan from BOARD expected: {trows}"
+        print(f"PASS: 47-D status-change dispatch on board task -> thread row "
+              f"(workflow={trows[-1][1]} channel={trows[-1][2]} profile={trows[-1][3]})")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig)
+
+
+def test_47_explicit_task_fields_win_over_board():
+    """47-E: task with EXPLICIT channel/workflow on a board keeps the EXPLICIT
+    values (task > board precedence — non-board behavior unchanged). Board
+    says channel=kanban; task says channel=hooks; thread must be hooks."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    key = "g47e_" + uuid.uuid4().hex[:8]
+    wf = "g47ewf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": False})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-e-{uuid.uuid4().hex[:8]}", key,
+                             cid="hooks", workflow_id=wf)
+        tids.append(tid)
+        st, r = _g47_req("POST", "/review", {"task_id": tid, "decision": "rework"})
+        assert st == 200, f"47-E: POST /review rework failed: {st} {r}"
+        d = r.get("data", r) if isinstance(r, dict) else r
+        assert d.get("status") == "running", f"47-E: expected running, got {d}"
+        th_id = d.get("thread_id")
+        assert th_id, f"47-E: expected a NEW thread, got {d}"
+        trows = _g47_thread_rows(tid)
+        assert trows, f"47-E: no thread row: {trows}"
+        assert trows[-1][2] == "hooks", f"47-E: explicit task channel must win: {trows}"
+        assert trows[-1][1] == wf, f"47-E: explicit task workflow must win: {trows}"
+        print(f"PASS: 47-E explicit task channel/workflow win over board (thread #{th_id} "
+              f"channel={trows[-1][2]} workflow={trows[-1][1]})")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig)
+
+
+def test_47_unknown_board_fail_loud():
+    """47-F: unknown/malformed board -> EXPLICIT error at resolution time
+    (POST /review returns non-200 mentioning the board), never a silent
+    empty fallback that changes behavior."""
+    if not _g47_boards_enabled():
+        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        return
+    bfile = _g47_boards_file()
+    with open(bfile) as f:
+        orig = f.read()
+    key = "g47f_" + uuid.uuid4().hex[:8]
+    wf = "g47fwf_" + uuid.uuid4().hex[:8]
+    tids = []
+    try:
+        _g47_put_wf(wf)
+        st, r = _g47_req("PUT", f"/boards/{key}", {"channel": "kanban", "profile": "omni",
+                                                   "workflow": wf, "plan": True})
+        assert st == 200, f"PUT /boards/{key} failed: {st} {r}"
+        tid = _g47_make_task(f"g47-f-{uuid.uuid4().hex[:8]}", key)
+        tids.append(tid)
+        # Corrupt the task's board AFTER creation (create validates the board).
+        _g47_sql("UPDATE kanban_tasks SET board = 'no-such-board-xyz' WHERE id = %s", (tid,))
+        st, r = _g47_req("POST", "/review", {"task_id": tid, "decision": "rework"})
+        assert st != 200, f"47-F: unknown board must fail loudly, got {st} {r}"
+        err = str(r).lower()
+        assert "board" in err, f"47-F: error must mention board: {r}"
+        trows = _g47_thread_rows(tid)
+        assert not trows, f"47-F: no thread may be created on unknown board: {trows}"
+        print(f"PASS: 47-F unknown board -> explicit error at resolution (HTTP {st}: {str(r)[:100]})")
+    finally:
+        _g47_cleanup(tids, key, [wf], bfile, orig)
+
+
+test(test_47_review_rework_board_task)
+test(test_47_review_retest_board_task)
+test(test_47_review_block_board_task)
+test(test_47_status_change_dispatch_board_task)
+test(test_47_explicit_task_fields_win_over_board)
+test(test_47_unknown_board_fail_loud)
+print("GROUP 47: resolve fallback fields ONCE at load — kanban task defaults (task->board->channel->global)")
+
 sys.exit(0 if tests_fail == 0 else 1)
