@@ -11091,9 +11091,12 @@ def test_39_omniagent_api_generic_tool():
     tid = None
     sid = None
     try:
+        _g39_tbody = {"title": title, "status": "todo"}
+        if _kanban_plain_board():
+            _g39_tbody["board"] = "plain"
         resp = _g24_mcp_execute("builtin_omniagent-api",
                                 {"method": "POST", "path": "/kanban/tasks",
-                                 "body": {"title": title, "status": "todo"}})
+                                 "body": _g39_tbody})
         out = resp.get("content") or ""
         assert "HTTP 200" in out, f"kanban create via generic tool failed: {out[:300]}"
         body = out.split("\n", 1)[1] if "\n" in out else out
@@ -12936,10 +12939,22 @@ def test_48_cli_unknown():
     print(f"PASS: 48-C unknown arg -> error, exit {r.returncode}")
 
 def test_48_advisory_lock_refuses_second():
-    """48-D: second instance against an already-owned DB refuses to start."""
-    conn, ok = _g48_acquire_lock()
-    assert ok, "48-D: could not acquire advisory lock for test"
+    """48-D: second instance against an already-owned DB refuses to start.
+    In the deploy suite the LIVE omniagent already holds the app advisory
+    lock (key 72700123) — that IS the first instance. Try to acquire the
+    lock ourselves; if it is already held, that is equally valid. Either
+    way a second `omniagent` process must refuse to boot with the
+    lock-refusal message and a non-zero exit (no DB writes)."""
+    import psycopg2
+    conn = psycopg2.connect(os.environ.get("DATABASE_URL", ""))
+    conn.autocommit = True
+    acquired_by_test = False
     try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(72700123)")
+            acquired_by_test = bool(cur.fetchone()[0])
+        if not acquired_by_test:
+            print("  [app advisory lock already held by the live omniagent — first instance present]")
         r = sh(f"{OMNIAGENT_BIN} 2>&1; echo RC=$?")
         out = r.stdout + r.stderr
         assert "another omniagent instance is already running" in out, \
@@ -12948,7 +12963,7 @@ def test_48_advisory_lock_refuses_second():
         assert m and m.group(1) != "0", f"48-D: second instance must exit non-zero: {out}"
         print("PASS: 48-D second instance refuses to start (advisory lock held, no boot)")
     finally:
-        conn.close()  # releases the advisory lock
+        conn.close()  # releases the lock only if we acquired it
 
 
 test(test_48_cli_version)
