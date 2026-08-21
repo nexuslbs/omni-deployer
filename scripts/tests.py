@@ -12928,7 +12928,11 @@ print("GROUP 47: resolve fallback fields ONCE at load — kanban task defaults (
 #  DB writes.
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-OMNIAGENT_BIN = "/target/release/omniagent"
+OMNIAGENT_BIN = os.environ.get("OMNIAGENT_BIN") or (
+    "/target/release/omniagent"
+    if os.path.exists("/target/release/omniagent")
+    else (shutil.which("omniagent") or "/usr/local/bin/omniagent")
+)
 
 def _g48_acquire_lock():
     """Acquire the app advisory lock on a DEDICATED connection (held open).
