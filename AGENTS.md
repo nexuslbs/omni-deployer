@@ -64,6 +64,14 @@ the `ensure_secret()` loop over `load_secrets_env()`. `deploy.py` must never cal
 `secrets.env` is never read by `deploy.py` — grep `load_secrets_env` /
 `ensure_secret` / `configure_secret_refs` to confirm before changing anything.
 
+## Repo hygiene (MANDATORY)
+
+Never commit scratch helper/driver scripts (`_run_*.py`, `push_*.py`, `_g4x-*.py`, `.task*`,
+`.push*`, `.smoke*`, `*.patch`, probe/diag scripts). Scratch helper scripts belong ONLY in
+`OMNI_DIR/data/scripts/` or `omni-stack/data/scripts/` — both gitignored and never versioned.
+Never create them inside the repo tree, and never `git add -A` blindly (stage only the files a
+task actually changed). A committed scratch script or credential is an automatic review FAIL.
+
 ## Test flow (deploy.py)
 
 1. Generates `omni.env` (no LLM keys) + seeds `remote.yml`.
