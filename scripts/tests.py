@@ -1217,17 +1217,33 @@ def test_8():
 
 # ── Test 9: Kanban task + upload 2 files ─────────────────────────────
 
+def _kanban_plain_board():
+    """Return 'plain' when the boards feature is enabled (boards.yml present with a
+    workflow-less 'plain' board), else None. The kanban API requires a board once
+    boards.yml exists; 'plain' is the board that leaves a task workflow-less
+    (GROUP 26 convention), which plain kanban CRUD/upload tests need."""
+    boards_path = f"{WORKSPACE}/config/boards.yml"
+    if not os.path.exists(boards_path):
+        return None
+    import re as _re
+    keys = _re.findall(r"^  ([A-Za-z0-9_-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
+    return "plain" if "plain" in keys else None
+
+
 def test_9():
     """Create kanban task, upload 2 files scoped to task"""
     global _UPLOAD_FILES
     clear_dir(_KANBAN_DIR)
 
-    task_resp = api_post("/kanban/tasks", {
+    task_body = {
         "title": f"Test task {uuid.uuid4().hex[:8]}",
         "body": "Upload test for kanban-scoped files",
         "priority": 0,
         "status": "backlog",
-    }, base=DASHBOARD)
+    }
+    if _kanban_plain_board():
+        task_body["board"] = "plain"
+    task_resp = api_post("/kanban/tasks", task_body, base=DASHBOARD)
 
     task_id = task_resp.get("data", {}).get("id", "")
     assert task_id, f"no id in task response: {task_resp}"
@@ -6140,7 +6156,13 @@ def test_fn_24_compact_keeps_result_excerpt():
         msgs.append(_g24_assistant_msg(i))
         msgs.append(_g24_tool_msg("filesystem_read", f"call_g24_{i}", i))
     assert _g24_size(msgs) > TOKEN_HARD * 4, "context must exceed the hard budget (chars/4)"
-    resp = _g24_mcp_execute("prompt_compact-messages", {"messages": msgs, "keep_recent": 3})
+    # The live /mcp/execute path has no thread context from which to resolve
+    # token budgets - the plugin REQUIRES explicit soft/hard budget params
+    # (GROUP p8 locks the missing-param error), so supply the test budgets.
+    resp = _g24_mcp_execute("prompt_compact-messages", {
+        "messages": msgs, "keep_recent": 3,
+        "soft_budget": TOKEN_SOFT, "hard_budget": TOKEN_HARD,
+    })
     parsed = json.loads(resp["content"])
     assert parsed["was_compacted"], "expected compaction to run"
     assert parsed["after_count"] < parsed["before_count"], "message count must drop"
@@ -6710,7 +6732,10 @@ def test_20_7_kanban_crud():
     global _kanban_task_id
     import uuid
     title = f"Test Task {uuid.uuid4().hex[:8]}"
-    r = post_json("/kanban/tasks", {"title": title, "status": "todo", "priority": 2})
+    body = {"title": title, "status": "todo", "priority": 2}
+    if _kanban_plain_board():
+        body["board"] = "plain"
+    r = post_json("/kanban/tasks", body)
     tid = r.get("data", {}).get("id") or r.get("id")
     assert tid, f"No task id: {r}"
     _kanban_task_id = tid
@@ -6735,7 +6760,10 @@ def test_20_7b_kanban_plan_normalized():
     title = f"Plan Norm {uuid.uuid4().hex[:8]}"
     tid = None
     try:
-        r = post_json("/kanban/tasks", {"title": title, "status": "todo", "plan": True})
+        body = {"title": title, "status": "todo", "plan": True}
+        if _kanban_plain_board():
+            body["board"] = "plain"
+        r = post_json("/kanban/tasks", body)
         d = r.get("data", r) if isinstance(r, dict) else r
         tid = d.get("id") if isinstance(d, dict) else None
         assert tid, f"No task id: {r}"
@@ -8219,8 +8247,11 @@ def test_27_hooks_event_meta():
                        "ORDER BY id LIMIT 1", (base_t,))[0]
         m1, = _h27_sql("SELECT MIN(id) FROM messages WHERE thread_id=%s", (t1,))[0]
         meta1 = _h27f_meta(hid)
-        assert meta1 and meta1.get("last_thread") == t1, f"meta.last_thread must be {t1}: {meta1}"
-        assert meta1.get("last_message") == m1, f"meta.last_message must be {m1}: {meta1}"
+        # Meta is stored per scope key (hooks.rs meta_update): the global
+        # scope lives at meta["global"]["last_thread"] / ["last_message"].
+        m1_global = (meta1 or {}).get("global", {})
+        assert m1_global.get("last_thread") == t1, f"meta.last_thread must be {t1}: {meta1}"
+        assert m1_global.get("last_message") == m1, f"meta.last_message must be {m1}: {meta1}"
         c1 = _h27_counter(hid)
         assert c1.get("global") == 0, f"count=1 hook must reset after trigger: {c1}"
         ev1_row = _h27_sql("SELECT content FROM messages WHERE thread_sequence=0 AND thread_id IN "
@@ -8243,8 +8274,9 @@ def test_27_hooks_event_meta():
                        "ORDER BY id LIMIT 1", (base_t2,))[0]
         m2, = _h27_sql("SELECT MIN(id) FROM messages WHERE thread_id=%s", (t2,))[0]
         meta2 = _h27f_meta(hid)
-        assert meta2 and meta2.get("last_thread") == t2, f"meta.last_thread must be {t2}: {meta2}"
-        assert meta2.get("last_message") == m2, f"meta.last_message must be {m2}: {meta2}"
+        m2_global = (meta2 or {}).get("global", {})
+        assert m2_global.get("last_thread") == t2, f"meta.last_thread must be {t2}: {meta2}"
+        assert m2_global.get("last_message") == m2, f"meta.last_message must be {m2}: {meta2}"
         c2 = _h27_counter(hid)
         assert c2.get("global") == 0, f"count=1 hook must reset after 2nd trigger: {c2}"
         ev2_row = _h27_sql("SELECT content FROM messages WHERE thread_sequence=0 AND thread_id IN "
@@ -8278,7 +8310,8 @@ def test_27_hooks_event_action():
                        "ORDER BY id LIMIT 1", (base_t,))[0]
         m1, = _h27_sql("SELECT MIN(id) FROM messages WHERE thread_id=%s", (t1,))[0]
         meta = _h27f_meta(hid)
-        assert meta.get("last_thread") == t1 and meta.get("last_message") == m1,             f"action-mode meta must match trigger ids: {meta}"
+        mg = (meta or {}).get("global", {})
+        assert mg.get("last_thread") == t1 and mg.get("last_message") == m1,             f"action-mode meta must match trigger ids: {meta}"
         c = _h27_counter(hid)
         assert c.get("global") == 0, f"action-mode count=1 hook must reset: {c}"
         if _h27_logs("action hook 'g27-evt-a'"):
