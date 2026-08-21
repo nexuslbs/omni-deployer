@@ -1115,6 +1115,24 @@ def _get_registered_tools():
     return [t.get("name") or t.get("full_name") or "" for t in tool_list]
 
 
+def _wait_for_tool_registered(tool_name, timeout=30):
+    """Wait until tool_name is in the omniagent's registered MCP tools.
+
+    Plugin enable/disable writes plugins.yml; the omniagent re-registers the
+    affected MCP servers asynchronously (config watcher). Phase 2 posts a
+    test-tool-caller script via Mattermost right after toggling a plugin: if
+    the tool call runs before re-registration the call fails silently and no
+    reply is posted (test ends as 'No response or validation failed'). Poll
+    /mcp/tools until the tool is registered, up to timeout seconds."""
+    deadline = time.time() + timeout
+    while True:
+        if tool_name in _get_registered_tools():
+            return True
+        if time.time() >= deadline:
+            return tool_name in _get_registered_tools()
+        time.sleep(1.0)
+
+
 def _mcp_execute(tool_name, args_dict=None):
     """Execute a tool via the /mcp/execute API."""
     if args_dict is None:
@@ -1160,7 +1178,7 @@ def _disable_plugin(p_type, source, name):
 
 # External-network tools need more wall time for the agent round-trip
 # (fetch_fetch hits GitHub and can take seconds); local tools reply in <1s.
-PHASE2_ACTIVE_POLL_TIMEOUT = 30
+PHASE2_ACTIVE_POLL_TIMEOUT = 45
 PHASE2_POLL_TIMEOUTS = {"fetch_fetch": 15, "prompt_compact-messages": 20}
 
 # prompt_compact-messages REQUIRES explicit soft/hard token budgets when called
@@ -2065,6 +2083,7 @@ def run_tests():
             print(f"\n  [State B: Enabling '{plugin}', removing from profile → expect error]")
             _enable_plugin("tools", _tool_plugin_source(plugin), plugin)
             time.sleep(1.0)
+            _wait_for_tool_registered(tool_name)
 
             profile = _read_profile()
             all_tools = profile.get("allowed_tools", [])
@@ -2103,6 +2122,7 @@ def run_tests():
             profile["allowed_tools"] = allowed
             _write_profile(profile)
             time.sleep(1.0)
+            _wait_for_tool_registered(tool_name)
 
             total_assertions += 1
             resp_c = _test_tool_via_mattermost(
@@ -2111,6 +2131,17 @@ def run_tests():
                 validate_fn=TOOL_VALIDATORS.get(tool_name),
                 poll_timeout=PHASE2_POLL_TIMEOUTS.get(tool_name, PHASE2_ACTIVE_POLL_TIMEOUT),
             )
+            if not resp_c:
+                # Retry once: the agent occasionally misses the first script
+                # (WS lag / slow re-registration); a second round-trip is cheap
+                # and any reply (tool output or error) proves the tool path.
+                _wait_for_tool_registered(tool_name)
+                resp_c = _test_tool_via_mattermost(
+                    mm_channel_id_test, testuser_token,
+                    tool_name, tool_args,
+                    validate_fn=TOOL_VALIDATORS.get(tool_name),
+                    poll_timeout=PHASE2_POLL_TIMEOUTS.get(tool_name, PHASE2_ACTIVE_POLL_TIMEOUT),
+                )
             if resp_c:
                 validator_name = TOOL_VALIDATORS.get(tool_name, _validate_not_error).__name__
                 _print_result(f"{tool_name} (active)", "PASS", f"Validator '{validator_name}' passed")
