@@ -20,6 +20,9 @@ All LLM interaction during deploy tests goes through the **noop provider** only:
   (kanban executor/tester/reviewer threads, non-blocking tasks, etc.),
 - `noop-full` provider with model `test-model-1` — for provider round-trip tests.
 
+The noop test provider definitions are sourced from **omni-plugins' root `models.yml`**
+(plugin-less), not from the omniagent image — keep them there when extending tests.
+
 Every test channel is patched to `current_provider=noop` /
 `current_model=test-tool-caller` (or `noop-full`/`test-model-1`) before use and
 restored afterwards. A real provider (e.g. `opencode-go`) must NEVER be the active
@@ -69,13 +72,14 @@ the `ensure_secret()` loop over `load_secrets_env()`. `deploy.py` must never cal
    dev container. `hybrid` builds the production Dockerfile (its builder stage runs
    the same quality gates).
 4. Starts services, registers the remote noop provider, runs the integration test
-   suite (`scripts/tests.py`, GROUP 1–26), then the shared tool tests
+   suite (`scripts/tests.py`, GROUP 1–49), then the shared tool tests
    (`shared.run_tests()`), twice.
 5. Restores omni-stack tracked config to HEAD.
 
-A successful run ends with `ALL TESTS PASSED (including shared tool tests)` and
-156/156 assertions. Verify after every run: no "Seeding API secrets" line, no 401s,
-and step threads read back `provider=noop` / `model=test-tool-caller`.
+A successful run ends with `ALL TESTS PASSED (including shared tool tests)` and all
+assertions green (the exact count grows as new groups are added — do not pin it).
+Verify after every run: no "Seeding API secrets" line, no 401s, and step threads
+read back `provider=noop` / `model=test-tool-caller`.
 
 ## Verification checklist (after any deploy change)
 
@@ -83,4 +87,4 @@ and step threads read back `provider=noop` / `model=test-tool-caller`.
 - [ ] Run log contains no `Seeding API secrets` / `Secret DEEPSEEK` / `Secret OPENCODE`
 - [ ] Run log contains no `401` / `unauthorized`
 - [ ] Workflow threads in log show `provider: noop, model: test-tool-caller`
-- [ ] Final summary: 156 passed, 0 failed
+- [ ] Final summary: `ALL TESTS PASSED`, 0 failed
