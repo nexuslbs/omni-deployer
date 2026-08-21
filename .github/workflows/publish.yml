@@ -331,6 +331,27 @@ jobs:
           git tag "${{ steps.version.outputs.version }}"
           git push origin "${{ steps.version.outputs.version }}"
 
+      # ── Update omni-plugins ──────────────────────────────────
+      - name: Checkout omni-plugins
+        uses: actions/checkout@v4
+        with:
+          repository: nexuslbs/omni-plugins
+          path: omni-plugins
+          persist-credentials: false
+
+      - name: Push omni-plugins stable branch
+        run: |
+          cd omni-plugins
+          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/nexuslbs/omni-plugins.git
+          git push origin HEAD:stable --force
+
+      - name: Tag omni-plugins
+        if: steps.version.outputs.IS_TAG == 'true'
+        run: |
+          cd omni-plugins
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
       # ── Publish Docker images ──────────────────────────────
       - name: Log in to GHCR
         uses: docker/login-action@v3
