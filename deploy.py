@@ -461,6 +461,9 @@ def _deploy(mode):
             "config/actions.yml", "config/channels.yml", "config/plugins.yml",
             "config/settings.yml", "config/workflows.yml",
             "config/remote.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md",
+            # The omni profile config: Phase 2 empties allowed_tools then
+            # re-adds them in order; a killed run leaves the truncated list.
+            "profiles/omni/config.json",
             # Tracked bundled test MCP servers: tests may delete their files
             # (plugin uninstall flows) and a hard-killed run leaves them gone;
             # the final restore (restore_seed_config) also restores these.
@@ -856,6 +859,7 @@ def restore_seed_config():
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
        "config/settings.yml config/workflows.yml config/tasks.yml config/remote.yml "
+       "profiles/omni/config.json "
        "plugins/tools/test-python plugins/tools/test-js-tool profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
