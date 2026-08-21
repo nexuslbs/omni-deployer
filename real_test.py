@@ -244,9 +244,9 @@ def patch_channel_config(omni_channel_id):
     s = shared.sett()
     print("\n[Patching kanban channel config...]")
     shared.oc_curl("PATCH", f"/channels/{omni_channel_id}", {
-        "current_provider": "deepseek",
-        "current_model": "deepseek-v4-flash",
-        "current_profile": PROFILE_NAME,
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "profile": PROFILE_NAME,
     })
     print(f"  Channel {omni_channel_id} -> deepseek/deepseek-v4-flash, profile={PROFILE_NAME}")
 

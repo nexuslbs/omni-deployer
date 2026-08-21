@@ -1673,10 +1673,16 @@ def _git_discard_all(repo_dir):
     profile's deepseek fallback. Reverting it mid-run would re-introduce the
     401 storm for GROUP 27's cron/hook threads. The deploy's final seed
     restore reverts channels.yml to HEAD at the end of the run (and Step 0.5
-    of the next run auto-restores it if a run dies midway)."""
+    of the next run auto-restores it if a run dies midway).
+
+    config/tasks.yml is EXCLUDED for the same reason: the deploy clears
+    schedules+hooks at start so no seeded real-LLM hook/schedule thread can
+    spawn on a secret-less DB. Restoring it mid-run would re-arm the seeded
+    hooks (wiki-maintenance, channel-summaries) and re-introduce the 401
+    api-key noise. The deploy's final seed restore reverts it to HEAD."""
     subprocess.run(["git", "reset", "HEAD", "--", "."], cwd=repo_dir, capture_output=True)
     subprocess.run(
-        ["git", "checkout", "HEAD", "--", ".", ":(exclude)config/channels.yml"],
+        ["git", "checkout", "HEAD", "--", ".", ":(exclude)config/channels.yml", ":(exclude)config/tasks.yml"],
         cwd=repo_dir, capture_output=True,
     )
     # Intentionally no git clean -fd — that would delete compiled binaries from target/
@@ -1694,6 +1700,12 @@ def check_git_clean():
         # never hit the omni profile's deepseek fallback) — that pin is NOT
         # reverted here (the deploy's final seed restore reverts it), so a
         # channels.yml-only dirty tree is expected and tolerated.
+        #
+        # config/tasks.yml is likewise tolerated but NOT reverted: the deploy
+        # clears schedules+hooks at start (deploy-only, so no seeded
+        # real-LLM hook/schedule thread can spawn on a secret-less DB) and
+        # reverts it to HEAD in its final seed restore. Restoring HEAD here
+        # would re-arm the seeded hooks mid-deploy (401 api-key noise).
         known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "config/channels.yml", "plugins/tools/", "profiles/omni/wiki/relevant-index.md"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
@@ -1702,7 +1714,7 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md"],
+                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "profiles/omni/wiki/relevant-index.md"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             # Restore tracked bundled test tools under plugins/tools/.
@@ -1727,10 +1739,16 @@ def check_git_clean():
             dirty = _git_status(OMNI_STACK_DIR)
             if not dirty:
                 return
-            # Only the deploy's noop pin on channels.yml may remain (kept
-            # intentionally; the final seed restore reverts it).
+            # Only the deploy's persistent modifications may remain (kept
+            # intentionally; the deploy's final seed restore reverts them):
+            #   - config/channels.yml: the deploy's noop pin on the cron channel
+            #   - config/tasks.yml:    the deploy's cleared schedules+hooks
+            #                         (zero real-LLM threads on a secret-less DB)
             remaining = [l for l in dirty.split("\n") if l.strip()]
-            if all("config/channels.yml" in l for l in remaining):
+            if all(
+                "config/channels.yml" in l or "config/tasks.yml" in l
+                for l in remaining
+            ):
                 return
         raise RuntimeError(
             f"omni-stack repo has unstaged changes: cannot run tests safely:\n{dirty}"
@@ -4062,7 +4080,8 @@ def _wf_drain_channel(cid, timeout=90):
 def _wf_channel_patch():
     """Return the DEDICATED workflow-test channel (omniagent 'mattermost-test-channel',
     Mattermost 'test-channel' in team 'omni') — PERMANENTLY configured with
-    current_provider=noop and current_model=test-tool-caller, so workflow tests run
+    current_provider=noop and current_model=test-tool-caller (bare provider=/model=
+    since the Aug 19 API rename), so workflow tests run
     here WITHOUT patching or restoring any channel. The channel is resolved BY NAME
     (never by id — ids change on a fresh setup) and BOOTSTRAPPED if missing.
 
@@ -4118,7 +4137,8 @@ def _wf_bootstrap_test_channel():
     2. Add members omnibot + admin.
     3. Post '$new test-channel' so omniagent's poller creates the omniagent channel.
     4. Rename the omniagent channel to 'mattermost-test-channel'.
-    5. PATCH current_provider=noop / current_model=test-tool-caller (permanent).
+    5. PATCH provider=noop / model=test-tool-caller (permanent; bare field
+       names since the Aug 19 API rename).
     Returns the omniagent channel dict. Fails loudly — never patches another channel.
     """
     import time

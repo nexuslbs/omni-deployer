@@ -1036,10 +1036,13 @@ def prepare():
     print(f"  omniagent channel registered: id={omni_ch['id']} name={omni_ch['name']}")
 
     # 4. PATCH channel -> opencode-go provider + deepseek-v4-flash model + omni profile
+    # NOTE: API uses bare yml field names (provider/model/profile) since the
+    # Aug 19 API rename (current_* -> yml parity); legacy current_* keys are
+    # silently ignored by the server.
     oc_curl("PATCH", f"/channels/{omni_ch['id']}", {
-        "current_provider": "opencode-go",
-        "current_model": "deepseek-v4-flash",
-        "current_profile": "omni",
+        "provider": "opencode-go",
+        "model": "deepseek-v4-flash",
+        "profile": "omni",
     })
     print(f"  Channel {omni_ch['id']} -> opencode-go/deepseek-v4-flash, profile=omni")
 
@@ -1810,17 +1813,20 @@ def run_tests():
         path = f"/channels/{omni_channel_id_test}"
         ch_detail = oc_curl("GET", path)
         channel_backup = {
-            "current_provider": ch_detail.get("current_provider") or (ch_detail.get("data") or {}).get("current_provider"),
-            "current_model": ch_detail.get("current_model") or (ch_detail.get("data") or {}).get("current_model"),
+            "provider": ch_detail.get("provider") or (ch_detail.get("data") or {}).get("provider"),
+            "model": ch_detail.get("model") or (ch_detail.get("data") or {}).get("model"),
         }
         print(f"  Backed up channel config: {channel_backup}")
 
         # Configure for noop/test-tool-caller
+        # NOTE: bare field names (provider/model) since the Aug 19 API rename;
+        # legacy current_* keys are silently ignored by the server, which left
+        # the channel on test-model-1 and made every Phase 2 script echo.
         print("  Configuring channel for noop/test-tool-caller...")
         try:
             oc_curl("PATCH", f"/channels/{omni_channel_id_test}", {
-                "current_provider": "noop",
-                "current_model": "test-tool-caller",
+                "provider": "noop",
+                "model": "test-tool-caller",
                 "plan": False,
             })
             print("  Channel configured")

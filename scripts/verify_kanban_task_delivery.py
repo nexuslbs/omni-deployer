@@ -70,13 +70,15 @@ def main():
     out(f"channel id={cid} name={ch.get('name')}")
 
     # Save original provider/model to restore after
-    orig_provider = ch.get("current_provider") or ""
-    orig_model = ch.get("current_model") or ""
+    orig_provider = ch.get("provider") or ""
+    orig_model = ch.get("model") or ""
 
     # 2. Patch channel to noop/test-tool-caller (fake LLM, CI-safe)
+    # NOTE: bare field names (provider/model) since the Aug 19 API rename;
+    # legacy current_* keys are silently ignored by the server.
     api(f"/channels/{cid}", "PATCH", {
-        "current_provider": "noop",
-        "current_model": "test-tool-caller",
+        "provider": "noop",
+        "model": "test-tool-caller",
     })
     out("patched channel to noop/test-tool-caller")
 
@@ -156,8 +158,8 @@ def main():
         try:
             if orig_provider:
                 api(f"/channels/{cid}", "PATCH", {
-                    "current_provider": orig_provider,
-                    "current_model": orig_model,
+                    "provider": orig_provider,
+                    "model": orig_model,
                 })
                 out(f"restored channel {cid} -> {orig_provider}/{orig_model}")
         except Exception as e:

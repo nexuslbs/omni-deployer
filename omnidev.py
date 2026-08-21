@@ -59,8 +59,8 @@ def patch_channel_to_deepseek():
         if not ch:
             raise RuntimeError("No mattermost channel found to patch")
         shared.oc_curl("PATCH", "/channels/" + str(ch["id"]), {
-            "current_provider": "deepseek",
-            "current_model": "deepseek-v4-flash",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
         })
         print(f"  Channel patched to deepseek/deepseek-v4-flash (id={ch['id']}, name={ch.get('name')})")
     except Exception as e:

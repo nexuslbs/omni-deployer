@@ -99,6 +99,32 @@ def patch_deploy_channels_noop():
     print("  ✓ patched channels.yml: cron channel pinned to noop/test-tool-caller (deploy-only)")
 
 
+def clear_deploy_tasks():
+    """Clear schedules/hooks from tasks.yml so the deploy never spawns real-LLM threads.
+
+    The seeded tasks.yml (HEAD) carries live hooks (wiki-maintenance,
+    channel-summaries) that fire on `thread_finished` events. The deploy DB
+    has NO LLM secrets — the `omni` profile pins deepseek, so any hook thread
+    on the `hooks` channel 401s with "api key invalid" (the key resolves to a
+    variable NAME, not a value). Those failures are parallel background noise
+    that pollutes logs and has produced 401-class flakes.
+
+    The deploy must therefore run with ZERO tasks: no schedules, no hooks.
+    tasks.yml is git-tracked; the final seed restore (restore_seed_config,
+    run in a finally) reverts it to HEAD when the deploy ends, and Step 0.5
+    self-heals it on the next run if a hard kill skips the finally.
+
+    Idempotent: rewrites the file with empty sections every time.
+    """
+    path = os.path.join(OMNI_STACK_DIR, "config", "tasks.yml")
+    content = "schedules: {}\nhooks: {}\n"
+    tmp_path = path + ".deploy-clear"
+    with open(tmp_path, "w") as f:
+        f.write(content)
+    sh(f"sudo mv -f {tmp_path} {path}")
+    print("  ✓ cleared tasks.yml: schedules + hooks emptied (deploy-only, no real-LLM threads)")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  sudo compat
 # ═══════════════════════════════════════════════════════════════════════
@@ -406,7 +432,9 @@ def remove_data_volumes():
         print(f"[deploy] Removed data volumes: {', '.join(removed)}")
 
 
-def deploy(mode):
+def _deploy(mode):
+    """Internal deploy body — wrapped by deploy() which guarantees the seed
+    restore runs in a finally on BOTH success and failure paths."""
     if not os.path.isdir(OMNI_STACK_DIR):
         raise RuntimeError(f"omni-stack not found at {OMNI_STACK_DIR}")
 
@@ -433,6 +461,16 @@ def deploy(mode):
             "config/actions.yml", "config/channels.yml", "config/plugins.yml",
             "config/settings.yml", "config/workflows.yml",
             "config/remote.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md",
+            # Tracked bundled test MCP servers: tests may delete their files
+            # (plugin uninstall flows) and a hard-killed run leaves them gone;
+            # the final restore (restore_seed_config) also restores these.
+            "plugins/tools/test-python/mcp-config.json",
+            "plugins/tools/test-python/plugin.json",
+            "plugins/tools/test-python/server.py",
+            "plugins/tools/test-js-tool/mcp-config.json",
+            "plugins/tools/test-js-tool/plugin.json",
+            "plugins/tools/test-js-tool/server.js",
+            "plugins/tools/tsconfig.json",
         }
         tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
         untracked = [ln[3:].strip() for ln in dirty_lines if ln.startswith("??")]
@@ -496,6 +534,12 @@ def deploy(mode):
     # would 401. Channels.yml is restored to HEAD by the final seed restore.
     print("\n[deploy] Pinning system channels to noop provider (deploy-only)...")
     patch_deploy_channels_noop()
+
+    # Step 0.6b: Clear tasks.yml so no seeded hook/schedule thread can spawn
+    # during the deploy (they'd 401 — deploy DB has no LLM secrets). Restored
+    # to HEAD by restore_seed_config() in the finally below.
+    print("\n[deploy] Clearing tasks.yml (deploy-only, no real-LLM threads)...")
+    clear_deploy_tasks()
 
     # ── Step 0 (hybrid): Stop old containers first ────────────────
     if mode == "hybrid":
@@ -740,8 +784,15 @@ def deploy(mode):
         # Before each tests.py invocation, clean transient artifacts
         # (plugins.yml, remote.yml, actions.yml, settings.yml) from the
         # bind-mounted omni-stack directory so check_git_clean() never
-        # fails on retries.
-        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- config/plugins.yml config/remote.yml config/actions.yml config/settings.yml config/workflows.yml config/tasks.yml 2>/dev/null; true")
+        # fails on retries. tasks.yml is intentionally NOT restored here:
+        # clear_deploy_tasks() emptied it at deploy start so no real-LLM
+        # hook/schedule thread can spawn during tests; restoring HEAD now
+        # would re-arm the seeded hooks mid-deploy.
+        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- config/plugins.yml config/remote.yml config/actions.yml config/settings.yml config/workflows.yml 2>/dev/null; true")
+        # Re-assert the empty tasks.yml (tests.py's own hook tests may have
+        # added entries during the previous pass — they clean up, but the
+        # deploy contract is ZERO tasks at all times).
+        clear_deploy_tasks()
         print(f"\n{'=' * 60}")
         print(f"  INTEGRATION TESTS — PASS {pass_num}")
         print(f"{'=' * 60}")
@@ -782,14 +833,25 @@ def deploy(mode):
     shared.init(shared_settings)
     shared.run_tests()
 
-    # Final seed restore: the tree was verified clean at step 0.5, so every
-    # tracked change present now is test-created. Revert the config files the
-    # tests persist into the bind mount (via API PUTs and plugin toggling) so
-    # the next deploy run's pre-flight check passes. The wiki index is also
-    # reverted: the builtin relevance_indexer action may rewrite it during
-    # test agent activity. workflows.yml is TRACKED in omni-stack (omniagent
-    # reads it as the workflow config) — the sweep above rm -f's it, so it
-    # MUST be restored here or the next run's Step 0.5 fails on a dirty tree.
+    print(f"\n{'=' * 60}")
+    print("  ALL TESTS PASSED (including shared tool tests)")
+    print(f"{'=' * 60}")
+
+
+def restore_seed_config():
+    """Revert omni-stack tracked config to HEAD after a deploy run.
+
+    The tree was verified clean at Step 0.5, so every tracked change present
+    now is test/deploy-created (tasks.yml cleared by clear_deploy_tasks,
+    channels.yml noop pin, API PUTs, plugin toggles, wiki index rewrites).
+    workflows.yml is TRACKED in omni-stack (omniagent reads it as the
+    workflow config) — the post-test sweep rm -f's it, so it MUST be restored
+    here or the next run's Step 0.5 fails on a dirty tree.
+
+    Runs on BOTH success and failure paths (deploy() wraps its body in a
+    finally that calls this), so a mid-deploy crash never leaves the bind
+    mount dirty for the next run.
+    """
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
@@ -809,9 +871,27 @@ def deploy(mode):
         )
     print("  ✓ omni-stack clean after restore")
 
-    print(f"\n{'=' * 60}")
-    print("  ALL TESTS PASSED (including shared tool tests)")
-    print(f"{'=' * 60}")
+
+def deploy(mode):
+    """Run the deploy, ALWAYS restoring the seed config when it ends.
+
+    deploy.py mutates tracked omni-stack config as a side effect of testing
+    (tasks.yml cleared, channels.yml noop pin, plugin toggles, API PUTs).
+    The seed restore must therefore run whether the deploy succeeded or
+    crashed mid-way — otherwise the bind mount stays dirty and the NEXT
+    run's Step 0.5 fails. A hard kill (SIGKILL/OOM) can still skip this
+    finally; Step 0.5's known-residue auto-restore covers that case.
+    """
+    try:
+        _deploy(mode)
+    finally:
+        try:
+            restore_seed_config()
+        except Exception as e:
+            # The deploy body's own error takes precedence; never mask it
+            # with a restore failure. The next run's Step 0.5 will surface
+            # any remaining dirt with a clear message.
+            print(f"  [WARNING: seed restore failed: {e}]")
 
 
 def run_tests(compose=None):
