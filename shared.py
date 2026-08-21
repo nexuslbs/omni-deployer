@@ -1160,8 +1160,15 @@ def _disable_plugin(p_type, source, name):
 
 # External-network tools need more wall time for the agent round-trip
 # (fetch_fetch hits GitHub and can take seconds); local tools reply in <1s.
-PHASE2_ACTIVE_POLL_TIMEOUT = 12
+PHASE2_ACTIVE_POLL_TIMEOUT = 30
 PHASE2_POLL_TIMEOUTS = {"fetch_fetch": 15, "prompt_compact-messages": 20}
+
+# prompt_compact-messages REQUIRES explicit soft/hard token budgets when called
+# via the raw /mcp/execute path (the omniagent normally resolves the per-thread
+# budgets from model config > provider > settings and passes them in; /mcp/execute
+# has no thread context, so the plugin rejects the call without them).
+PHASE2_SOFT_BUDGET = 50000
+PHASE2_HARD_BUDGET = 100000
 
 
 def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_args, expected_keyword=None, expect_error=False, poll_timeout=5, validate_fn=None):
@@ -1508,9 +1515,13 @@ TOOL_DEFS = {
     },
     "prompt_compact-messages": {
         "plugin": "prompt",
-        "test_args": {"messages": [{"role": "user", "content": "hello world"}]},
+        "test_args": {"messages": [{"role": "user", "content": "hello world"}],
+                      "soft_budget": PHASE2_SOFT_BUDGET,
+                      "hard_budget": PHASE2_HARD_BUDGET},
         "success_key": "compact",
-        "mcp_test_args": {"messages": [{"role": "user", "content": "hello world"}]},
+        "mcp_test_args": {"messages": [{"role": "user", "content": "hello world"}],
+                          "soft_budget": PHASE2_SOFT_BUDGET,
+                          "hard_budget": PHASE2_HARD_BUDGET},
     },
     "search_messages": {
         "plugin": "search",
@@ -1714,7 +1725,7 @@ def run_tests():
             _disable_plugin("tools", "built-in", p_name)
             time.sleep(0.1)
             _enable_plugin("tools", "built-in", p_name)
-            time.sleep(0.2)
+            time.sleep(1.0)
         except Exception as e:
             print(f"  ! Could not restart {p_name}: {str(e)[:80]}")
     time.sleep(0.5)
@@ -1884,7 +1895,7 @@ def run_tests():
         plugin_name = tool_def["plugin"]
         print(f"    [Disabling plugin '{plugin_name}' to test unavailability...]")
         _disable_plugin("tools", _tool_plugin_source(plugin_name), plugin_name)
-        time.sleep(0.2)
+        time.sleep(1.0)
 
         result_disabled = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
         total_assertions += 1
@@ -1898,7 +1909,7 @@ def run_tests():
         # Re-enable plugin
         print(f"    [Re-enabling plugin '{plugin_name}'...]")
         _enable_plugin("tools", _tool_plugin_source(plugin_name), plugin_name)
-        time.sleep(0.2)
+        time.sleep(1.0)
 
         # Test 3: Enable but restrict via profile
         print(f"    [Removing {tool_name} from profile allowed_tools...]")
@@ -1907,7 +1918,7 @@ def run_tests():
         filtered = [t for t in current_allowed if not t.startswith(plugin_name)]
         profile["allowed_tools"] = filtered
         _write_profile(profile)
-        time.sleep(0.2)
+        time.sleep(1.0)
 
         result_restricted = _mcp_execute(tool_name, tool_def.get("mcp_test_args", {}))
         total_assertions += 1
@@ -1943,7 +1954,7 @@ def run_tests():
         profile = _read_profile()
         profile["allowed_tools"] = []
         _write_profile(profile)
-        time.sleep(0.2)
+        time.sleep(1.0)
 
         phase2_tools_list = [
             ("cron_list-cron-jobs", {}, "cron"),
@@ -1955,7 +1966,9 @@ def run_tests():
             ("kanban_list-kanban-tasks", {}, "kanban"),
             ("search_metrics", {}, "metrics"),
             ("prompt_generate", {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []}, "prompt"),
-            ("prompt_compact-messages", {"messages": [{"role": "user", "content": "hello world"}]}, "compact"),
+            ("prompt_compact-messages", {"messages": [{"role": "user", "content": "hello world"}],
+                                         "soft_budget": PHASE2_SOFT_BUDGET,
+                                         "hard_budget": PHASE2_HARD_BUDGET}, "compact"),
             ("search_messages", {"query": "test", "limit": 1}, "search"),
             ("search_wiki", {"query": "omniagent", "limit": 1}, "omniagent"),
             ("subtasks_list-subtasks", {"thread_id": 1}, "subtask"),
@@ -2025,7 +2038,7 @@ def run_tests():
             # ── State A: Plugin disabled → expect error ──
             print(f"\n  [State A: Disabling plugin '{plugin}' → expect error]")
             _disable_plugin("tools", _tool_plugin_source(plugin), plugin)
-            time.sleep(0.2)
+            time.sleep(1.0)
             total_assertions += 1
             resp_a = _test_tool_via_mattermost(
                 mm_channel_id_test, testuser_token,
@@ -2051,13 +2064,13 @@ def run_tests():
             # ── State B: Plugin enabled, but NOT in profile → expect error ──
             print(f"\n  [State B: Enabling '{plugin}', removing from profile → expect error]")
             _enable_plugin("tools", _tool_plugin_source(plugin), plugin)
-            time.sleep(0.2)
+            time.sleep(1.0)
 
             profile = _read_profile()
             all_tools = profile.get("allowed_tools", [])
             profile["allowed_tools"] = [t for t in all_tools if t != tool_name]
             _write_profile(profile)
-            time.sleep(0.2)
+            time.sleep(1.0)
 
             total_assertions += 1
             resp_b = _test_tool_via_mattermost(
@@ -2089,7 +2102,7 @@ def run_tests():
                 allowed.append(tool_name)
             profile["allowed_tools"] = allowed
             _write_profile(profile)
-            time.sleep(0.2)
+            time.sleep(1.0)
 
             total_assertions += 1
             resp_c = _test_tool_via_mattermost(
