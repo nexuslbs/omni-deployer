@@ -1927,6 +1927,30 @@ def clean_plugin_residue():
         print("  [plugin residue: cleaned (test tools + .remote clones removed)]")
 
 
+def _container_project_dir(stack_dir):
+    """Translate a HOST omni-stack dir to the path the omniagent CONTAINER sees.
+
+    The compose file mounts ${WORKSPACE_DIR}:/opt/workspace, so a tool that
+    executes inside the container (docker_compose via /mcp/execute, agent
+    threads) resolves project_dir against the container filesystem. When the
+    stack dir lives under the workspace, the container path is
+    /opt/workspace/<relative>; otherwise the path is passed through unchanged
+    (already container-side or external).
+
+    Locally host and container agree (/opt/workspace); in CI they differ
+    (github.workspace = /home/runner/work/<repo>/<repo>), which previously
+    broke the docker_compose tool test with 'Invalid project directory'.
+    """
+    s = sett()
+    ws = s.workspace_dir.rstrip("/")
+    sd = stack_dir.rstrip("/")
+    if sd == ws:
+        return "/opt/workspace"
+    if sd.startswith(ws + "/"):
+        return "/opt/workspace" + sd[len(ws):]
+    return stack_dir
+
+
 def run_tests():
     """Run all tool tests with automatic profile backup/restore.
 
@@ -1937,8 +1961,11 @@ def run_tests():
     # The docker_compose tool test runs `ps` against the stack's data-dir
     # checkout (compose project dir) — follow the active omni_stack_dir
     # (omni-root for omnidev/omnistable, omni-stack for deploy/omnideploy).
-    TOOL_DEFS["docker_compose"]["test_args"]["project_dir"] = s.omni_stack_dir
-    TOOL_DEFS["docker_compose"]["mcp_test_args"]["project_dir"] = s.omni_stack_dir
+    # The tool EXECUTES INSIDE the omniagent container, so project_dir must
+    # be the container-side path (/opt/workspace/...), not the host path.
+    project_dir = _container_project_dir(s.omni_stack_dir)
+    TOOL_DEFS["docker_compose"]["test_args"]["project_dir"] = project_dir
+    TOOL_DEFS["docker_compose"]["mcp_test_args"]["project_dir"] = project_dir
     # Backup the profile first
     profile_backup = None
     try:
@@ -2227,7 +2254,7 @@ def run_tests():
 
         phase2_tools_list = [
             ("cron_list-cron-jobs", {}, "cron"),
-            ("docker_compose", {"command": "ps", "project_dir": s.omni_stack_dir}, "NAME"),
+            ("docker_compose", {"command": "ps", "project_dir": _container_project_dir(s.omni_stack_dir)}, "NAME"),
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
             ("filesystem_read", {"path": "/opt/workspace/omniagent/README.md"}, "OmniAgent"),
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),
