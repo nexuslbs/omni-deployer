@@ -185,6 +185,12 @@ def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
     if mode == "dev":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
+    # Local S3 (MinIO) service for the S3 backup/restore/checkpoint test —
+    # every deploy mode carries it so the S3 test can round-trip locally.
+    # Guarded: an omni-stack checkout without the overlay (older fork) still
+    # deploys; the S3 test then skips (see test_s3_backup_restore).
+    if os.path.exists(os.path.join(OMNI_STACK_DIR, "docker-compose.minio.yml")):
+        cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.minio.yml")]
     # hybrid and ci use no overlay — base docker-compose.yml + omni.env.
     # The base compose is image-only (no build sections): hybrid builds the
     # three images locally with the omni.env tags BEFORE `up` (see Step 0b),
@@ -195,7 +201,15 @@ def compose_cmd(mode):
 
 def run_compose(cmd_parts, *args):
     full = list(cmd_parts) + ["--env-file", OMNI_ENV_PATH] + list(args)
-    return subprocess.run(full, capture_output=True, text=True)
+    # Compose interpolation precedence is shell env > --env-file > .env, so
+    # S3_*/MINIO_* exported in the launcher shell (real B2 creds for
+    # omnistable backups) would override the deploy's freshly generated MinIO
+    # creds in omni.env. Strip them from the subprocess env so the deploy's
+    # own S3 endpoint/creds are authoritative (the S3 test round-trips
+    # against local MinIO, never the production bucket).
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("S3_") and not k.startswith("MINIO_")}
+    return subprocess.run(full, capture_output=True, text=True, env=env)
 
 
 def run_compose_check(cmd_parts, *args, label=""):
@@ -363,6 +377,19 @@ def run_rust_integration_tests(compose, mode="dev"):
 def generate_env(mode):
     p1 = os.urandom(24).hex()
     p2 = os.urandom(24).hex()
+    # Local S3 (MinIO) credentials — generated at the START of the deploy so
+    # the S3 backup/restore/checkpoint test round-trips against a local MinIO
+    # instead of real object storage. The SAME pair is used for the MinIO
+    # root creds (MINIO_ROOT_USER/PASSWORD) and the toolbox rclone client
+    # (S3_ACCESS_KEY/S3_SECRET_KEY), so the backup scripts authenticate
+    # against the local minio with the root identity. S3_ENDPOINT is the
+    # in-network service name (minio:9000) as seen from the toolbox.
+    minio_user = os.urandom(12).hex()
+    minio_pass = os.urandom(24).hex()
+    s3_endpoint = "http://minio:9000"
+    s3_region = "us-east-1"
+    s3_bucket = "omni-backups"
+    s3_path = "omni"
 
     with open(OMNI_ENV_PATH, "w") as f:
         f.write("COMPOSE_PROJECT_NAME=omnideploy\n")
@@ -374,6 +401,16 @@ def generate_env(mode):
         f.write(f"HOST_OMNI_DIR={OMNI_STACK_DIR}\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
+        # Local S3 (MinIO) service + S3 client creds (docker-compose.minio.yml
+        # and the toolbox rclone config both interpolate these).
+        f.write(f"MINIO_ROOT_USER={minio_user}\n")
+        f.write(f"MINIO_ROOT_PASSWORD={minio_pass}\n")
+        f.write(f"S3_ACCESS_KEY={minio_user}\n")
+        f.write(f"S3_SECRET_KEY={minio_pass}\n")
+        f.write(f"S3_ENDPOINT={s3_endpoint}\n")
+        f.write(f"S3_REGION={s3_region}\n")
+        f.write(f"S3_BUCKET={s3_bucket}\n")
+        f.write(f"S3_PATH={s3_path}\n")
 
         if mode == "ci":
             for var in ["OMNIAGENT_IMAGE", "DASHBOARD_IMAGE", "TOOLBOX_IMAGE"]:
@@ -387,6 +424,32 @@ def generate_env(mode):
             f.write("TOOLBOX_IMAGE=local/omni-toolbox:latest\n")
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
+
+    # The toolbox backup scripts REQUIRE {OMNI_DIR}/.env to exist (backup.sh
+    # Step 1 copies it to data/credentials/.env under `set -euo pipefail`)
+    # and to carry POSTGRES_PASSWORD for the omniagent pg_dump — the toolbox
+    # container env only exposes PGPASSWORD. Write the S3 + DB creds there so
+    # the local S3 test can back up and restore the omniagent DB. Removed at
+    # deploy end (restore_seed_config) to keep the seed checkout pristine.
+    stack_env = os.path.join(OMNI_STACK_DIR, ".env")
+    # The stack .env is inside the bind-mounted checkout; after a container
+    # run backup.sh restores it as root (cp inside the toolbox), so write it
+    # via tmp + sudo mv (same pattern as remote.yml below).
+    tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".env")
+    tmp.write(f"S3_ACCESS_KEY={minio_user}\n")
+    tmp.write(f"S3_SECRET_KEY={minio_pass}\n")
+    tmp.write(f"S3_ENDPOINT={s3_endpoint}\n")
+    tmp.write(f"S3_REGION={s3_region}\n")
+    tmp.write(f"S3_BUCKET={s3_bucket}\n")
+    tmp.write(f"S3_PATH={s3_path}\n")
+    tmp.write(f"POSTGRES_PASSWORD={p1}\n")
+    tmp.write(f"MM_POSTGRES_PASSWORD={p2}\n")
+    tmp.write(f"COMPOSE_PROFILES=mattermost,noop\n")
+    tmp_path = tmp.name
+    tmp.close()
+    subprocess.run(["sudo", "cp", tmp_path, stack_env], check=True)
+    os.unlink(tmp_path)
+    print(f"[deploy] Generated {stack_env} (local MinIO S3 creds)")
 
     # Seed remote.yml from the tracked seed — the FULL remote plugin manifest
     # (actions, hindsight, paperclip, telegram, test-rust-tool, ...). The
@@ -414,7 +477,9 @@ def generate_env(mode):
         if r.returncode == 0:
             existing = r.stdout
     if remote_yml_content is not None and existing.strip() != remote_yml_content.strip():
-        import tempfile
+        # tempfile is imported at module level (line 21) — do NOT re-import
+        # here: a local `import tempfile` would shadow the module binding and
+        # break the earlier NamedTemporaryFile call in generate_env.
         tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yml")
         tmp.write(remote_yml_content)
         tmp_path = tmp.name
@@ -433,7 +498,8 @@ def generate_env(mode):
 # "omnideploy" via COMPOSE_PROJECT_NAME in omni.env — this guard makes that
 # explicit so a future project-name change can never make deploy wipe the
 # wrong project's data (e.g. the "omni" project volumes from omni-stack).
-DATA_VOLUMES = ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins"]
+DATA_VOLUMES = ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins",
+                "minio-data"]
 DEPLOY_VOLUME_PREFIX = "omnideploy_"
 
 
@@ -873,6 +939,11 @@ def _deploy(mode):
     print("  ALL TESTS PASSED (including shared tool tests)")
     print(f"{'=' * 60}")
 
+    # Step 11b: Local S3 (MinIO) backup/restore/checkpoint test — runs LAST
+    # because restore_backup/restore_checkpoint drop + recreate the omniagent
+    # DB, which would invalidate any subsequent test's data.
+    test_s3_backup_restore(compose)
+
 
 def restore_seed_config():
     """Revert omni-stack TRACKED files to HEAD after a deploy run.
@@ -891,6 +962,11 @@ def restore_seed_config():
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- profiles/omni/config.json profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
+
+    # Remove the deploy-generated stack .env (local MinIO S3 creds). It is
+    # gitignored so git status stays clean either way, but the deploy leaves
+    # a pristine seed checkout — the creds were generated for THIS run only.
+    sh("sudo rm -f /opt/workspace/omni-stack/.env 2>/dev/null; true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious
     # ownership under sudo, which the 2>/dev/null above would otherwise
@@ -950,6 +1026,160 @@ def run_tests(compose=None):
         r = subprocess.run(cmd, stdin=f)
     if r.returncode != 0:
         raise RuntimeError(f"Tests failed (exit={r.returncode})")
+
+
+def test_s3_backup_restore(compose):
+    """Local S3 (MinIO) backup/restore/checkpoint test.
+
+    Exercises the toolbox backup scripts (backup.sh / restore_backup.sh /
+    checkpoint.sh / restore_checkpoint.sh) against the local MinIO service
+    from docker-compose.minio.yml, using the omniagent secrets table as the
+    canary:
+
+      backup flow:   add secret-01 → backup → add secret-02 → restore
+                     → DB last secret must roll back to secret-01
+      checkpoint:    add secret-03 → checkpoint x2 (same YYYYMMDD path)
+                     → add secret-04 → restore_checkpoint YYYYMMDD
+                     → DB last secret must roll back to secret-03
+
+    The MinIO credentials are generated at deploy start (generate_env) and
+    written to both omni.env (compose interpolation) and the stack .env
+    (toolbox backup scripts source it), so the S3 client (rclone in the
+    toolbox container) connects to the local minio.
+    """
+    print("\n" + "=" * 60)
+    print("  S3 BACKUP/RESTORE/CHECKPOINT TEST (local MinIO)")
+    print("=" * 60)
+
+    if not os.path.exists(os.path.join(OMNI_STACK_DIR, "docker-compose.minio.yml")):
+        print("  ⏭  SKIPPED: docker-compose.minio.yml not present in omni-stack")
+        return
+
+    def env_val(name):
+        with open(OMNI_ENV_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1]
+        return None
+
+    s3_bucket = env_val("S3_BUCKET") or "omni-backups"
+    s3_path = env_val("S3_PATH") or "omni"
+
+    # ── 1. Wait for minio health ──────────────────────────────────────────
+    print("\n  [S3] Waiting for minio health...")
+    ok = False
+    for i in range(60):
+        r = run_compose(compose, "exec", "-T", "minio",
+                        "curl", "-sf", "http://localhost:9000/minio/health/live")
+        if r.returncode == 0:
+            ok = True
+            break
+        time.sleep(2)
+    if not ok:
+        raise RuntimeError("minio did not become healthy")
+    print("  ✓ minio healthy")
+
+    # ── 2. Ensure the bucket exists ───────────────────────────────────────
+    r = run_compose(compose, "exec", "-T", "toolbox", "sh", "-c",
+                    f"rclone --config /etc/rclone/rclone.conf mkdir s3-backup:{s3_bucket}")
+    if r.returncode != 0:
+        raise RuntimeError(f"bucket mkdir failed: {r.stdout[-300:]} {r.stderr[-300:]}")
+
+    # ── helpers ───────────────────────────────────────────────────────────
+    def db_last_secret():
+        r = run_compose(compose, "exec", "-T", "postgres", "psql", "-U", "omniagent",
+                        "-d", "omniagent", "-tAc",
+                        "SELECT name FROM secrets ORDER BY id DESC LIMIT 1")
+        return r.stdout.strip()
+
+    def add_secret(name, value):
+        body = json.dumps({"name": name, "fieldType": "text", "value": value})
+        r = run_compose(compose, "exec", "-T", "omniagent", "curl", "-sSf",
+                        "-X", "POST", "-H", "Content-Type: application/json",
+                        "-d", body, "http://localhost:8080/secrets")
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"add secret {name} failed: {r.stdout[-300:]} {r.stderr[-300:]}")
+
+    def wait_omniagent():
+        for i in range(120):
+            r = run_compose(compose, "exec", "-T", "omniagent",
+                            "curl", "-sf", "http://localhost:8080/health")
+            if r.returncode == 0:
+                return
+            time.sleep(2)
+        raise RuntimeError("omniagent not healthy after S3 restore")
+
+    def assert_last(name, stage):
+        got = db_last_secret()
+        if got != name:
+            raise RuntimeError(f"{stage}: expected last secret {name!r}, got {got!r}")
+        print(f"  ✓ {stage}: DB last secret = {name}")
+
+    # Clean slate — the deploy DB may carry secrets created by earlier tests
+    # (plugin configs). Deterministic assertions need an empty secrets table.
+    run_compose(compose, "exec", "-T", "postgres", "psql", "-U", "omniagent",
+                "-d", "omniagent", "-c", "DELETE FROM secrets;")
+
+    # ── 3. Backup flow ────────────────────────────────────────────────────
+    add_secret("secret-01", "value-01")
+    assert_last("secret-01", "after add secret-01")
+
+    print("  [S3] running backup.sh → local minio...")
+    r = run_compose(compose, "exec", "-T", "toolbox", "/usr/bin/backup")
+    if r.returncode != 0:
+        raise RuntimeError(f"backup.sh failed: {r.stdout[-500:]} {r.stderr[-500:]}")
+
+    add_secret("secret-02", "value-02")
+    assert_last("secret-02", "after add secret-02")
+
+    print("  [S3] running restore_backup.sh ← local minio...")
+    r = run_compose(compose, "exec", "-T", "toolbox", "/usr/bin/restore_backup")
+    if r.returncode != 0:
+        raise RuntimeError(f"restore_backup.sh failed: {r.stdout[-500:]} {r.stderr[-500:]}")
+    wait_omniagent()
+    assert_last("secret-01", "after restore_backup")
+
+    # ── 4. Checkpoint flow ────────────────────────────────────────────────
+    add_secret("secret-03", "value-03")
+    assert_last("secret-03", "after add secret-03")
+
+    print("  [S3] running checkpoint.sh (x2) → local minio...")
+    for i in (1, 2):
+        r = run_compose(compose, "exec", "-T", "toolbox", "/usr/bin/checkpoint")
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"checkpoint.sh (run {i}) failed: {r.stdout[-500:]} {r.stderr[-500:]}")
+
+    # Both checkpoints must land in the SAME YYYYMMDD date path.
+    r = run_compose(compose, "exec", "-T", "toolbox", "sh", "-c",
+                    f"rclone --config /etc/rclone/rclone.conf "
+                    f"lsd s3-backup:{s3_bucket}/{s3_path}/checkpoint/")
+    if r.returncode != 0:
+        raise RuntimeError(f"checkpoint lsd failed: {r.stdout[-300:]} {r.stderr[-300:]}")
+    date_dirs = [ln.split()[-1] for ln in r.stdout.splitlines() if ln.strip()]
+    if len(date_dirs) != 1 or len(date_dirs[0]) != 8 or not date_dirs[0].isdigit():
+        raise RuntimeError(f"expected exactly one YYYYMMDD checkpoint dir, got {date_dirs}")
+    ckpt_date = date_dirs[0]
+    print(f"  ✓ two checkpoints share the same date path: {ckpt_date}")
+
+    add_secret("secret-04", "value-04")
+    assert_last("secret-04", "after add secret-04")
+
+    print(f"  [S3] running restore_checkpoint.sh {ckpt_date} ← local minio...")
+    r = run_compose(compose, "exec", "-T", "toolbox", "/usr/bin/restore_checkpoint", ckpt_date)
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"restore_checkpoint.sh failed: {r.stdout[-500:]} {r.stderr[-500:]}")
+    # restore_checkpoint drops/recreates the DB under the running agent —
+    # restart omniagent so its pool reconnects against the restored schema.
+    run_compose_check(compose, "restart", "omniagent",
+                      label="omniagent restart after checkpoint restore")
+    wait_omniagent()
+    assert_last("secret-03", "after restore_checkpoint")
+
+    print("\n  ✓ S3 backup/restore/checkpoint test PASSED")
 
 
 # ═══════════════════════════════════════════════════════════════════════
