@@ -1968,7 +1968,10 @@ def test_install_source(name, source, expected_success=True):
         if not visible:
             print(f"  [WARN: plugin '{name}' not visible via API after wait, attempting install anyway]")
     if expected_success:
-        resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/install", {}, timeout=90)
+        # Install of a remote Rust plugin compiles the binary from source on a
+        # cold cargo cache; observed cold compile ~114s in hybrid mode (no cargo
+        # volume in the production image). Keep 180s so the first compile fits.
+        resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/install", {}, timeout=180)
         _assert_yaml_state(name, ptype, expect_source=source)
         if source == "bundled": _assert_dir_exists(bundled_dir)
         elif source == "remote": _assert_dir_exists(remote_dir)
@@ -1988,7 +1991,9 @@ def test_reinstall_source(name, source, expected_success=True):
         ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
-        resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/reinstall", {}, timeout=90)
+        # Reinstall of a remote Rust plugin recompiles from source; same
+        # cold-cache consideration as install — keep 180s ceiling.
+        resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/reinstall", {}, timeout=180)
         _assert_yaml_state(name, ptype, expect_source=source)
         _assert_remote_yml_unchanged(pre_remote)
     else:
