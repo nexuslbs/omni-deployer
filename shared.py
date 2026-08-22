@@ -822,7 +822,7 @@ def _wait_for_thread(channel_id, timeout=120, since_id=0):
                 body = json.loads(r.stdout)
                 threads = body.get("data", {}).get("threads", [])
                 for t in threads:
-                    ch_id = t.get("channel_id") or (t.get("data") or {}).get("channel_id", "")
+                    ch_id = t.get("channel") or t.get("channel_id") or (t.get("data") or {}).get("channel_id", "")
                     if str(ch_id) == str(channel_id):
                         thread_id = t.get("id", 0) or 0
                         if since_id > 0 and thread_id <= since_id:
