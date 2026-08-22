@@ -464,6 +464,10 @@ def _deploy(mode):
             # The omni profile config: Phase 2 empties allowed_tools then
             # re-adds them in order; a killed run leaves the truncated list.
             "profiles/omni/config.json",
+            # The live agent's hindsight memory watermark — the omnidev/omnideploy
+            # hindsight plugin rewrites it on its own schedule; treat it as live
+            # runtime state, not user work (committed to HEAD so restore is a no-op).
+            "hindsight_watermark.json",
             # Tracked bundled test MCP servers: tests may delete their files
             # (plugin uninstall flows) and a hard-killed run leaves them gone;
             # the final restore (restore_seed_config) also restores these.
@@ -862,7 +866,7 @@ def restore_seed_config():
     sh("cd /opt/workspace/omni-stack && "
        "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
        "config/settings.yml config/workflows.yml config/tasks.yml config/remote.yml "
-       "profiles/omni/config.json "
+       "profiles/omni/config.json hindsight_watermark.json "
        "plugins/tools/test-python plugins/tools/test-js-tool profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
