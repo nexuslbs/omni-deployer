@@ -350,6 +350,11 @@ def generate_env(mode):
     with open(OMNI_ENV_PATH, "w") as f:
         f.write("COMPOSE_PROJECT_NAME=omnideploy\n")
         f.write("COMPOSE_PROFILES=mattermost,noop\n")
+        # omnideploy (deploy/ci/hybrid) binds the omni-stack checkout at
+        # /opt/omni — the compose mount interpolates HOST_OMNI_DIR. This is
+        # the ONE launcher that maps to omni-stack; omnidev/omnistable map to
+        # omni-root (see shared.generate_env).
+        f.write(f"HOST_OMNI_DIR={OMNI_STACK_DIR}\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
 

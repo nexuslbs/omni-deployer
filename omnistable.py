@@ -46,17 +46,21 @@ from shared import BORD
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/opt/workspace")
-OMNI_STACK_DIR = os.path.join(WORKSPACE_DIR, "omni-stack")
+# The omnistable stack runs its data dir (config/profiles/wiki/memories) from the
+# omni-root mirror repo, NOT omni-stack. omni-stack stays the deploy/omnideploy
+# data dir (deploy.py). Both repos are kept identical in content; the stack just
+# binds the omni-root checkout.
+OMNI_ROOT_DIR = os.path.join(WORKSPACE_DIR, "omni-root")
 
 settings = shared.Settings(
     env_path=os.path.join(SCRIPT_DIR, "omnistable.env"),
-    compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
+    compose_file=os.path.join(OMNI_ROOT_DIR, "docker-compose.yml"),
     dev_overlay=None,  # stable mode — pull production GHCR images, no source build
     project_name="omnistable",
     container="omnistable-omniagent-1",
     setup_channel="stable-channel",
     base_url="http://localhost:8080",
-    omni_stack_dir=OMNI_STACK_DIR,
+    omni_stack_dir=OMNI_ROOT_DIR,
     workspace_dir=WORKSPACE_DIR,
     script_dir=SCRIPT_DIR,
     # use_api=False (docker-exec mode): the host cannot reach localhost:8080

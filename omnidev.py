@@ -22,16 +22,20 @@ from shared import BORD
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/opt/workspace")
-OMNI_STACK_DIR = os.path.join(WORKSPACE_DIR, "omni-stack")
+# The omnidev stack runs its data dir (config/profiles/wiki/memories) from the
+# omni-root mirror repo, NOT omni-stack. omni-stack stays the deploy/omnideploy
+# data dir (deploy.py). Both repos are kept identical in content; the stack just
+# binds the omni-root checkout.
+OMNI_ROOT_DIR = os.path.join(WORKSPACE_DIR, "omni-root")
 
 settings = shared.Settings(
     env_path=os.path.join(SCRIPT_DIR, "omnidev.env"),
-    compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
-    dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml"),
+    compose_file=os.path.join(OMNI_ROOT_DIR, "docker-compose.yml"),
+    dev_overlay=os.path.join(OMNI_ROOT_DIR, "docker-compose.dev.yml"),
     project_name="omnidev",
     container="omnidev-omniagent-1",
     setup_channel="dev-channel",
-    omni_stack_dir=OMNI_STACK_DIR,
+    omni_stack_dir=OMNI_ROOT_DIR,
     workspace_dir=WORKSPACE_DIR,
     script_dir=SCRIPT_DIR,
     use_api=False,

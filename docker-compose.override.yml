@@ -1,3 +1,0 @@
-services:
-  omniagent:
-    command: ["/target/release/omniagent"]
