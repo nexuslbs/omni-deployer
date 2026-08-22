@@ -1,0 +1,42 @@
+tools:
+  actions:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: tools/actions
+  hindsight:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: tools/hindsight
+  mcp-everything:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  mcp-fetch:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  mcp-filesystem:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  mcp-git:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  mcp-memory:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  mcp-sequentialthinking:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  mcp-time:
+    url: https://github.com/modelcontextprotocol/servers.git
+    path: ''
+  paperclip:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: tools/paperclip
+  test-rust-tool:
+    url: file:///opt/workspace/omni-plugins
+    path: tools/test-rust-tool
+platforms:
+  telegram:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: platforms/telegram
+providers:
+  noop:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: providers/noop-full

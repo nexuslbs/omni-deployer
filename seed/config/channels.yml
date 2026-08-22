@@ -1,0 +1,71 @@
+channels:
+  mattermost-d6bmh64b:
+    platform: mattermost
+    resource_identifier: d6bmh64bk7foukhw31ga4rhm3a
+    profile: omni
+  mattermost-i7bourg8:
+    platform: mattermost
+    resource_identifier: i7bourg8rjdoieuqrsmdzr9pnr
+    profile: omni
+    closed: false
+  mattermost-stable-channel:
+    platform: mattermost
+    resource_identifier: ernjtuja9jbwukd5oy4c3gic5w
+    profile: omni
+    model: deepseek-v4-flash
+    provider: deepseek
+    closed: false
+    plan: false
+  kanban:
+    resource_identifier: kanban
+    profile: omni
+  mattermost-setup:
+    platform: mattermost
+    resource_identifier: e866f4m84pnj8mttsdmcojx6jo
+    profile: omni
+    closed: false
+  cron:
+    resource_identifier: cron
+    profile: omni
+  g30-b:
+    resource_identifier: g30-b
+    profile: omni
+  hooks:
+    resource_identifier: hooks
+    profile: omni
+  mattermost-af66ardb:
+    platform: mattermost
+    resource_identifier: af66ardbd3dffe7gwxnokzi19c
+    profile: omni
+  mattermost-dev-channel:
+    platform: mattermost
+    resource_identifier: 99gd9n4w6ffhjbocz9sdt75wjc
+    profile: omni
+    model: deepseek-v4-flash
+    provider: deepseek
+    closed: false
+    plan: false
+  test-channel:
+    platform: mattermost
+    resource_identifier: tsqpkwdf73n37qki351jbwi43e
+    profile: omni
+    model: test-tool-caller
+    provider: noop
+    closed: false
+  g30-a:
+    resource_identifier: g30-a
+    profile: omni
+  mattermost-mg5cjsh5:
+    platform: mattermost
+    resource_identifier: mg5cjsh5ujyxtd5nk7b5d5yx1e
+    profile: omni
+    model: test-tool-caller
+    provider: noop
+    closed: false
+  mm-kanban:
+    platform: mattermost
+    resource_identifier: 9wwe8sxyofgwtq1d78zxn7moyy
+    profile: omni
+    model: deepseek-v4-flash
+    provider: deepseek
+    closed: false

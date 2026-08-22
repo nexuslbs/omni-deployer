@@ -1,0 +1,36 @@
+schedules: {}
+hooks:
+  wiki-maintenance:
+    enabled: true
+    channel: hooks
+    event: thread_finished
+    scope: profile
+    count: 10
+    prompt: |-
+      Profile-scoped wiki/templates/skills maintenance.
+      Follow the "wiki-maintenance" skill of the active profile (profiles/omni/skills/wiki-maintenance.md). Use the Event JSON below:
+      - last_thread / last_message: the ids of the previous trigger's thread
+        and its last message (null on the first trigger).
+      - current_thread / current_message: the ids of the thread that triggered
+        this hook and its last message.
+      - channel: the channel of the triggering thread. - profile: the profile of the triggering thread.
+      Read the thread contents of the threads between last_thread and current_thread (both inclusive) and IGNORE every thread after current_thread. You MAY look at threads before last_thread for context, especially nearby ones, but base your changes on the threads between the two ids. Look ONLY at threads of the profile named in the Event JSON.
+      Create/update wiki files and skills, and create/delete/merge skills and wiki files of the RESPECTIVE PROFILE ONLY (the profile in the Event JSON). You may UPDATE existing templates of that profile, but do NOT create, delete or merge templates. Avoid template updates unless REALLY important: templates are small and included in every prompt — keep only the most relevant info; weigh whether an update is REALLY valuable before doing it.
+    mode: agentic
+  channel-summaries:
+    enabled: true
+    channel: hooks
+    event: thread_finished
+    scope: channel
+    count: 10
+    prompt: |-
+      Channel-scoped summaries.
+      Follow the "channel-summary" skill of the active profile (profiles/omni/skills/channel-summary.md). Use the Event JSON below:
+      - last_thread / last_message: the ids of the previous trigger's thread
+        and its last message (null on the first trigger).
+      - current_thread / current_message: the ids of the thread that triggered
+        this hook and its last message.
+      - channel: the channel of the triggering thread. - profile: the profile of the triggering thread.
+      Read the thread contents of the threads between last_thread and current_thread (both inclusive) and IGNORE every thread after current_thread. You MAY look at threads before last_thread for context, especially nearby ones, but base the summary on the threads between the two ids. Look ONLY at threads of the channel named in the Event JSON.
+      Create a structured summary and save it to the summaries table with the memory_save-summary tool: channel_id = the channel in the Event JSON, next_thread_id = current_thread, content = the generated summary text.
+    mode: agentic

@@ -163,6 +163,23 @@ def ensure_git_safe_dirs():
 
 ensure_git_safe_dirs()
 
+# shared.py helpers (cleanup_runtime_state / verify_runtime_clean /
+# ensure_seed_config / run_tests) all need initialized settings. Init once at
+# module level with the deploy's Settings; run_tests() below reuses this.
+shared_settings = shared.Settings(
+    env_path=OMNI_ENV_PATH,
+    compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
+    dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml"),
+    project_name="omnideploy",
+    container="omnideploy-omniagent-1",
+    setup_channel="setup",
+    omni_stack_dir=OMNI_STACK_DIR,
+    workspace_dir=WORKSPACE_DIR,
+    script_dir=SCRIPT_DIR,
+    use_api=False,
+)
+shared.init(shared_settings)
+
 
 def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
@@ -371,24 +388,26 @@ def generate_env(mode):
 
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
-    # Seed remote.yml from omni-stack HEAD — the FULL remote plugin manifest
+    # Seed remote.yml from the tracked seed — the FULL remote plugin manifest
     # (actions, hindsight, paperclip, telegram, test-rust-tool, ...). The
-    # bind-mounted plugins.yml (also from HEAD) enables actions/telegram/etc.
+    # bind-mounted plugins.yml (also from seed) enables actions/telegram/etc.
     # as source: remote, so the deploy env must carry the same remote.yml a
     # real deployment has — otherwise those plugins resolve to
     # status=not_found and the live-plugin tests (GROUP 37/40/41, t6 platform)
     # fail. plugin_tests also needs test-rust-tool registered.
+    # config/ is runtime-only now (gitignored); the seed lives in
+    # omni-deployer/seed/config (see shared.ensure_seed_config).
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "config", "remote.yml")
     # Ensure .remote/ directories are clean before seeding (prevents stale git state)
     for subdir in ["tools", "platforms", "providers"]:
         remote_dir = os.path.join(OMNI_STACK_DIR, "plugins", subdir, ".remote")
         if os.path.isdir(remote_dir):
             subprocess.run(["rm", "-rf", remote_dir], capture_output=True)
-    r = subprocess.run(["git", "show", "HEAD:config/remote.yml"],
-                       cwd=OMNI_STACK_DIR, capture_output=True, text=True, timeout=10)
+    r = subprocess.run(["cat", os.path.join(shared.seed_config_dir(), "remote.yml")],
+                       capture_output=True, text=True, timeout=10)
     remote_yml_content = r.stdout if r.returncode == 0 else None
     if remote_yml_content is None:
-        print("[deploy] WARNING: could not read HEAD:config/remote.yml — leaving remote.yml untouched")
+        print("[deploy] WARNING: could not read seed config/remote.yml — leaving remote.yml untouched")
     existing = ""
     if remote_yml_content is not None and os.path.exists(remote_yml_path):
         r = subprocess.run(["cat", remote_yml_path], capture_output=True, text=True, timeout=10)
@@ -463,26 +482,15 @@ def _deploy(mode):
     dirty_lines = r.stdout.splitlines()
     if dirty_lines:
         KNOWN_RESIDUE = {
-            "config/actions.yml", "config/channels.yml", "config/plugins.yml",
-            "config/settings.yml", "config/workflows.yml",
-            "config/remote.yml", "config/tasks.yml", "profiles/omni/wiki/relevant-index.md",
             # The omni profile config: Phase 2 empties allowed_tools then
             # re-adds them in order; a killed run leaves the truncated list.
             "profiles/omni/config.json",
-            # The live agent's hindsight memory watermark — the omnidev/omnideploy
-            # hindsight plugin rewrites it on its own schedule; treat it as live
-            # runtime state, not user work (committed to HEAD so restore is a no-op).
-            "hindsight_watermark.json",
-            # Tracked bundled test MCP servers: tests may delete their files
-            # (plugin uninstall flows) and a hard-killed run leaves them gone;
-            # the final restore (restore_seed_config) also restores these.
-            "plugins/tools/test-python/mcp-config.json",
-            "plugins/tools/test-python/plugin.json",
-            "plugins/tools/test-python/server.py",
-            "plugins/tools/test-js-tool/mcp-config.json",
-            "plugins/tools/test-js-tool/plugin.json",
-            "plugins/tools/test-js-tool/server.js",
-            "plugins/tools/tsconfig.json",
+            # The wiki relevant-index is rewritten by the relevance-indexer /
+            # actions tests; a killed run leaves it modified.
+            "profiles/omni/wiki/relevant-index.md",
+            # config/*, hindsight_watermark.json and plugins/* are NOT tracked
+            # anymore (runtime-only, gitignored seed checkouts) — they never
+            # appear as tracked dirt, so nothing to auto-restore here.
         }
         tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
         untracked = [ln[3:].strip() for ln in dirty_lines if ln.startswith("??")]
@@ -527,6 +535,22 @@ def _deploy(mode):
        "sudo git clean -fdX -- plugins/tools plugins/platforms plugins/providers 2>/dev/null; "
        "sudo git clean -fd -- plugins/tools plugins/platforms plugins/providers 2>/dev/null; "
        "true")
+
+    # ── Runtime-state gate (user rule 2026-08-22) ──────────────────────────
+    # omni-stack is a SEED checkout: config/, plugins/ and any profiles/ dir
+    # other than omni/ are runtime-only state — never part of the repo. dev
+    # regenerates everything from the tracked seed + the plugin API (temporary
+    # during the deploy, removed at the end); hybrid/ci require a pristine
+    # checkout and fail fast otherwise.
+    if mode == "dev":
+        print("\n[deploy] Cleaning runtime state before dev deploy...")
+        shared.cleanup_runtime_state(OMNI_STACK_DIR)
+    else:
+        print("\n[deploy] Verifying checkout is pristine (hybrid/ci)...")
+        shared.verify_runtime_clean(OMNI_STACK_DIR)
+    # Seed the runtime config/ from the tracked seed (omni-deployer/seed/config).
+    print("\n[deploy] Seeding config/ from tracked seed...")
+    shared.ensure_seed_config(OMNI_STACK_DIR)
 
     # deploy.py (project "omnideploy") tears down the launcher stacks
     # BEFORE starting its own — CI wants a clean slate (fresh runner, nothing
@@ -796,14 +820,19 @@ def _deploy(mode):
 
     # Step 10: Python integration tests (2 passes, no retry — tests must be robust)
     for pass_num in [1, 2]:
-        # Before each tests.py invocation, clean transient artifacts
-        # (plugins.yml, remote.yml, actions.yml, settings.yml) from the
-        # bind-mounted omni-stack directory so check_git_clean() never
-        # fails on retries. tasks.yml is intentionally NOT restored here:
-        # clear_deploy_tasks() emptied it at deploy start so no real-LLM
-        # hook/schedule thread can spawn during tests; restoring HEAD now
-        # would re-arm the seeded hooks mid-deploy.
-        r = sh("cd /opt/workspace/omni-stack && git checkout HEAD -- config/plugins.yml config/remote.yml config/actions.yml config/settings.yml config/workflows.yml 2>/dev/null; true")
+        # Before each tests.py invocation, re-assert the SEED content of the
+        # transient config files (plugins.yml, remote.yml, actions.yml,
+        # settings.yml, workflows.yml) in the bind-mounted omni-stack config/
+        # so a re-run starts from a known state (config/ is runtime-only now —
+        # nothing is git-restored; the tracked seed is the source of truth).
+        # tasks.yml is intentionally NOT re-seeded here: clear_deploy_tasks()
+        # emptied it at deploy start so no real-LLM hook/schedule thread can
+        # spawn during tests; re-seeding would re-arm the hooks mid-deploy.
+        shared.ensure_seed_config(
+            OMNI_STACK_DIR,
+            overwrite_files=["plugins.yml", "remote.yml", "actions.yml",
+                             "settings.yml", "workflows.yml"],
+        )
         # Re-assert the empty tasks.yml (tests.py's own hook tests may have
         # added entries during the previous pass — they clean up, but the
         # deploy contract is ZERO tasks at all times).
@@ -833,19 +862,11 @@ def _deploy(mode):
     print(f"\n{'=' * 60}")
     print("  SHARED TOOL TESTS (Phase 1 + Phase 2)")
     print(f"{'=' * 60}")
-    shared_settings = shared.Settings(
-        env_path=OMNI_ENV_PATH,
-        compose_file=os.path.join(OMNI_STACK_DIR, "docker-compose.yml"),
-        dev_overlay=os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml") if mode == "dev" else None,
-        project_name="omnideploy",
-        container="omnideploy-omniagent-1",
-        setup_channel="setup",
-        omni_stack_dir=OMNI_STACK_DIR,
-        workspace_dir=WORKSPACE_DIR,
-        script_dir=SCRIPT_DIR,
-        use_api=False,
+    # shared_settings was initialized at module level; only the dev overlay
+    # is mode-dependent.
+    shared_settings.dev_overlay = (
+        os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml") if mode == "dev" else None
     )
-    shared.init(shared_settings)
     shared.run_tests()
 
     print(f"\n{'=' * 60}")
@@ -854,14 +875,13 @@ def _deploy(mode):
 
 
 def restore_seed_config():
-    """Revert omni-stack tracked config to HEAD after a deploy run.
+    """Revert omni-stack TRACKED files to HEAD after a deploy run.
 
     The tree was verified clean at Step 0.5, so every tracked change present
-    now is test/deploy-created (tasks.yml cleared by clear_deploy_tasks,
-    channels.yml noop pin, API PUTs, plugin toggles, wiki index rewrites).
-    workflows.yml is TRACKED in omni-stack (omniagent reads it as the
-    workflow config) — the post-test sweep rm -f's it, so it MUST be restored
-    here or the next run's Step 0.5 fails on a dirty tree.
+    now is test/deploy-created (profile config.json truncation, wiki
+    relevant-index rewrites). config/*, hindsight_watermark.json and
+    plugins/* are runtime-only (gitignored) — they are removed by
+    cleanup_runtime_state(), never git-restored.
 
     Runs on BOTH success and failure paths (deploy() wraps its body in a
     finally that calls this), so a mid-deploy crash never leaves the bind
@@ -869,10 +889,7 @@ def restore_seed_config():
     """
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     sh("cd /opt/workspace/omni-stack && "
-       "sudo git checkout HEAD -- config/actions.yml config/channels.yml config/plugins.yml "
-       "config/settings.yml config/workflows.yml config/tasks.yml config/remote.yml "
-       "profiles/omni/config.json hindsight_watermark.json "
-       "plugins/tools/test-python plugins/tools/test-js-tool profiles/omni/wiki/relevant-index.md 2>/dev/null; "
+       "sudo git checkout HEAD -- profiles/omni/config.json profiles/omni/wiki/relevant-index.md 2>/dev/null; "
        "true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious
@@ -891,12 +908,13 @@ def restore_seed_config():
 def deploy(mode):
     """Run the deploy, ALWAYS restoring the seed config when it ends.
 
-    deploy.py mutates tracked omni-stack config as a side effect of testing
-    (tasks.yml cleared, channels.yml noop pin, plugin toggles, API PUTs).
-    The seed restore must therefore run whether the deploy succeeded or
-    crashed mid-way — otherwise the bind mount stays dirty and the NEXT
-    run's Step 0.5 fails. A hard kill (SIGKILL/OOM) can still skip this
-    finally; Step 0.5's known-residue auto-restore covers that case.
+    deploy.py mutates tracked omni-stack state as a side effect of testing
+    (profile config.json truncation, wiki relevant-index rewrites) and creates
+    runtime-only state (config/, plugins/, extra profiles). The seed restore +
+    runtime cleanup must therefore run whether the deploy succeeded or crashed
+    mid-way — otherwise the bind mount stays dirty and the NEXT run's Step 0.5
+    fails. A hard kill (SIGKILL/OOM) can still skip this finally; Step 0.5's
+    known-residue auto-restore covers that case.
     """
     try:
         _deploy(mode)
@@ -908,6 +926,13 @@ def deploy(mode):
             # with a restore failure. The next run's Step 0.5 will surface
             # any remaining dirt with a clear message.
             print(f"  [WARNING: seed restore failed: {e}]")
+        try:
+            # Per user rule: ALL deploy modes end with a pristine seed
+            # checkout — config/, plugins/ and any extra profiles are
+            # runtime-only and removed when the deploy ends.
+            shared.cleanup_runtime_state(OMNI_STACK_DIR)
+        except Exception as e:
+            print(f"  [WARNING: runtime-state cleanup failed: {e}]")
 
 
 def run_tests(compose=None):

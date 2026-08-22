@@ -1,0 +1,68 @@
+# Settings for OmniAgent
+# Values support $env:VAR and $secret:NAME refs.
+
+general:
+  condense_keep_turns: 4
+  delete_after_days: 30
+  default_provider: deepseek
+  llm_provider: deepseek
+  max_inline_file_kb: 100
+  max_tokens: 16384
+  max_tokens_on_truncation: 65536
+  max_unfinished_subtask_retries: 3
+  soul_max_chars: 1000
+  state_block_update_interval: 5
+  kanban_dispatcher_interval: 15
+  temperature: 0.7
+  tokenizer_encoding: gpt-4
+  read_keep_last: 3
+  read_excerpt_chars: 2000
+  auto_note_max_chars: 24000
+  auto_note_entry_chars: 3000
+
+execution:
+  max_iterations_no_plan: 150
+  max_iterations_plan: 300
+  tool_bg_secs: 5
+
+prompt:
+  prompt_compact_messages_tool: prompt_compact-messages
+  prompt_generate_tool: prompt_generate
+  prompt_log_level: all
+  prompt_tool_excerpt_chars: 800
+  prompt_total_excerpt_cap: 4000
+  prompt_read_excerpt_chars: 2000
+
+memory:
+  memory_max_chars: 5000
+  messages_vectorization_api_key: ''
+  messages_vectorization_api_model: ''
+  messages_vectorization_api_url: ''
+  messages_vectorization_interval: 5
+  messages_vectorization_method: local
+  messages_vectorization_protocol: openai
+  vectorize_messages: true
+  vectorize_wiki: false
+  wiki_vectorization_api_key: ''
+  wiki_vectorization_api_model: ''
+  wiki_vectorization_api_url: ''
+  wiki_vectorization_interval: 3600
+  wiki_vectorization_method: local
+  wiki_vectorization_protocol: openai
+
+channels:
+  default_cli_channel: ''
+  default_schedule_channel: cron
+  default_hook_channel: ''
+  default_kanban_channel: kanban
+
+unsorted:
+  max_pool_connections: 5
+  old_message_token_budget: 100000
+  prompt_token_budget_hard: 500000
+  prompt_token_budget_soft: 100000
+  prompt_token_safety_factor: 15.0
+  sub_prompt_iteration_percent: 50
+  sub_prompt_max_chars: 4000
+  watchdog_default: ''
+

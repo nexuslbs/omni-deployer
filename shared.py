@@ -698,6 +698,14 @@ def setup():
     mode = "stable" if not s.dev_overlay else "dev"
     generate_env(mode)
 
+    # Ensure the runtime config/ exists (seed from omni-deployer/seed/config).
+    # config/ is gitignored runtime state in omni-root/omni-stack — a fresh
+    # checkout has none and must run with zero manual intervention. Existing
+    # live config (channels/boards the agent wrote) is preserved: only MISSING
+    # seed files are copied.
+    print("\n[Ensuring seed config...]")
+    ensure_seed_config(s.omni_stack_dir)
+
     # Stop any existing stack
     stop_stack()
 
@@ -853,6 +861,128 @@ def seed_remote_plugins():
         else:
             print(f"  ! {plugin_type}/{name}: could not install from any source")
     print(f"  [seed_remote_plugins: {installed}/{len(entries)} plugins ready]")
+
+
+# ── Runtime state vs seed ────────────────────────────────────────────────────
+# User rule 2026-08-22: omni-stack/omni-root are SEED repos — they carry only
+# the minimal entrypoint (compose) + services + profiles/omni. config/ and
+# plugins/ are RUNTIME state (gitignored): generated at setup/deploy time from
+# the tracked seed (omni-deployer/seed/config) + the plugin API (install-git),
+# and removed when a deploy ends. profiles/omni is the live profile and is
+# ALWAYS kept; any other profiles/ dir is scratch and must not exist.
+
+def seed_config_dir():
+    """Location of the tracked seed config (omni-deployer/seed/config)."""
+    s = sett()
+    return os.path.join(s.script_dir, "seed", "config")
+
+
+def ensure_seed_config(stack_dir=None, overwrite_files=None):
+    """Ensure {stack_dir}/config exists with the seed config files.
+
+    config/ is gitignored runtime state in omni-stack/omni-root; the tracked
+    seed lives in omni-deployer/seed/config. Called by setup() (launcher
+    chains) and deploy.py at the start of a deploy so a fresh checkout runs
+    with zero manual intervention.
+
+    Missing seed files are always copied; existing files are left untouched
+    UNLESS named in overwrite_files (deploy re-asserts the exact seed content
+    mid-run after tests mutate them). Live agent state (channels/boards the
+    agent wrote) is never clobbered.
+    """
+    s = sett()
+    stack_dir = stack_dir or s.omni_stack_dir
+    seed_dir = seed_config_dir()
+    if not os.path.isdir(seed_dir):
+        print(f"  [ensure_seed_config: no seed dir {seed_dir} — nothing to seed]")
+        return None
+    target = os.path.join(stack_dir, "config")
+    os.makedirs(target, exist_ok=True)
+    # The bind mount is root-owned after a container run; write via tmp + sudo mv.
+    overwrite = set(overwrite_files or [])
+    copied = 0
+    for name in sorted(os.listdir(seed_dir)):
+        src = os.path.join(seed_dir, name)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(target, name)
+        if os.path.exists(dst) and name not in overwrite:
+            continue
+        tmp = dst + ".seed-tmp"
+        sh(f"cp -f {src} {tmp}")
+        sh(f"sudo mv -f {tmp} {dst}")
+        copied += 1
+    if copied:
+        print(f"  [ensure_seed_config: seeded {copied} file(s) into {target}]")
+    else:
+        print(f"  [ensure_seed_config: {target} already seeded — untouched]")
+    return target
+
+
+def cleanup_runtime_state(stack_dir=None):
+    """Remove runtime-only state from a data-dir checkout.
+
+    Removes config/, plugins/, any profiles/ dir other than omni/, and the
+    root-level runtime config artifacts (actions.yml/plugins.yml/remote.yml/
+    settings.yml/workflows.yml — gitignored leftovers). Used by deploy.py at
+    the START of dev (regenerates everything from seed + plugin API) and at
+    the END of ALL modes (deploy leaves a pristine seed checkout).
+    """
+    s = sett()
+    stack_dir = stack_dir or s.omni_stack_dir
+    removed = []
+    for sub in ("config", "plugins"):
+        p = os.path.join(stack_dir, sub)
+        if os.path.isdir(p):
+            sh(f"sudo rm -rf -- {p}")
+            removed.append(sub)
+    for name in ("actions.yml", "plugins.yml", "remote.yml", "settings.yml",
+                 "workflows.yml", ".taskj-channels.patch"):
+        p = os.path.join(stack_dir, name)
+        if os.path.isfile(p) or os.path.islink(p):
+            sh(f"sudo rm -f -- {p}")
+            removed.append(name)
+    profiles_dir = os.path.join(stack_dir, "profiles")
+    if os.path.isdir(profiles_dir):
+        for name in sorted(os.listdir(profiles_dir)):
+            if name == "omni":
+                continue
+            p = os.path.join(profiles_dir, name)
+            sh(f"sudo rm -rf -- {p}")
+            removed.append(f"profiles/{name}")
+    if removed:
+        print(f"  [cleanup_runtime_state: removed {', '.join(removed)}]")
+    else:
+        print("  [cleanup_runtime_state: nothing to remove]")
+
+
+def verify_runtime_clean(stack_dir=None):
+    """Raise if a data-dir checkout carries runtime state it should not.
+
+    deploy.py hybrid/ci require a pristine seed checkout BEFORE the deploy:
+    if config/ or plugins/ exist, or profiles/ has any dir other than omni/,
+    fail fast — the deploy would otherwise discard unknown state.
+    """
+    s = sett()
+    stack_dir = stack_dir or s.omni_stack_dir
+    problems = []
+    for sub in ("config", "plugins"):
+        if os.path.isdir(os.path.join(stack_dir, sub)):
+            problems.append(f"{stack_dir}/{sub} exists")
+    profiles_dir = os.path.join(stack_dir, "profiles")
+    if os.path.isdir(profiles_dir):
+        for name in sorted(os.listdir(profiles_dir)):
+            if name != "omni":
+                problems.append(
+                    f"{stack_dir}/profiles/{name} exists (only profiles/omni is allowed)"
+                )
+    if problems:
+        raise RuntimeError(
+            "Runtime state present in checkout — hybrid/ci require a pristine "
+            "seed checkout (config/ and plugins/ are generated during the "
+            "deploy and removed at the end).\n" + "\n".join(problems)
+        )
+    print("  [verify_runtime_clean: checkout is pristine (no config/, plugins/, or extra profiles)]")
 
 
 # ── Agent test ────────────────────────────────────────────────────────────────

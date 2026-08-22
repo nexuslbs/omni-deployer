@@ -1,0 +1,42 @@
+# Kanban boards (omnidev dev config — feature gate)
+# A board groups kanban tasks and carries default execution options
+# (channel, profile, workflow, plan, ...). The kanban board feature is
+# ACTIVE only while this file exists; omnistable has no boards.yml, so
+# all kanban behavior there is unchanged.
+#
+# Resolution order for a thread created from a kanban task:
+#   Workflow Role > Workflow > Kanban Task > Board > Channel > Global Settings
+# (boards.yml fields act as the task's fallback when the task does not set
+# the option; the resolved channel's settings and global settings still
+# apply below the board).
+boards:
+  main:
+    channel: kanban
+    profile: omni
+    workflow: omniagent-dev
+    plan: false
+  dev:
+    channel: mattermost-stable-channel
+    profile: omni
+    workflow: omniagent-dev
+    plan: true
+  # omnidev — the board for ALL new omniagent development tasks. The dev
+  # workflow (omniagent-dev) is defined AT THE BOARD level; tasks created
+  # on this board carry NO workflow_id/channel_id/profile of their own and
+  # fall back to the board's defaults (workflow omniagent-dev, channel
+  # mm-kanban, profile omni, plan true). This keeps the
+  # board as the single source of truth for where/how dev work runs.
+  omnidev:
+    channel: mm-kanban
+    profile: omni
+    workflow: omniagent-dev
+    plan: true
+  # Workflow-less board for PLAIN kanban tasks (no workflow_id). Boards
+  # main/dev carry workflow: omniagent-dev, which the resolution chain
+  # would inject into a task that does not set its own workflow_id — turning
+  # a "plain" task into a workflow task. The deploy integration suite tests
+  # the plain-task path (GROUP 26/29), so it needs a board that leaves the
+  # task plain (channel/profile still resolve; workflow stays NULL).
+  plain:
+    channel: kanban
+    profile: omni

@@ -1,0 +1,47 @@
+# Provider/model overrides — pure definition file (NO plugin code).
+# Loaded from {OMNI_DIR}/config/models.yml at startup. Absent/empty = zero
+# behavior change. Malformed = startup fails with a clear error.
+#
+# Semantics:
+#   providers.<name>.plugin  true/name -> use the provider plugin (plugins.yml);
+#                            false     -> builtin chat_completions/anthropic support
+#   providers.<name>.models  replaces the plugin's default_model.allowed_values
+#                            in selectors (channels page, providers page, /models)
+#   Provider-level fields (api_mode, supports_reasoning, default_base_url,
+#     refresh_url, default_model, api_key, token_budget_*, max_tokens*) override
+#     the plugin config.
+#   model_config.<model>     per-model overrides — highest precedence.
+#
+# Precedence for EACH of soft/hard token budget INDEPENDENTLY:
+#   model_config.<model> > providers.<name> > global settings
+#   (prompt_token_budget_soft default 100000 / hard 500000).
+# max_tokens / max_tokens_on_truncation follow the same chain.
+#
+# api_key supports $env:VAR and $secret:NAME (same expansion as plugins.yml).
+
+providers:
+  # Override the deepseek provider plugin: fix the (wrong) hardcoded model list
+  # without touching the plugin — selectors now show the real models.
+  deepseek:
+    plugin: true
+    models: ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "deepseek-v4-pro"]
+
+  # Plugin-less provider: works via builtin chat_completions/anthropic support.
+  # No plugin needed — appears in provider selects and can be used on threads.
+  # my_provider_01:
+  #   plugin: false
+  #   api_mode: "chat_completions"
+  #   supports_reasoning: true
+  #   default_base_url: "http://noop-provider:9090/v1"
+  #   refresh_url: "https://api.deepseek.com/v1/models"
+  #   default_model: "test-model-1"
+  #   api_key: "$secret:MY_SECRET"
+  #   models: ["my_model_01", "my_model_02", "my_model_03"]
+  #   model_config:
+  #     my_model_02:
+  #       api_mode: "anthropic"
+  #       supports_reasoning: false
+  #       token_budget_soft: 200000
+  #       token_budget_hard: 1000000
+  #       max_tokens: 32000
+  #       max_tokens_on_truncation: 128000

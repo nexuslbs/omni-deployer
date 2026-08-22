@@ -1105,20 +1105,26 @@ def test_3():
     try:
         resp = api_delete(f"/plugins/{ptype}/remote/{name}")
     finally:
-        # Restore YAML state so download API can find the entry
-        if os.path.exists(plugins_yml_bak):
-            shutil.copy2(plugins_yml_bak, f"{WORKSPACE}/config/plugins.yml")
-            os.remove(plugins_yml_bak)
+        # Restore remote.yml FIRST — the delete also removes the entry from
+        # remote.yml and the download endpoint needs it to re-clone.
         if os.path.exists(remote_yml_bak):
             shutil.copy2(remote_yml_bak, f"{WORKSPACE}/config/remote.yml")
             os.remove(remote_yml_bak)
         # Use download API to restore .remote/ directory from git instead of
         # manually copying files: also validates the download endpoint works
-        # with a proper remote.yml + plugins.yml entry
+        # with a proper remote.yml entry
         try:
             api_post(f"/plugins/{ptype}/remote/{name}/download", {})
         except Exception as e:
             print(f"  [WARN: download restore failed: {e}]")
+        # Restore plugins.yml LAST — the download handler rewrites the
+        # plugin's plugins.yml entry with an EMPTY config (remote.yml carries
+        # only url/path, not config), wiping config refs. Restoring the backup
+        # afterwards + restarting re-reads the original entry.
+        if os.path.exists(plugins_yml_bak):
+            shutil.copy2(plugins_yml_bak, f"{WORKSPACE}/config/plugins.yml")
+            os.remove(plugins_yml_bak)
+        restart_agent()
 
 # ── Test 4: Built-in in plugins.yml → error ──────────────────────────
 
@@ -1143,11 +1149,44 @@ def test_5():
 # ── Test 6: Remote in plugins.yml → succeed ──────────────────────────
 
 def test_6():
-    """Remote (in YAML) → succeed"""
+    """Remote (in YAML) → succeed, RESTORE state for subsequent tests.
+
+    The first remote plugin found can be a CRITICAL one (e.g. `actions`,
+    needed by GROUP 37/40/41). Deleting it without restoring leaves the
+    suite broken — restore YAML entries + re-clone the .remote/ dir exactly
+    like test_3 does (config/ is runtime-only now: there is no git restore
+    to fall back on between groups)."""
     name, ptype = find_plugin("remote", skip_duplicated=False)
     if not name:
         return
-    resp = api_delete(f"/plugins/{ptype}/remote/{name}")
+    remote_yml_bak = f"{WORKSPACE}/config/remote.yml.bak"
+    plugins_yml_bak = f"{WORKSPACE}/config/plugins.yml.bak"
+    shutil.copy2(f"{WORKSPACE}/config/remote.yml", remote_yml_bak)
+    shutil.copy2(f"{WORKSPACE}/config/plugins.yml", plugins_yml_bak)
+    try:
+        resp = api_delete(f"/plugins/{ptype}/remote/{name}")
+    finally:
+        # Restore remote.yml FIRST — the delete also removes the entry from
+        # remote.yml and the download endpoint needs it to re-clone.
+        if os.path.exists(remote_yml_bak):
+            shutil.copy2(remote_yml_bak, f"{WORKSPACE}/config/remote.yml")
+            os.remove(remote_yml_bak)
+        # Re-clone the .remote/ directory via the download API (also validates
+        # the download endpoint with a proper remote.yml entry)
+        try:
+            api_post(f"/plugins/{ptype}/remote/{name}/download", {})
+        except Exception as e:
+            print(f"  [WARN: download restore failed: {e}]")
+        # Restore plugins.yml LAST — the download handler rewrites the
+        # plugin's plugins.yml entry with an EMPTY config (remote.yml carries
+        # only url/path, not config), wiping config refs (e.g.
+        # database_url/omni_dir on the actions plugin). Restoring the backup
+        # afterwards puts the original config back; restart_agent re-reads it
+        # so the entry is fully restored for later groups.
+        if os.path.exists(plugins_yml_bak):
+            shutil.copy2(plugins_yml_bak, f"{WORKSPACE}/config/plugins.yml")
+            os.remove(plugins_yml_bak)
+        restart_agent()
 
 # ── Test 7: YAML entry, no disk → remove YAML entry ──────────────────
 
@@ -1668,21 +1707,14 @@ def _git_discard_all(repo_dir):
     """Restore all tracked files to HEAD — unstages, then restores modified/deleted files.
     Does NOT git clean -fd (preserves compiled Rust binaries under target/).
 
-    config/channels.yml is EXCLUDED: the deploy run pins the `cron` channel to
-    noop/test-tool-caller so the fresh-DB suite never 401s on the omni
-    profile's deepseek fallback. Reverting it mid-run would re-introduce the
-    401 storm for GROUP 27's cron/hook threads. The deploy's final seed
-    restore reverts channels.yml to HEAD at the end of the run (and Step 0.5
-    of the next run auto-restores it if a run dies midway).
-
-    config/tasks.yml is EXCLUDED for the same reason: the deploy clears
-    schedules+hooks at start so no seeded real-LLM hook/schedule thread can
-    spawn on a secret-less DB. Restoring it mid-run would re-arm the seeded
-    hooks (wiki-maintenance, channel-summaries) and re-introduce the 401
-    api-key noise. The deploy's final seed restore reverts it to HEAD."""
+    config/* (channels.yml, tasks.yml, ...) is NOT tracked anymore — it is
+    runtime-only state (gitignored, seeded from omni-deployer/seed/config), so
+    git checkout never touches it. The deploy's noop channel pin and cleared
+    tasks.yml persist in the runtime config/ and are removed by the deploy's
+    end-of-run cleanup_runtime_state()."""
     subprocess.run(["git", "reset", "HEAD", "--", "."], cwd=repo_dir, capture_output=True)
     subprocess.run(
-        ["git", "checkout", "HEAD", "--", ".", ":(exclude)config/channels.yml", ":(exclude)config/tasks.yml"],
+        ["git", "checkout", "HEAD", "--", "."],
         cwd=repo_dir, capture_output=True,
     )
     # Intentionally no git clean -fd — that would delete compiled binaries from target/
@@ -1692,21 +1724,11 @@ def check_git_clean():
     dirty = _git_status(OMNI_STACK_DIR)
     if dirty:
         # Known transient test artifacts that tests may leave behind on the
-        # bind-mounted host directory (plugins.yml, remote.yml, actions.yml,
-        # settings.yml, plugins/tools/). If these are the *only* dirty files,
-        # revert/remove them silently and proceed; any other dirtiness is
-        # unexpected and still raises. config/channels.yml is also allowed:
-        # the deploy run pins the cron channel to noop (fresh-DB suite must
-        # never hit the omni profile's deepseek fallback) — that pin is NOT
-        # reverted here (the deploy's final seed restore reverts it), so a
-        # channels.yml-only dirty tree is expected and tolerated.
-        #
-        # config/tasks.yml is likewise tolerated but NOT reverted: the deploy
-        # clears schedules+hooks at start (deploy-only, so no seeded
-        # real-LLM hook/schedule thread can spawn on a secret-less DB) and
-        # reverts it to HEAD in its final seed restore. Restoring HEAD here
-        # would re-arm the seeded hooks mid-deploy (401 api-key noise).
-        known_artifacts = {"config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "config/tasks.yml", "config/channels.yml", "plugins/tools/", "profiles/omni/wiki/relevant-index.md"}
+        # bind-mounted host directory (profiles/omni/wiki/relevant-index.md
+        # rewritten by the relevance-indexer tests; untracked/ignored
+        # plugins/ residue). config/* is runtime-only now — it never appears
+        # in git status (untracked), so it is not part of this check.
+        known_artifacts = {"profiles/omni/wiki/relevant-index.md", "plugins/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
@@ -1714,41 +1736,23 @@ def check_git_clean():
         ]
         if not other_dirty:
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "config/plugins.yml", "config/remote.yml", "config/actions.yml", "config/settings.yml", "config/workflows.yml", "profiles/omni/wiki/relevant-index.md"],
+                ["git", "checkout", "HEAD", "--", "profiles/omni/wiki/relevant-index.md"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
-            # Restore tracked bundled test tools under plugins/tools/.
-            # omni-stack now SHIPS the test MCP servers as TRACKED bundled
-            # plugins (test-python, test-js-tool, tsconfig.json) so the
-            # integration suite can enable them via /plugins/tools/bundled/.
-            # rm -rf would delete those TRACKED files and leave the tree
-            # dirty; instead restore tracked files and git-clean only
-            # untracked/ignored test residue (.remote clones, temp tools).
+            # plugins/ is untracked runtime state (test-created residue: .remote/
+            # clones from install-git, temp bundled tools copied from
+            # omni-plugins). git clean -fdX removes ignored files (.remote
+            # clones), git clean -fd removes untracked ones (temp tools).
             subprocess.run(
-                ["git", "checkout", "HEAD", "--", "plugins/tools"],
+                ["git", "clean", "-fdX", "--", "plugins"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             subprocess.run(
-                ["git", "clean", "-fdX", "--", "plugins/tools"],
-                cwd=OMNI_STACK_DIR, capture_output=True,
-            )
-            subprocess.run(
-                ["git", "clean", "-fd", "--", "plugins/tools"],
+                ["git", "clean", "-fd", "--", "plugins"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
             )
             dirty = _git_status(OMNI_STACK_DIR)
             if not dirty:
-                return
-            # Only the deploy's persistent modifications may remain (kept
-            # intentionally; the deploy's final seed restore reverts them):
-            #   - config/channels.yml: the deploy's noop pin on the cron channel
-            #   - config/tasks.yml:    the deploy's cleared schedules+hooks
-            #                         (zero real-LLM threads on a secret-less DB)
-            remaining = [l for l in dirty.split("\n") if l.strip()]
-            if all(
-                "config/channels.yml" in l or "config/tasks.yml" in l
-                for l in remaining
-            ):
                 return
         raise RuntimeError(
             f"omni-stack repo has unstaged changes: cannot run tests safely:\n{dirty}"
@@ -10594,20 +10598,22 @@ def test_36_plugin_files():
 
 
 def test_36_deploy_seed():
-    """36-E: deploy.py generate_env seeds config/remote.yml from omni-stack
-    HEAD (the FULL remote plugin manifest) so deployed stacks register the
-    paperclip MCP plugin (which lives in omni-stack config/remote.yml)."""
+    """36-E: deploy.py generate_env seeds config/remote.yml from the TRACKED
+    SEED (omni-deployer/seed/config/remote.yml — the FULL remote plugin
+    manifest) so deployed stacks register the paperclip MCP plugin. config/
+    is runtime-only now (gitignored in omni-stack/omni-root); the seed is
+    the source of truth, not git HEAD."""
     with open(f"{REMOTE_REPO}/../omni-deployer/deploy.py", encoding="utf-8") as f:
         dep = f.read()
-    assert "HEAD:config/remote.yml" in dep, \
-        "deploy.py generate_env must seed remote.yml from omni-stack HEAD"
-    with open(f"{REMOTE_REPO}/../omni-stack/config/remote.yml", encoding="utf-8") as f:
+    assert "seed_config_dir" in dep, \
+        "deploy.py generate_env must seed remote.yml from the tracked seed (omni-deployer/seed/config)"
+    with open(f"{REMOTE_REPO}/../omni-deployer/seed/config/remote.yml", encoding="utf-8") as f:
         remote = f.read()
     assert "paperclip:" in remote, \
-        "omni-stack HEAD remote.yml must carry the paperclip entry"
+        "seed remote.yml must carry the paperclip entry"
     assert "tools/paperclip" in remote, \
         "paperclip entry must use path tools/paperclip"
-    print("PASS: deploy.py seeds remote.yml from omni-stack HEAD (paperclip entry)")
+    print("PASS: deploy.py seeds remote.yml from tracked seed (paperclip entry)")
 
 
 def test_36_mcp_stdio_tools():

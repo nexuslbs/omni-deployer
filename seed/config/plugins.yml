@@ -1,0 +1,138 @@
+platforms:
+  mattermost:
+    enabled: true
+    source: built-in
+    config:
+      access_token_name: MATTERMOST_ACCESS_TOKEN
+      admin_password: $secret:MATTERMOST_ADMIN_PASSWORD
+      admin_user: lucasbasquerotto
+      bot_password: $secret:MATTERMOST_BOT_PASSWORD
+      bot_user: omnibot
+      server_url: http://mattermost:8065
+      setup_channel: stable-channel
+      setup_team: omni
+      test_password: $secret:MATTERMOST_TEST_PASSWORD
+      test_user: testuser
+  telegram:
+    enabled: true
+    source: remote
+    config: {}
+tools:
+  actions:
+    enabled: true
+    source: remote
+    config:
+      database_url: $env:DATABASE_URL
+      omni_dir: $env:OMNI_DIR
+  cron:
+    enabled: false
+    source: built-in
+    config: {}
+  docker:
+    enabled: true
+    source: built-in
+    config: {}
+  fetch:
+    enabled: true
+    source: built-in
+    config: {}
+  filesystem:
+    enabled: true
+    source: built-in
+    config: {}
+  git:
+    enabled: true
+    source: built-in
+    config:
+      github_app_id: 3967918
+      github_app_private_key: $secret:GITHUB_APP_KEY
+      github_installation_id: 138119822
+  hindsight:
+    enabled: false
+    source: remote
+    config:
+      hindsight_bank: omniagent
+      hindsight_budget: low
+      hindsight_limit: 5
+      hindsight_url: http://hindsight:8888
+  kanban:
+    enabled: false
+    source: built-in
+    config: {}
+  memory:
+    enabled: true
+    source: built-in
+    config: {}
+  notes:
+    enabled: true
+    source: built-in
+    config:
+      omni_dir: $env:OMNI_DIR
+  paperclip:
+    enabled: true
+    source: remote
+    config:
+      PAPERCLIP_API_KEY: $secret:PAPERCLIP_API_KEY
+      PAPERCLIP_API_URL: http://paperclip:3100
+  plugin-manager:
+    enabled: true
+    source: built-in
+    config: {}
+  prompt:
+    enabled: true
+    source: built-in
+    config:
+      token_budget_hard: 100000
+      token_budget_soft: 50000
+  search:
+    enabled: true
+    source: built-in
+    config:
+      database_url: $env:DATABASE_URL
+  skills:
+    enabled: true
+    source: built-in
+    config: {}
+  ssh:
+    enabled: true
+    source: built-in
+    config: {}
+  subtasks:
+    enabled: true
+    source: built-in
+    config: {}
+  test-js-tool:
+    enabled: false
+    source: bundled
+    config: {}
+  test-python:
+    enabled: false
+    source: bundled
+    config: {}
+  test-rust-tool:
+    enabled: false
+    source: remote
+    config: {}
+providers:
+  deepseek:
+    enabled: true
+    source: built-in
+    config:
+      api_key: $secret:DEEPSEEK_API_KEY
+  noop:
+    enabled: true
+    source: bundled
+    config: {}
+  noop-full:
+    enabled: true
+    source: built-in
+    config: {}
+  openai:
+    enabled: false
+    source: bundled
+    config: {}
+  opencode-go:
+    enabled: true
+    source: built-in
+    config:
+      api_key: $secret:OPENCODE_API_KEY

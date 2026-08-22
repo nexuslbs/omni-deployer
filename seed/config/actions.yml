@@ -1,0 +1,44 @@
+actions:
+  builtin_relevance_indexer:
+    enabled: true
+    tool_name: actions_relevance-indexer
+    params: {}
+    description: Scan wiki files and update relevant-index.md based on recency and reference count
+    is_builtin: true
+  a4:
+    enabled: true
+    tool_name: test-rust-tool_echo
+    params:
+      input: My World
+    description: test-echo
+  a2:
+    enabled: true
+    tool_name: compact_messages
+    params: {}
+    description: test-compact
+  a3:
+    enabled: true
+    tool_name: builtin_read-attached-file
+    params:
+      path: /tmp/test.txt
+    description: TestReadAttach
+  builtin_setup_knowledge_pipeline:
+    enabled: false
+    tool_name: actions_setup-knowledge-pipeline
+    params: {}
+    description: Create the Knowledge Pipeline cron job (idempotent, runs every 6 hours by default)
+    is_builtin: true
+  builtin_hindsight_populator:
+    enabled: true
+    tool_name: actions_hindsight-populator
+    params: {}
+    description: Populate hindsight memory from recent messages
+    is_builtin: true
+  a1:
+    enabled: true
+    tool_name: fetch_fetch
+    params: {}
+  a0:
+    enabled: true
+    tool_name: read_attached_file
+    params: {}

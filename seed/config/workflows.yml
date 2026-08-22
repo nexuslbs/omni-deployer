@@ -1,0 +1,76 @@
+workflows:
+  dev-executor:
+    profile: null
+    provider: null
+    model: null
+    plan_mode: null
+    retries: 3
+    clear_executions_on_review: true
+    auto_approve: true
+    review_on_fail: false
+    roles:
+      executor:
+        template: dev-executor
+        mode: agent
+        action_id: null
+        profile: null
+        provider: null
+        model: null
+        plan_mode: null
+        retries: 3
+  omniagent-dev:
+    profile: null
+    provider: null
+    model: null
+    plan_mode: null
+    retries: 3
+    clear_executions_on_review: true
+    auto_approve: false
+    review_on_fail: false
+    roles:
+      executor:
+        template: dev-executor
+        mode: agent
+        action_id: null
+        profile: null
+        provider: null
+        model: null
+        plan_mode: null
+        retries: 3
+      reviewer:
+        template: dev-reviewer
+        mode: agent
+        action_id: null
+        profile: null
+        provider: null
+        model: null
+        plan_mode: on
+        retries: 9
+      tester:
+        template: dev-tester
+        mode: agent
+        action_id: null
+        profile: null
+        provider: null
+        model: null
+        plan_mode: on
+        retries: 3
+  wf_probe_final:
+    profile: null
+    provider: null
+    model: null
+    plan_mode: off
+    retries: 1
+    clear_executions_on_review: false
+    auto_approve: false
+    review_on_fail: false
+    roles:
+      executor:
+        template: null
+        mode: null
+        action_id: null
+        profile: null
+        provider: noop
+        model: test-tool-caller
+        plan_mode: null
+        retries: null
