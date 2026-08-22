@@ -10431,6 +10431,34 @@ def _g36_paperclip_dir():
     return f"{REMOTE_REPO}/tools/paperclip"
 
 
+def _g36_installed_dir():
+    """Installed paperclip location: cloned by install-git, deps by install (npm ci)."""
+    return f"{WORKSPACE}/plugins/tools/.remote/paperclip/tools/paperclip"
+
+
+def _g36_ensure_paperclip_installed():
+    """Clone + install paperclip via the plugin APIs so node_modules exist.
+
+    node_modules are NEVER vendored in the repo — the install endpoint runs
+    npm ci from the tracked package-lock.json. Returns the stdio.js path.
+    """
+    stdio_js = f"{_g36_installed_dir()}/node_modules/@paperclipai/mcp-server/dist/stdio.js"
+    if os.path.exists(stdio_js):
+        return stdio_js
+    # 1) Clone the repo into .remote/ (file:// local checkout: no node_modules)
+    resp = api_post_body("/plugins/install-git", {
+        "url": f"file://{REMOTE_REPO}",
+        "name": "paperclip",
+        "path": "tools/paperclip",
+    }, timeout=120)
+    assert resp.get("success"), f"install-git paperclip failed: {resp}"
+    # 2) Install endpoint -> npm ci creates node_modules from package-lock.json
+    resp = api_post_body("/plugins/tools/remote/paperclip/install", {}, timeout=300)
+    assert resp.get("success"), f"paperclip install failed: {resp}"
+    assert os.path.exists(stdio_js), f"stdio.js missing after install: {stdio_js}"
+    return stdio_js
+
+
 def test_36_compose_service():
     """36-A: docker-compose.yml defines the paperclip service: image pinned
     to sha-e55d702 (NOT latest), profiles ['paperclip','all'], expose 3100,
@@ -10502,7 +10530,7 @@ def test_36_plugin_files():
     """36-D: omni-plugins tools/paperclip plugin files — plugin.json (type
     mcp, config_schema), mcp-config.json (stdio node dist/stdio.js,
     allowed_tools ['*']), package.json pinned @paperclipai/mcp-server
-    2026.722.0, vendored node_modules present."""
+    2026.722.0, node_modules installed via the install endpoint (npm ci)."""
     d = _g36_paperclip_dir()
     with open(f"{d}/plugin.json", encoding="utf-8") as f:
         pj = json.load(f)
@@ -10523,12 +10551,15 @@ def test_36_plugin_files():
     dep = pkg.get("dependencies", {}).get("@paperclipai/mcp-server")
     assert dep == "2026.722.0", \
         f"@paperclipai/mcp-server must be pinned 2026.722.0: {dep}"
-    assert os.path.isdir(f"{d}/node_modules/@paperclipai/mcp-server"), \
-        "vendored node_modules missing"
-    assert os.path.exists(f"{d}/node_modules/@paperclipai/mcp-server/dist/stdio.js"), \
-        "vendored stdio.js missing"
+    # node_modules must NOT be vendored in the repo — install them via the
+    # plugin install endpoint (npm ci from the tracked package-lock.json).
+    installed = _g36_installed_dir()
+    stdio_js = _g36_ensure_paperclip_installed()
+    assert os.path.isdir(f"{installed}/node_modules/@paperclipai/mcp-server"), \
+        "install endpoint did not create node_modules (npm ci)"
+    assert os.path.exists(stdio_js), "stdio.js missing after install"
     print("PASS: plugin files (mcp type, config_schema, stdio node stdio.js, "
-          "allowed_tools *, pinned 2026.722.0, vendored node_modules)")
+          "allowed_tools *, pinned 2026.722.0, node_modules via install endpoint)")
 
 
 def test_36_deploy_seed():
@@ -10549,13 +10580,12 @@ def test_36_deploy_seed():
 
 
 def test_36_mcp_stdio_tools():
-    """36-F: spawn the vendored @paperclipai/mcp-server (node stdio) and do
+    """36-F: spawn the installed @paperclipai/mcp-server (node stdio) and do
     MCP initialize + tools/list — the paperclip_* tools must be present.
     Does not need the paperclip container (tools/list is static)."""
     import subprocess as _g36_sp
     import threading as _g36_th
-    stdio_js = f"{_g36_paperclip_dir()}/node_modules/@paperclipai/mcp-server/dist/stdio.js"
-    assert os.path.exists(stdio_js), f"stdio.js missing: {stdio_js}"
+    stdio_js = _g36_ensure_paperclip_installed()
     env = dict(os.environ)
     env.setdefault("PAPERCLIP_API_URL", "http://paperclip:3100")
     # config.js readConfigFromEnv throws unless BOTH URL and KEY are set
