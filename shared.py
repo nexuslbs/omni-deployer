@@ -390,7 +390,9 @@ def _remove_data_volumes(project_name):
 #   - omnideploy → stops both launchers by default (CI wants a clean slate);
 #                  DEV mode stops ONLY omnidev — omnistable is the agent's
 #                  own live runtime and must never be torn down (see
-#                  stop_other_stacks mode='dev').
+#                  stop_other_stacks mode='dev'); HYBRID mode stops NEITHER
+#                  omnidev NOR omnistable (it only manages its own
+#                  omnideploy containers — see MODE_STOP_EXCLUDE).
 # No fixed container_name / network name / volume name entries exist in the
 # base compose — all containers (and networks/volumes) are auto-named with the
 # compose project prefix ({project}-{service}-{index}, {project}_{volume}), so
@@ -404,11 +406,17 @@ STOP_TARGETS = {
     "omnideploy": ["omnidev", "omnistable"],
 }
 
-# Projects deploy.py NEVER stops in dev mode. omnistable is the agent's own
+# Projects deploy.py NEVER stops, per mode. omnistable is the agent's own
 # live runtime — `deploy.py dev` stopping it would kill the running agent
-# mid-task, so dev mode excludes it (ci/hybrid keep the clean-slate behavior
-# via the full STOP_TARGETS list above).
-DEV_STOP_EXCLUDE = {"omnistable"}
+# mid-task, so dev mode excludes it (stops only omnidev). `deploy.py hybrid`
+# runs from a launcher stack too (it builds images locally + runs the
+# omnideploy stack), so it must not tear down EITHER omnidev or omnistable —
+# it manages only its own omnideploy containers. Only CI keeps the
+# clean-slate behavior (fresh runner, nothing running to preserve).
+MODE_STOP_EXCLUDE = {
+    "dev": {"omnistable"},
+    "hybrid": {"omnidev", "omnistable"},
+}
 
 
 def stop_other_stacks(current_project, mode=None):
@@ -419,7 +427,8 @@ def stop_other_stacks(current_project, mode=None):
     deploy/CI project) — never each other. deploy.py (omnideploy) stops both
     launchers by default: CI wants a clean slate. In dev mode (mode='dev')
     omnistable is excluded so the agent's own live runtime is never torn
-    down while the deploy runs.
+    down while the deploy runs; in hybrid mode (mode='hybrid') BOTH launcher
+    stacks are excluded — hybrid only manages its own omnideploy containers.
 
     Containers are matched by the compose project label
     (com.docker.compose.project), NOT by name prefix, so unrelated containers
@@ -427,8 +436,8 @@ def stop_other_stacks(current_project, mode=None):
     pruned best-effort (only networks not in use by any container).
     """
     targets = STOP_TARGETS.get(current_project, [])
-    if mode == "dev":
-        targets = [p for p in targets if p not in DEV_STOP_EXCLUDE]
+    exclude = MODE_STOP_EXCLUDE.get(mode, set())
+    targets = [p for p in targets if p not in exclude]
     for proj in targets:
         listed = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={proj}"],

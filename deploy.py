@@ -520,9 +520,12 @@ def _deploy(mode):
        "true")
 
     # deploy.py (project "omnideploy") tears down the launcher stacks
-    # BEFORE starting its own — CI/hybrid want a clean slate. In DEV mode
-    # ONLY omnidev is stopped: omnistable is the agent's own live runtime
-    # and must never be torn down while the deploy is running.
+    # BEFORE starting its own — CI wants a clean slate (fresh runner, nothing
+    # running to preserve). In DEV mode ONLY omnidev is stopped: omnistable is
+    # the agent's own live runtime and must never be torn down while the
+    # deploy is running. In HYBRID mode NEITHER omnidev NOR omnistable is
+    # stopped: hybrid runs from a launcher stack too and manages only its own
+    # omnideploy containers (see MODE_STOP_EXCLUDE in shared.py).
     # (omnidev and omnistable do NOT tear down each other: they run
     # side-by-side since host ports are dev-overlay-only.)
     shared.stop_other_stacks("omnideploy", mode=mode)
