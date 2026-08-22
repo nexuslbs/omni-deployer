@@ -8078,14 +8078,39 @@ def test_27_hooks_infinite_loop_protection():
     hid_trig = _h27_create_hook(name="g27-trig", event="thread_started", scope="global",
                                 count=1, mode="agentic", prompt="G27-TRIG", profile="omni", channel="cron")
     pre_trig = _h27_pre_threads("G27-TRIG")
+    def _h27_backlog_drained():
+        """True when NO async work can still land messages during the test window:
+        no pending/processing threads in ANY channel (executor backlog, cron
+        threads, kanban role threads) AND no kanban task the in-process
+        dispatcher (15s poll) could promote next. A dispatchable task is
+        status='todo', unarchived, every non-archived dependency 'done' — with
+        the thread quiesce above no channel is busy, so the channel gate is
+        satisfied for every candidate. Cross-group contamination (GROUP 22/26
+        workflow threads spawned mid-Group-27) was the 2026-08-22 flake root
+        cause (ground_after 93 -> 95): this gate makes the ground-truth window
+        airtight instead of relying on the fire-time delta alone."""
+        active, = _h27_sql(
+            "SELECT COUNT(*) FROM threads WHERE status IN ('pending','processing')"
+        )[0]
+        if active:
+            return False
+        eligible, = _h27_sql(
+            "SELECT COUNT(*) FROM kanban_tasks t "
+            "WHERE t.status = 'todo' AND t.archived = false "
+            "AND NOT EXISTS (SELECT 1 FROM kanban_task_dependencies d "
+            "JOIN kanban_tasks dep ON dep.id = d.depends_on_id "
+            "WHERE d.task_id = t.id AND dep.archived = false "
+            "AND dep.status <> 'done')"
+        )[0]
+        return eligible == 0
+
     try:
         # Drain the EXECUTOR backlog: cron threads from earlier tests fail
         # asynchronously and their error messages can land during THIS test,
         # moving the SQL ground truth independently of the observer. Wait until
-        # the cron channel (id 2) has no pending/processing threads left.
-        _h27_quiesce(lambda: _h27_sql(
-            "SELECT COUNT(*) FROM threads WHERE status IN ('pending','processing')"
-        )[0][0] == 0, stable_secs=6, timeout=240)
+        # ALL channels have no pending/processing threads left AND no eligible
+        # todo kanban tasks remain for the dispatcher.
+        _h27_quiesce(_h27_backlog_drained, stable_secs=6, timeout=240)
         # Drain the EVENT pipeline: events fired by earlier tests' threads may
         # still be queued; wait until the observer counter is stable so the
         # baseline snapshot is exact.
@@ -8115,15 +8140,21 @@ def test_27_hooks_infinite_loop_protection():
         # trigger hook fired: hook-caused threads exist with the trigger prompt (new-only)
         ok = _h27_wait_until(lambda: _h27_new_threads("G27-TRIG", pre_trig) >= 1, timeout=25)
         assert ok, "thread_started count=1 hook must have triggered"
-        # manual fire: another hook-caused thread; its messages must NOT move the observer
+        # manual fire: another hook-caused thread; its messages must NOT move the
+        # observer. Snapshot ground truth IMMEDIATELY before the fire and assert
+        # delta-zero across it: this tolerates async streams that landed between
+        # the earlier ground_n snapshot and now (dispatcher role threads from
+        # earlier groups), while still catching the fire itself creating
+        # non-hook messages.
+        ground_before_fire = _h27_nonhook_ground(base)
         st, resp = _h27_api("POST", f"/hooks/{hid_trig}/fire", {})
         assert st == 200, f"POST /hooks/{hid_trig}/fire -> {st}: {resp}"
         ok = _h27_wait_until(_obs_ground_equal, timeout=120)
         o2 = (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base
         ground_after = _h27_nonhook_ground(base)
         assert o2 == ground_after, f"after fire: obs_delta={o2} ground={ground_after} (converged={ok})"
-        assert ground_after == ground_n, \
-            f"manual fire must not create non-hook messages: {ground_n} -> {ground_after}"
+        assert ground_after == ground_before_fire, \
+            f"manual fire must not create non-hook messages: {ground_before_fire} -> {ground_after}"
         # hook-caused thread identity (infinite-loop protection markers)
         hc, = _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true")[0]
         assert hc >= 2, f"expected >= 2 hook threads (trigger + manual fire), got {hc}"
