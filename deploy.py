@@ -459,7 +459,7 @@ def generate_env(mode):
     # real deployment has — otherwise those plugins resolve to
     # status=not_found and the live-plugin tests (GROUP 37/40/41, t6 platform)
     # fail. plugin_tests also needs test-rust-tool registered.
-    # config/ is runtime-only now (gitignored); the seed lives in
+    # config/ is runtime-only now (not gitignored — seed model); the seed lives in
     # omni-deployer/seed/config (see shared.ensure_seed_config).
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "config", "remote.yml")
     # Ensure .remote/ directories are clean before seeding (prevents stale git state)
@@ -939,7 +939,8 @@ def restore_seed_config():
     The tree was verified clean at Step 0.5. profiles/omni is no longer
     tracked (the runtime data dir materializes profiles/<default>/config.json
     at startup); config/*, hindsight_watermark.json and plugins/* are
-    runtime-only (gitignored) — they are removed by cleanup_runtime_state(),
+    runtime-only (NOT gitignored — seed model: tracked-able, no files in the
+    seed) — they are removed by cleanup_runtime_state(),
     never git-restored.
 
     Runs on BOTH success and failure paths (deploy() wraps its body in a

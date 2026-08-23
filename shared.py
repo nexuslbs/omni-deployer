@@ -699,7 +699,8 @@ def setup():
     generate_env(mode)
 
     # Ensure the runtime config/ exists (seed from omni-deployer/seed/config).
-    # config/ is gitignored runtime state in omni-root/omni-stack — a fresh
+    # config/ is runtime state (not gitignored — seed model: tracked-able,
+    # no files in the seed) in omni-root/omni-stack — a fresh
     # checkout has none and must run with zero manual intervention. Existing
     # live config (channels/boards the agent wrote) is preserved: only MISSING
     # seed files are copied.
@@ -866,11 +867,13 @@ def seed_remote_plugins():
 # ── Runtime state vs seed ────────────────────────────────────────────────────
 # User rule 2026-08-22: omni-stack/omni-root are SEED repos — they carry only
 # the minimal entrypoint (compose) + services. config/, plugins/ and
-# profiles/ are RUNTIME state (gitignored): generated at setup/deploy time
-# from the tracked seed (omni-deployer/seed/config) + the plugin API
-# (install-git) + core startup (auto-created profiles/<default>/config.json),
-# and removed when a deploy ends. Any profiles/ dir is scratch and must not
-# exist.
+# profiles/ are RUNTIME state (NOT gitignored — they stay tracked-able so
+# forked data repos like omni-root can commit their own content; the seed
+# simply ships none). They are generated at setup/deploy time from the
+# tracked seed (omni-deployer/seed/config) + the plugin API (install-git)
+# + core startup (auto-created profiles/<default>/config.json), and removed
+# when a deploy ends. Any profiles/ dir left behind is runtime scratch and
+# must not exist.
 
 def seed_config_dir():
     """Location of the tracked seed config (omni-deployer/seed/config)."""
@@ -881,7 +884,8 @@ def seed_config_dir():
 def ensure_seed_config(stack_dir=None, overwrite_files=None):
     """Ensure {stack_dir}/config exists with the seed config files.
 
-    config/ is gitignored runtime state in omni-stack/omni-root; the tracked
+    config/ is runtime state (not gitignored — seed model keeps it
+    tracked-able with no files in the seed); the tracked
     seed lives in omni-deployer/seed/config. Called by setup() (launcher
     chains) and deploy.py at the start of a deploy so a fresh checkout runs
     with zero manual intervention.
@@ -961,6 +965,19 @@ def verify_runtime_clean(stack_dir=None):
     profiles/omni), fail fast — the deploy would otherwise discard unknown
     state.
     """
+    # ── Seed-repo model (why this guard exists) ──────────────────────────
+    # omni-stack is a SEED repo: config/, profiles/ and plugins/ are NOT
+    # gitignored (they stay tracked-able so forked repos like omni-root can
+    # commit their own content); they simply have NO files in omni-stack
+    # itself. The dirs exist only temporarily during a deploy — auto-created
+    # by the core at startup (profiles/<default>/config.json) or by test
+    # fixtures — and are removed when the deploy ends
+    # (cleanup_runtime_state). This validation is the GUARD against
+    # accidentally pushing these dirs to the seed repo: if they exist at
+    # ci/hybrid start, fail fast. It is the safety net that replaces
+    # gitignore. If you hit this error: remove the runtime dirs from the
+    # checkout (they are runtime state, not seed content) — do NOT "fix" it
+    # by adding them to .gitignore.
     s = sett()
     stack_dir = stack_dir or s.omni_stack_dir
     problems = []
