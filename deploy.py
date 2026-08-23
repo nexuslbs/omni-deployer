@@ -537,27 +537,39 @@ def _deploy(mode):
     # or commit their changes first. This check must run before generate_env()
     # because that function writes remote.yml back to the tracked file.
     #
-    # EXCEPTION — untracked test residue: a run that dies mid-tests (OOM,
-    # SIGKILL, Ctrl-C) never reaches the final cleanup step, leaving the bind
-    # mount dirty and blocking the NEXT run's Step 0.5. profiles/omni is no
-    # longer tracked (the runtime data dir materializes it), so there is no
-    # known TRACKED residue to auto-restore — any tracked dirt fails fast.
-    # Untracked plugins/ entries are test-created plugin residue that the
-    # post-clean already removes; sweeping ONLY those is safe: it cannot
-    # touch user edits, which are anything NOT under plugins/.
+    # EXCEPTION — known test residue: a run that dies mid-tests (OOM, SIGKILL,
+    # Ctrl-C) never reaches the final "restore tracked profiles to HEAD" step,
+    # leaving the bind mount dirty and blocking the NEXT run's Step 0.5.
+    # The files below are exactly the ones deploy.py itself restores at the
+    # end of a successful run (see "Final seed restore"), and untracked
+    # plugins/ entries are test-created plugin residue that the post-clean
+    # already removes. Auto-restoring ONLY that known set is safe: it cannot
+    # touch user edits, which are anything NOT in the known set.
     r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
     dirty_lines = r.stdout.splitlines()
     if dirty_lines:
+        KNOWN_RESIDUE = {
+            # The omni profile config: Phase 2 empties allowed_tools then
+            # re-adds them in order; a killed run leaves the truncated list.
+            "profiles/omni/config.json",
+            # The wiki relevant-index is rewritten by the relevance-indexer /
+            # actions tests; a killed run leaves it modified.
+            "profiles/omni/wiki/relevant-index.md",
+        }
         tracked_dirty = [ln for ln in dirty_lines if not ln.startswith("??")]
         untracked = [ln[3:].strip() for ln in dirty_lines if ln.startswith("??")]
-        if tracked_dirty:
+        unexpected = [ln for ln in tracked_dirty
+                      if ln.split(None, 1)[-1] not in KNOWN_RESIDUE]
+        if unexpected:
             raise RuntimeError(
                 "Uncommitted changes detected in omni-stack. deploy.py will NOT "
                 "discard them automatically — discard, stage, or commit them "
                 "first, then re-run deploy.\n\n"
-                + "\n".join(tracked_dirty)
+                + "\n".join(unexpected)
             )
-        print("[deploy] Detected untracked test residue in omni-stack — auto-restoring...")
+        print("[deploy] Detected known test residue in omni-stack — auto-restoring...")
+        for f in sorted(KNOWN_RESIDUE):
+            sh(f"cd /opt/workspace/omni-stack && sudo git checkout HEAD -- {f} 2>/dev/null; true")
         # Untracked plugins/ residue is test-created (seed tracks zero plugins);
         # the same sweep the post-clean runs, so a fresh run starts like CI.
         for u in untracked:
@@ -565,10 +577,9 @@ def _deploy(mode):
                 sh(f"cd /opt/workspace/omni-stack && sudo rm -rf -- {u} 2>/dev/null; true")
         r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
         # Untracked files are the LIVE agent's own data-dir artifacts (wiki
-        # pages, config symlinks / plugins.yml at the data-dir root, the
-        # auto-created profiles/<default>/config.json) — NOT deploy residue, so
-        # they must not block the run. Only tracked files count as dirt (same
-        # rule as the end-of-run check below).
+        # pages, config symlinks / plugins.yml at the data-dir root) — NOT
+        # deploy residue, so they must not block the run. Only tracked files
+        # count as dirt (same rule as the end-of-run check below).
         tracked_dirty = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
         if tracked_dirty:
             raise RuntimeError(
@@ -936,17 +947,25 @@ def _deploy(mode):
 def restore_seed_config():
     """Revert omni-stack TRACKED files to HEAD after a deploy run.
 
-    The tree was verified clean at Step 0.5. profiles/omni is no longer
-    tracked (the runtime data dir materializes profiles/<default>/config.json
-    at startup); config/*, hindsight_watermark.json and plugins/* are
-    runtime-only (gitignored) — they are removed by cleanup_runtime_state(),
-    never git-restored.
+    The tree was verified clean at Step 0.5, so every tracked change present
+    now is test/deploy-created (profile config.json truncation, wiki
+    relevant-index rewrites). The whole tracked profiles/ tree is restored to
+    HEAD (the dev-mode start removal deleted the entire dir). config/*,
+    hindsight_watermark.json and plugins/* are runtime-only (gitignored) —
+    they are removed by cleanup_runtime_state(), never git-restored.
 
     Runs on BOTH success and failure paths (deploy() wraps its body in a
     finally that calls this), so a mid-deploy crash never leaves the bind
     mount dirty for the next run.
     """
     print("\n[Restoring omni-stack tracked config to HEAD...]")
+    # omni-stack is the SEED repo and keeps tracking profiles/omni; the
+    # start-of-run cleanup removed the ENTIRE profiles/ dir, so restore every
+    # tracked profile file to HEAD (config.json, wiki relevant-index, and all
+    # other seed content).
+    sh("cd /opt/workspace/omni-stack && "
+       "sudo git checkout HEAD -- profiles/ 2>/dev/null; "
+       "true")
     # Remove the deploy-generated stack .env (local MinIO S3 creds). It is
     # gitignored so git status stays clean either way, but the deploy leaves
     # a pristine seed checkout — the creds were generated for THIS run only.
@@ -972,12 +991,22 @@ def deploy(mode):
     profiles/) as a side effect of testing. The runtime cleanup must therefore
     run whether the deploy succeeded or crashed mid-way — otherwise the bind
     mount stays dirty and the NEXT run's Step 0.5 fails. A hard kill
-    (SIGKILL/OOM) can still skip this finally; Step 0.5's untracked-residue
-    sweep covers that case.
+    (SIGKILL/OOM) can still skip this finally; Step 0.5's known-residue
+    restore covers that case.
     """
     try:
         _deploy(mode)
     finally:
+        try:
+            # Per user rule: ALL deploy modes end with a pristine seed
+            # checkout — config/, plugins/ and profiles/ are runtime-only
+            # and removed when the deploy ends. Cleanup runs FIRST: it deletes
+            # the whole profiles/ dir (tracked seed content included), then
+            # restore_seed_config() brings every tracked profile file back to
+            # HEAD.
+            shared.cleanup_runtime_state(OMNI_STACK_DIR)
+        except Exception as e:
+            print(f"  [WARNING: runtime-state cleanup failed: {e}]")
         try:
             restore_seed_config()
         except Exception as e:
@@ -985,13 +1014,6 @@ def deploy(mode):
             # with a restore failure. The next run's Step 0.5 will surface
             # any remaining dirt with a clear message.
             print(f"  [WARNING: seed restore failed: {e}]")
-        try:
-            # Per user rule: ALL deploy modes end with a pristine seed
-            # checkout — config/, plugins/ and profiles/ are runtime-only
-            # and removed when the deploy ends.
-            shared.cleanup_runtime_state(OMNI_STACK_DIR)
-        except Exception as e:
-            print(f"  [WARNING: runtime-state cleanup failed: {e}]")
 
 
 def run_tests(compose=None):
