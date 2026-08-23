@@ -1728,24 +1728,17 @@ def check_git_clean():
         # rewritten by the relevance-indexer tests; untracked/ignored
         # plugins/ residue). config/* is runtime-only now — it never appears
         # in git status (untracked), so it is not part of this check.
-        known_artifacts = {"profiles/omni/wiki/relevant-index.md", "plugins/"}
+        known_artifacts = {"plugins/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
         other_dirty = [
             l for l in dirty_lines
             if not any(a in l for a in known_artifacts)
         ]
         if not other_dirty:
-            # Auto-restore the tracked wiki relevant-index (rewritten by the
-            # relevance-indexer tests), then clean untracked/ignored plugins/
-            # residue (.remote/ clones from install-git, temp bundled tools
-            # copied from omni-plugins). git clean -fdX removes ignored files
-            # (.remote clones), git clean -fd removes untracked ones (temp
-            # tools).
-            subprocess.run(
-                ["git", "checkout", "HEAD", "--",
-                 "profiles/omni/wiki/relevant-index.md"],
-                cwd=OMNI_STACK_DIR, capture_output=True,
-            )
+            # plugins/ is untracked runtime state (test-created residue: .remote/
+            # clones from install-git, temp bundled tools copied from
+            # omni-plugins). git clean -fdX removes ignored files (.remote
+            # clones), git clean -fd removes untracked ones (temp tools).
             subprocess.run(
                 ["git", "clean", "-fdX", "--", "plugins"],
                 cwd=OMNI_STACK_DIR, capture_output=True,
@@ -10546,11 +10539,10 @@ def test_36_config_wiring():
     assert "nexuslbs/omni-plugins.git" in remote_txt, \
         "remote.yml must point at nexuslbs/omni-plugins"
     assert "tools/paperclip" in remote_txt, "remote.yml path must be tools/paperclip"
-    # The deploy removes the whole profiles/ dir at start; the core
-    # auto-created profiles/<default>/config.json at startup
-    # ({"allowed_tools": []}) and an operator grants tools by editing that
-    # runtime file. Seed the paperclip whitelist fixture and verify the
-    # file-based mechanism works.
+    # The seed ships no profiles/ dir — the core auto-created
+    # profiles/<default>/config.json at startup ({"allowed_tools": []}) and an
+    # operator grants tools by editing that runtime file. Seed the paperclip
+    # whitelist fixture and verify the file-based mechanism works.
     cfg_path = f"{WORKSPACE}/profiles/omni/config.json"
     assert os.path.isfile(cfg_path), (
         f"profile config.json not auto-created at startup: {cfg_path}")
