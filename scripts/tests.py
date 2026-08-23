@@ -2545,11 +2545,11 @@ def _check_prompt_includes(channel_name, expected_substring):
     return text
 
 def _ensure_test_profile_clean():
-    _mem_os.makedirs(f"{TEST_PROFILE_DIR}/memories", exist_ok=True)
+    _mem_os.makedirs(TEST_PROFILE_DIR, exist_ok=True)
     for f in ["MEMORY.md", "USER.md"]:
-        p = f"{TEST_PROFILE_DIR}/memories/{f}"
-        if _mem_os.path.exists(p):
-            _mem_os.remove(p)
+        for p in [f"{TEST_PROFILE_DIR}/{f}", f"{TEST_PROFILE_DIR}/memories/{f}"]:
+            if _mem_os.path.exists(p):
+                _mem_os.remove(p)
 
 def _remove_test_profile():
     if _mem_os.path.exists(TEST_PROFILE_DIR):
@@ -2558,64 +2558,69 @@ def _remove_test_profile():
 def test_m1_setup():
     """Create test profile with no memory files"""
     _ensure_test_profile_clean()
-    assert _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories")
-    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories/MEMORY.md")
-    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories/USER.md")
+    assert _mem_os.path.exists(TEST_PROFILE_DIR)
+    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/MEMORY.md")
 
 def test_m2_edit_memory():
     """Edit MEMORY → file created"""
     content = "This is a test memory for profile testing."
     resp = _raw_post_body(f"/memory/edit/{TEST_PROFILE}/memory", {"content": content})
     pass
-    assert _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories/MEMORY.md")
+    assert _mem_os.path.exists(f"{TEST_PROFILE_DIR}/MEMORY.md")
     _check_memory_text_exact(TEST_PROFILE, "memory", content)
 
-def test_m3_edit_soul():
-    """Edit SOUL → file created"""
+def test_m3_soul_rejected():
+    """SOUL/USER.md support removed: edit/upload/text for 'soul' → HTTP 400"""
+    import urllib.error
     content = "This is a test soul for profile testing."
-    resp = _raw_post_body(f"/memory/edit/{TEST_PROFILE}/soul", {"content": content})
-    pass
-    assert _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories/USER.md")
-    _check_memory_text_exact(TEST_PROFILE, "soul", content)
+    # edit → 400
+    try:
+        _raw_post_body(f"/memory/edit/{TEST_PROFILE}/soul", {"content": content})
+        assert False, "edit soul should have failed with HTTP 400"
+    except AssertionError as e:
+        assert "400" in str(e), f"expected HTTP 400, got: {e}"
+    # upload → 400
+    try:
+        _raw_post_body(f"/memory/upload/{TEST_PROFILE}/soul", {"content": content})
+        assert False, "upload soul should have failed with HTTP 400"
+    except AssertionError as e:
+        assert "400" in str(e), f"expected HTTP 400, got: {e}"
+    # text read → 400
+    try:
+        _check_memory_text(TEST_PROFILE, "soul", "anything")
+        assert False, "reading soul should have failed with HTTP 400"
+    except urllib.error.HTTPError as e:
+        assert e.code == 400, f"expected HTTP 400, got {e.code}"
+    # No USER.md anywhere
+    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/USER.md")
+    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories/USER.md")
 
 def test_m4_prompt_verify():
-    """Memory and soul content is consistent across API, disk, and what was written"""
+    """Memory content is consistent across API, disk, and what was written"""
     mem_written = "This is a test memory for profile testing."
-    soul_written = "This is a test soul for profile testing."
 
     # 1. Read back via API: confirms the same as written
     mem_api = _check_memory_text_exact(TEST_PROFILE, "memory", mem_written)
-    soul_api = _check_memory_text_exact(TEST_PROFILE, "soul", soul_written)
 
-    # 2. Read from disk: all 3 should match
-    with open(f"{TEST_PROFILE_DIR}/memories/MEMORY.md") as f:
+    # 2. Read from disk: should match
+    with open(f"{TEST_PROFILE_DIR}/MEMORY.md") as f:
         mem_disk = f.read().strip()
-    with open(f"{TEST_PROFILE_DIR}/memories/USER.md") as f:
-        soul_disk = f.read().strip()
 
     assert mem_written == mem_api == mem_disk, \
         f"Memory mismatch: written={mem_written!r} api={mem_api!r} disk={mem_disk!r}"
-    assert soul_written == soul_api == soul_disk, \
-        f"Soul mismatch: written={soul_written!r} api={soul_api!r} disk={soul_disk!r}"
 
 def test_m5_edit_update():
-    """Edit with new values → all 3 sources consistent"""
+    """Edit with new value → all sources consistent"""
     new_mem = "Updated memory content for testing."
-    new_soul = "Updated soul content for testing."
     resp = _raw_post_body(f"/memory/edit/{TEST_PROFILE}/memory", {"content": new_mem})
-    pass
-    resp = _raw_post_body(f"/memory/edit/{TEST_PROFILE}/soul", {"content": new_soul})
     pass
 
     # 1. Via API
     _check_memory_text_exact(TEST_PROFILE, "memory", new_mem)
-    _check_memory_text_exact(TEST_PROFILE, "soul", new_soul)
 
-    # 2. From disk: all match
-    with open(f"{TEST_PROFILE_DIR}/memories/MEMORY.md") as f:
+    # 2. From disk: match
+    with open(f"{TEST_PROFILE_DIR}/MEMORY.md") as f:
         assert f.read().strip() == new_mem
-    with open(f"{TEST_PROFILE_DIR}/memories/USER.md") as f:
-        assert f.read().strip() == new_soul
 
 def test_m6_upload_memory():
     """Upload MEMORY file → verify"""
@@ -2630,29 +2635,17 @@ def test_m6_upload_memory():
         if _mem_os.path.exists("/tmp/mem_test_upload.md"):
             _mem_os.remove("/tmp/mem_test_upload.md")
 
-def test_m7_upload_soul():
-    """Upload SOUL file → verify"""
-    content = "Uploaded soul content."
-    with open("/tmp/soul_test_upload.md", "w") as f:
-        f.write(content)
-    try:
-        _, resp = _raw_post_body(f"/memory/upload/{TEST_PROFILE}/soul", {"content": content})
-        assert resp.get("data", {}).get("size", False), f"upload failed: {resp}"
-        _check_memory_text_exact(TEST_PROFILE, "soul", content)
-    finally:
-        if _mem_os.path.exists("/tmp/soul_test_upload.md"):
-            _mem_os.remove("/tmp/soul_test_upload.md")
+def test_m7_soul_stays_rejected():
+    """SOUL stays rejected after memory edits: no USER.md is ever created"""
+    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/USER.md")
+    assert not _mem_os.path.exists(f"{TEST_PROFILE_DIR}/memories/USER.md")
 
 def test_m8_delete_and_reupload():
-    """Delete files and re-upload → verify"""
-    mem_path = f"{TEST_PROFILE_DIR}/memories/MEMORY.md"
-    soul_path = f"{TEST_PROFILE_DIR}/memories/USER.md"
+    """Delete file and re-upload → verify"""
+    mem_path = f"{TEST_PROFILE_DIR}/MEMORY.md"
     assert _mem_os.path.exists(mem_path)
-    assert _mem_os.path.exists(soul_path)
     _mem_os.remove(mem_path)
-    _mem_os.remove(soul_path)
     assert not _mem_os.path.exists(mem_path)
-    assert not _mem_os.path.exists(soul_path)
     # Re-upload MEMORY
     re_mem = "Re-uploaded memory content."
     with open("/tmp/mem_reup.md", "w") as f:
@@ -2663,16 +2656,6 @@ def test_m8_delete_and_reupload():
         _check_memory_text_exact(TEST_PROFILE, "memory", re_mem)
     finally:
         if _mem_os.path.exists("/tmp/mem_reup.md"): _mem_os.remove("/tmp/mem_reup.md")
-    # Re-upload SOUL
-    re_soul = "Re-uploaded soul content."
-    with open("/tmp/soul_reup.md", "w") as f:
-        f.write(re_soul)
-    try:
-        _, resp = _raw_post_body(f"/memory/upload/{TEST_PROFILE}/soul", {"content": re_soul})
-        assert resp.get("data", {}).get("size", False), f"re-upload soul failed: {resp}"
-        _check_memory_text_exact(TEST_PROFILE, "soul", re_soul)
-    finally:
-        if _mem_os.path.exists("/tmp/soul_reup.md"): _mem_os.remove("/tmp/soul_reup.md")
 
 def test_m9_cleanup():
     """Remove test profile, verify gone"""
@@ -5117,11 +5100,11 @@ if __name__ == "__main__":
     for fn in [
         test_m1_setup,
         test_m2_edit_memory,
-        test_m3_edit_soul,
+        test_m3_soul_rejected,
         test_m4_prompt_verify,
         test_m5_edit_update,
         test_m6_upload_memory,
-        test_m7_upload_soul,
+        test_m7_soul_stays_rejected,
         test_m8_delete_and_reupload,
         test_m9_cleanup,
     ]:
