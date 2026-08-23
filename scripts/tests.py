@@ -10106,7 +10106,10 @@ def _g34_SHIM_SCRIPT(kind):
 def _g34_prepare():
     global _g34_SSHD, _g34_SSH_BIN, _g34_BASE, _g34_SHIM_DIR, _g34_REAL
     _g34_SSH_BIN = _g34_bin()
-    _g34_BASE = f"{WORKSPACE}/../g34-tmp-{uuid.uuid4().hex[:8]}"
+    # Scratch dir for the SSH harness. NEVER pollute the workspace root:
+    # WORKSPACE/.. (=/opt/workspace) accumulates g34-tmp-* dirs on every run.
+    # Use the sanctioned scratch area /opt/workspace/tmp/ instead.
+    _g34_BASE = f"{WORKSPACE}/../tmp/g34-tmp-{uuid.uuid4().hex[:8]}"
     os.makedirs(_g34_BASE, exist_ok=True)
     _g34_SSHD = _g34_ensure_sshd()
     if _g34_SSHD is not None and _g34_devnull_usable():
