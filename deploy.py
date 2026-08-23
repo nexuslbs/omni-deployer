@@ -187,10 +187,11 @@ def compose_cmd(mode):
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
     # Local S3 (MinIO) service for the S3 backup/restore/checkpoint test —
     # every deploy mode carries it so the S3 test can round-trip locally.
-    # Guarded: an omni-stack checkout without the overlay (older fork) still
-    # deploys; the S3 test then skips (see test_s3_backup_restore).
-    if os.path.exists(os.path.join(OMNI_STACK_DIR, "docker-compose.minio.yml")):
-        cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.minio.yml")]
+    # The overlay lives in THIS repo (omni-deployer), resolved via SCRIPT_DIR.
+    # Guarded: an omni-deployer checkout without the overlay still deploys;
+    # the S3 test then skips (see test_s3_backup_restore).
+    if os.path.exists(os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")):
+        cmd += ["-f", os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")]
     # hybrid and ci use no overlay — base docker-compose.yml + omni.env.
     # The base compose is image-only (no build sections): hybrid builds the
     # three images locally with the omni.env tags BEFORE `up` (see Step 0b),
@@ -402,7 +403,7 @@ def generate_env(mode):
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
         # Local S3 (MinIO) service + S3 client creds (docker-compose.minio.yml
-        # and the toolbox rclone config both interpolate these).
+        # in omni-deployer and the toolbox rclone config both interpolate these).
         f.write(f"MINIO_ROOT_USER={minio_user}\n")
         f.write(f"MINIO_ROOT_PASSWORD={minio_pass}\n")
         f.write(f"S3_ACCESS_KEY={minio_user}\n")
@@ -1033,8 +1034,8 @@ def test_s3_backup_restore(compose):
 
     Exercises the toolbox backup scripts (backup.sh / restore_backup.sh /
     checkpoint.sh / restore_checkpoint.sh) against the local MinIO service
-    from docker-compose.minio.yml, using the omniagent secrets table as the
-    canary:
+    from docker-compose.minio.yml (omni-deployer repo), using the omniagent
+    secrets table as the canary:
 
       backup flow:   add secret-01 → backup → add secret-02 → restore
                      → DB last secret must roll back to secret-01
@@ -1051,8 +1052,8 @@ def test_s3_backup_restore(compose):
     print("  S3 BACKUP/RESTORE/CHECKPOINT TEST (local MinIO)")
     print("=" * 60)
 
-    if not os.path.exists(os.path.join(OMNI_STACK_DIR, "docker-compose.minio.yml")):
-        print("  ⏭  SKIPPED: docker-compose.minio.yml not present in omni-stack")
+    if not os.path.exists(os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")):
+        print("  ⏭  SKIPPED: docker-compose.minio.yml not present in omni-deployer")
         return
 
     def env_val(name):

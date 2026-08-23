@@ -51,7 +51,6 @@ memory:
   wiki_vectorization_protocol: openai
 
 channels:
-  default_cli_channel: ''
   default_schedule_channel: cron
   default_hook_channel: ''
   default_kanban_channel: kanban

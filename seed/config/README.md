@@ -10,7 +10,6 @@ platform-less `cli` channels):
 
 | Setting                     | Default  | Producer                                  |
 |-----------------------------|----------|-------------------------------------------|
-| `default_cli_channel`       | (empty)  | CLI/MCP tool calls with no explicit channel |
 | `default_schedule_channel`  | `cron`   | Cron schedules with no explicit channel   |
 | `default_hook_channel`      | (empty)  | Hooks with no explicit channel            |
 | `default_kanban_channel`    | `kanban` | Kanban task dispatch with no task channel |
