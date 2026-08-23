@@ -41,6 +41,26 @@ migrations, and executes the integration test suite (`scripts/tests.py`) twice.
 - **`deploy.py` is a self-contained test harness** that must NEVER use real LLM keys —
   see AGENTS.md for the hard rule. It calls only `shared.init()` + `shared.run_tests()`.
 
+## Development (docker-compose.dev.yml / omnidev)
+
+The dev overlay (`docker-compose.dev.yml` in omni-stack/omni-root) provides a
+live-development stack managed as the `omnidev` compose project:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --project-name omnidev up -d
+```
+
+The overlay adds:
+- **Local image builds** instead of pulling from GHCR (`omniagent-dev:latest` from `Dockerfile.dev`)
+- **Mounted source directories** for live development (`/opt/workspace/omniagent:/app`, `/opt/workspace/omni-dashboard:/opt/repo`)
+- **Dev-only host ports** (never in the base compose): dashboard `12345:3001`, mattermost `12346:8065`, paperclip `3101:3100`
+- `SQLX_OFFLINE=false` — dev builds validate queries against the live DB so code + migrations can change without a stale `.sqlx` cache
+
+The `omnidev` compose project is the development environment for the kanban dev workflows
+(`dev-executor`, `omniagent-dev`): tasks on the `omnidev` board resolve to the
+`omniagent-dev` workflow (executor → reviewer → tester) via `boards.yml`. `omnidev.py`
+manages this project's lifecycle (setup, restart, stop).
+
 ## Integration suite (`scripts/tests.py`)
 
 Groups 1–49 cover: dashboard page loading, plugin lifecycle (install/enable/remove/
@@ -62,15 +82,24 @@ and the kanban-workflow feature groups:
 
 ## CI/CD
 
-Single `publish.yml` workflow triggered on push to `stable` or `v*` tags:
-1. Builds omniagent, omni-dashboard, and toolbox images
-2. Runs unit tests + lint
-3. Runs integration tests via `deploy.py ci`
-4. Tags git repos (omni-stack, omniagent, omni-dashboard) with the release version
-5. Pushes + tags **nexuslbs/omni-plugins** — its root `models.yml` provides the
+Single `publish.yml` workflow triggered on push to `stable` or `v*` tags.
+It builds and publishes Docker images to GHCR:
+- **Push to `stable`**: tags `omniagent:latest`, `omni-dashboard:latest`, `toolbox:latest`
+- **Push to `v*` tags**: tags each image with the semver tag (e.g., `omniagent:1.2.3`)
+
+Parallel jobs build:
+1. **omniagent**: from [nexuslbs/omniagent](https://github.com/nexuslbs/omniagent) (multi-stage Rust build)
+2. **omni-dashboard**: from [nexuslbs/omni-dashboard](https://github.com/nexuslbs/omni-dashboard) (Vite + TypeScript)
+3. **toolbox**: from omni-stack/omni-root (`services/toolbox/Dockerfile`, alpine-based maintenance container)
+
+Then:
+1. Runs unit tests + lint
+2. Runs integration tests via `deploy.py ci`
+3. Tags git repos (omni-stack, omniagent, omni-dashboard) with the release version
+4. Pushes + tags **nexuslbs/omni-plugins** — its root `models.yml` provides the
    plugin-less provider definitions used by the release (the noop test provider is
    sourced from omni-plugins, not the omniagent image)
-6. Publishes all three images to GHCR
+5. Publishes all three images to GHCR
 
 | Variable | Default | Description |
 |----------|---------|-------------|
