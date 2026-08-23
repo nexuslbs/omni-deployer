@@ -468,11 +468,11 @@ def generate_env(mode="dev"):
         # deploy/omnideploy). The compose mount interpolates HOST_OMNI_DIR;
         # default /opt/omni covers bare `docker compose up`.
         f.write(f"HOST_OMNI_DIR={s.omni_stack_dir}\n")
-        # 'memory' profile (hindsight + qdrant) is DEV-only — omnistable does
-        # not run it (hindsight plugin disabled, qdrant unused: vectorization
-        # is pgvector/local, search_wiki_qdrant has no callers). User rule
-        # 2026-08-13: stable must not start hindsight/qdrant.
-        profiles = "noop,mattermost,memory" if mode == "dev" else "noop,mattermost"
+        # 'memory' profile (hindsight + qdrant) is NOT enabled for omnidev —
+        # user rule 2026-08-22: no hindsight/qdrant in dev for now (hindsight
+        # has no LLM key wired in omni-root compose; qdrant unused: vectorization
+        # is pgvector/local, search_wiki_qdrant has no callers).
+        profiles = "noop,mattermost"
         f.write(f"COMPOSE_PROFILES={profiles}\n")
         f.write("\n")
         if mode == "stable":
@@ -865,11 +865,12 @@ def seed_remote_plugins():
 
 # ── Runtime state vs seed ────────────────────────────────────────────────────
 # User rule 2026-08-22: omni-stack/omni-root are SEED repos — they carry only
-# the minimal entrypoint (compose) + services + profiles/omni. config/ and
-# plugins/ are RUNTIME state (gitignored): generated at setup/deploy time from
-# the tracked seed (omni-deployer/seed/config) + the plugin API (install-git),
-# and removed when a deploy ends. profiles/omni is the live profile and is
-# ALWAYS kept; any other profiles/ dir is scratch and must not exist.
+# the minimal entrypoint (compose) + services. config/, plugins/ and
+# profiles/ are RUNTIME state (gitignored): generated at setup/deploy time
+# from the tracked seed (omni-deployer/seed/config) + the plugin API
+# (install-git) + core startup (auto-created profiles/<default>/config.json),
+# and removed when a deploy ends. Any profiles/ dir is scratch and must not
+# exist.
 
 def seed_config_dir():
     """Location of the tracked seed config (omni-deployer/seed/config)."""
@@ -922,11 +923,11 @@ def ensure_seed_config(stack_dir=None, overwrite_files=None):
 def cleanup_runtime_state(stack_dir=None):
     """Remove runtime-only state from a data-dir checkout.
 
-    Removes config/, plugins/, any profiles/ dir other than omni/, and the
-    root-level runtime config artifacts (actions.yml/plugins.yml/remote.yml/
-    settings.yml/workflows.yml — gitignored leftovers). Used by deploy.py at
-    the START of dev (regenerates everything from seed + plugin API) and at
-    the END of ALL modes (deploy leaves a pristine seed checkout).
+    Removes config/, plugins/, the ENTIRE profiles/ dir, and the root-level
+    runtime config artifacts (actions.yml/plugins.yml/remote.yml/settings.yml/
+    workflows.yml — gitignored leftovers). Used by deploy.py at the START of
+    dev (regenerates everything from seed + plugin API) and at the END of ALL
+    modes (deploy leaves a pristine seed checkout).
     """
     s = sett()
     stack_dir = stack_dir or s.omni_stack_dir
@@ -944,12 +945,8 @@ def cleanup_runtime_state(stack_dir=None):
             removed.append(name)
     profiles_dir = os.path.join(stack_dir, "profiles")
     if os.path.isdir(profiles_dir):
-        for name in sorted(os.listdir(profiles_dir)):
-            if name == "omni":
-                continue
-            p = os.path.join(profiles_dir, name)
-            sh(f"sudo rm -rf -- {p}")
-            removed.append(f"profiles/{name}")
+        sh(f"sudo rm -rf -- {profiles_dir}")
+        removed.append("profiles")
     if removed:
         print(f"  [cleanup_runtime_state: removed {', '.join(removed)}]")
     else:
@@ -960,8 +957,9 @@ def verify_runtime_clean(stack_dir=None):
     """Raise if a data-dir checkout carries runtime state it should not.
 
     deploy.py hybrid/ci require a pristine seed checkout BEFORE the deploy:
-    if config/ or plugins/ exist, or profiles/ has any dir other than omni/,
-    fail fast — the deploy would otherwise discard unknown state.
+    if config/, plugins/ or the profiles/ dir exist at all (including
+    profiles/omni), fail fast — the deploy would otherwise discard unknown
+    state.
     """
     s = sett()
     stack_dir = stack_dir or s.omni_stack_dir
@@ -971,18 +969,14 @@ def verify_runtime_clean(stack_dir=None):
             problems.append(f"{stack_dir}/{sub} exists")
     profiles_dir = os.path.join(stack_dir, "profiles")
     if os.path.isdir(profiles_dir):
-        for name in sorted(os.listdir(profiles_dir)):
-            if name != "omni":
-                problems.append(
-                    f"{stack_dir}/profiles/{name} exists (only profiles/omni is allowed)"
-                )
+        problems.append(f"{stack_dir}/profiles exists (runtime state)")
     if problems:
         raise RuntimeError(
             "Runtime state present in checkout — hybrid/ci require a pristine "
-            "seed checkout (config/ and plugins/ are generated during the "
-            "deploy and removed at the end).\n" + "\n".join(problems)
+            "seed checkout (config/, plugins/ and profiles/ are generated "
+            "during the deploy and removed at the end).\n" + "\n".join(problems)
         )
-    print("  [verify_runtime_clean: checkout is pristine (no config/, plugins/, or extra profiles)]")
+    print("  [verify_runtime_clean: checkout is pristine (no config/, plugins/, or profiles/)]")
 
 
 # ── Agent test ────────────────────────────────────────────────────────────────
