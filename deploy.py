@@ -1152,12 +1152,20 @@ def test_s3_backup_restore(compose):
     assert_last("secret-04", "after add secret-04")
 
     print(f"  [S3] running restore_checkpoint.sh {ckpt_date} ← local minio...")
+    # restore_checkpoint.sh drops/recreates the omniagent DB but — unlike
+    # restore_backup.sh — does NOT stop the live omniagent first. The agent's
+    # pool reconnects between the script's pg_terminate_backend and the DROP,
+    # so the DROP fails with 'database "omniagent" is being accessed by other
+    # users' (observed on a clean run). Stop omniagent for the checkpoint
+    # restore; it is restarted + health-checked below.
+    run_compose_check(compose, "stop", "omniagent",
+                      label="stop omniagent for checkpoint restore")
     r = run_compose(compose, "exec", "-T", "toolbox", "/usr/bin/restore_checkpoint", ckpt_date)
     if r.returncode != 0:
         raise RuntimeError(
             f"restore_checkpoint.sh failed: {r.stdout[-500:]} {r.stderr[-500:]}")
-    # restore_checkpoint drops/recreates the DB under the running agent —
-    # restart omniagent so its pool reconnects against the restored schema.
+    # omniagent was stopped above for the DB drop — restart it so its pool
+    # reconnects against the restored schema.
     run_compose_check(compose, "restart", "omniagent",
                       label="omniagent restart after checkpoint restore")
     wait_omniagent()
