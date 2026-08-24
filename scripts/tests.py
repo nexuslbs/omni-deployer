@@ -7339,6 +7339,73 @@ def _wf_settings_get(name):
     return None
 
 
+def _wf_bootstrap_trunc_channel():
+    """Create a SECOND dedicated channel for the truncation regression test,
+    configured provider=noop-full model=test-truncate (the noop-full subprocess
+    provider returns finish_reason=length with prose and NO tool call for that
+    model). Never touches the noop/test-tool-caller dedicated channel (incident
+    2026-08-09: never patch a channel for tests)."""
+    import time as _time
+    MM = "http://mattermost:8065"
+    admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
+    admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
+                                       headers={"Content-Type": "application/json"})
+    admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+    assert admin_token, "MM admin login failed — cannot bootstrap the truncation channel"
+    auth = {"Authorization": "Bearer " + admin_token}
+    teams = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/users/me/teams", headers=auth), timeout=10).read())
+    team_id = next((t["id"] for t in teams if t["name"] == "omni"), None)
+    assert team_id, "Cannot find Mattermost team 'omni'"
+    channels = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels", headers=auth), timeout=10).read())
+    mm_ch = next((c for c in channels if c["name"] == "test-channel-trunc"), None)
+    if mm_ch is None:
+        body = json.dumps({"team_id": team_id, "name": "test-channel-trunc",
+                           "display_name": "Truncation Test Channel", "type": "O"}).encode()
+        mm_ch = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"{MM}/api/v4/channels", data=body, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+            timeout=10).read())
+    mm_channel_id = mm_ch["id"]
+    users = json.loads(urllib.request.urlopen(urllib.request.Request(
+        f"{MM}/api/v4/users?per_page=200", headers=auth), timeout=10).read())
+    wanted = {u["username"]: u["id"] for u in users
+              if u.get("username") in ("omnibot", "lucasbasquerotto", "testuser")}
+    for uname, uid in wanted.items():
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"{MM}/api/v4/channels/{mm_channel_id}/members",
+                data=json.dumps({"user_id": uid}).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+                timeout=10).read()
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                raise
+    urllib.request.urlopen(urllib.request.Request(
+        f"{MM}/api/v4/posts",
+        data=json.dumps({"channel_id": mm_channel_id, "message": "$new test-channel-trunc"}).encode(),
+        method="POST", headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
+        timeout=10).read()
+    new_ch = None
+    deadline = _time.time() + 60
+    while _time.time() < deadline:
+        _time.sleep(3)
+        allch = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
+        new_ch = next((c for c in allch if c.get("platform") == "mattermost"
+                       and c.get("resource_identifier") == mm_channel_id), None)
+        if new_ch is not None:
+            break
+    assert new_ch is not None, "OmniAgent did not create the truncation channel within 60s"
+    cid = new_ch["id"]
+    urllib.request.urlopen(urllib.request.Request(
+        f"{BASE}/channels/{cid}",
+        data=json.dumps({"provider": "noop-full", "model": "test-truncate"}).encode(),
+        method="PATCH", headers={"Content-Type": "application/json"}), timeout=10).read()
+    print(f"[wf-test: truncation channel {cid} bootstrapped (noop-full/test-truncate)]")
+    return cid
+
+
 def test_22_workflow_1_executor_only():
     """Executor-only workflow: todo → running → review; step thread carries workflow_id + workflow_step='running'."""
     cid, orig = _wf_channel_patch()
@@ -7630,6 +7697,38 @@ def test_22_workflow_9_dispatch_channel_busy_gate():
         _wf_channel_restore(cid, orig)
 
 
+def test_22_workflow_10_truncated_review_not_done():
+    """Truncation regression (Part 2, live incident task_18cea6054b6e6e73/thread 135):
+    a workflow step whose response is truncated (finish_reason='length') with no tool
+    call while it intends to route must NOT be treated as a completed step. Runs the
+    executor+tester+reviewer chain on the noop-full/test-truncate channel, where every
+    response is truncated prose with finish_reason=length and NO tool call.
+    OLD code (finish_reason hardcoded None for external providers) treated each as a
+    final answer -> all steps 'completed' -> task done (WRONG). FIXED code escalates
+    truncation -> retries -> fails truthfully -> task blocked (RIGHT)."""
+    _wf_ensure_test_python()
+    key = "wf_test_trunc_" + uuid.uuid4().hex[:8]
+    tids = []
+    trunc_cid = None
+    try:
+        trunc_cid = _wf_bootstrap_trunc_channel()
+        put_json(f"/workflows/{key}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
+                                       "roles": {"executor": {"provider": "noop-full", "model": "test-truncate"},
+                                                 "tester": {"provider": "noop-full", "model": "test-truncate",
+                                                            "template": "wf_tester.md"},
+                                                 "reviewer": {"provider": "noop-full", "model": "test-truncate",
+                                                              "template": "wf_reviewer.md"}}})
+        tid = _wf_create_task("wf-trunc", key, WF_SCRIPT_OK, trunc_cid)
+        tids.append(tid)
+        post_json("/kanban/dispatch", {})
+        st, gd = _wf_wait_status(tid, {"done", "blocked"}, timeout=240)
+        assert st != "done", f"truncated step response must NOT mark the task done; got {st}: {gd}"
+        assert st == "blocked", f"expected blocked after truncation retry-then-fail, got {st}: {gd}"
+    finally:
+        _wf_remove_test_python()
+        _wf_cleanup([key], tids)
+
+
 test(test_22_workflow_1_executor_only)
 test(test_22_workflow_2_executor_tester)
 test(test_22_workflow_3_executor_tester_reviewer)
@@ -7639,6 +7738,7 @@ test(test_22_workflow_6_interruption_rerun)
 test(test_22_workflow_7_clear_executions_on_review)
 test(test_22_workflow_8_d9_dependency_gate)
 test(test_22_workflow_9_dispatch_channel_busy_gate)
+test(test_22_workflow_10_truncated_review_not_done)
 #  GROUP 26: Plain kanban task (NO workflow_id) - fail-tool -> blocked; clean completion -> review (R8-N)
 print(f"\n{'=' * 60}")
 print("GROUP 26: Plain kanban task (no workflow_id) - fail-tool -> blocked; clean completion -> review (R8-N)")
