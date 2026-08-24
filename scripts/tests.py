@@ -10539,29 +10539,38 @@ def test_36_config_wiring():
     assert "nexuslbs/omni-plugins.git" in remote_txt, \
         "remote.yml must point at nexuslbs/omni-plugins"
     assert "tools/paperclip" in remote_txt, "remote.yml path must be tools/paperclip"
-    # The seed ships no profiles/ dir — the core auto-created
-    # profiles/<default>/config.json at startup ({"allowed_tools": []}) and an
-    # operator grants tools by editing that runtime file. Seed the paperclip
-    # whitelist fixture and verify the file-based mechanism works.
-    cfg_path = f"{WORKSPACE}/profiles/omni/config.json"
-    assert os.path.isfile(cfg_path), (
-        f"profile config.json not auto-created at startup: {cfg_path}")
-    with open(cfg_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    assert isinstance(cfg.get("allowed_tools"), list), (
-        f"config.json missing allowed_tools key: {cfg}")
+    # The seed ships no profiles/ dir — the core auto-DECLARES the default
+    # profile in config/profiles.yml at startup (profiles.yml is the single
+    # source of truth; profiles/<name>/config.json is legacy and is NOT
+    # auto-created anymore). An operator grants tools by editing that runtime
+    # yml. Seed the paperclip whitelist fixture and verify the yml-based
+    # mechanism works.
+    profiles_yml = f"{WORKSPACE}/config/profiles.yml"
+    assert os.path.isfile(profiles_yml), (
+        f"config/profiles.yml not present at startup: {profiles_yml}")
+    with open(profiles_yml, encoding="utf-8") as f:
+        ptext = f.read()
+    assert "profiles:" in ptext, (
+        f"profiles.yml missing top-level profiles: map: {ptext[:200]}")
+    assert "omni" in ptext, (
+        f"profiles.yml must declare the omni profile: {ptext[:200]}")
+    # Startup auto-create must NOT touch the profiles/ directory.
+    legacy_cfg = f"{WORKSPACE}/profiles/omni/config.json"
+    assert not os.path.exists(legacy_cfg), (
+        f"profiles/<default>/config.json must NOT be auto-created: {legacy_cfg}")
     paperclip_tools = ["paperclip_paperclipMe", "paperclip_paperclipApiRequest",
                        "paperclip_paperclipListIssues",
                        "paperclip_paperclipCreateIssue"]
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump({"allowed_tools": paperclip_tools}, f)
-    with open(cfg_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    allowed = cfg.get("allowed_tools", [])
+    with open(profiles_yml, "w", encoding="utf-8") as f:
+        f.write("profiles:\n  omni:\n    allowed_tools:\n")
+        for t in paperclip_tools:
+            f.write(f"      - {t}\n")
+    with open(profiles_yml, encoding="utf-8") as f:
+        ptext = f.read()
     for t in paperclip_tools:
-        assert t in allowed, f"allowed_tools missing {t}"
+        assert t in ptext, f"allowed_tools missing {t}"
     print("PASS: config wiring (plugins.yml remote+URL+secret, remote.yml "
-          "entry, profile config.json allowed_tools paperclip_* tools)")
+          "entry, profiles.yml allowed_tools paperclip_* tools)")
 
 
 def test_36_plugin_files():

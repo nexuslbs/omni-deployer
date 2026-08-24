@@ -1,0 +1,23 @@
+# profiles.yml — single source of truth for profile definitions.
+#
+# Profiles are DECLARED by presence in this file (mirroring how channels.yml
+# defines channels). The map KEY is the profile NAME — the stable identifier
+# used in threads.profile, channels.yml `profile:`, kanban boards/tasks
+# `profile:` and the dashboard profile selects.
+#
+# A `profiles/<name>/` directory still carries profile FILES (templates,
+# skills, wiki, MEMORY.md) but a profile dir with no matching entry here is
+# ignored; conversely an entry here is an existing profile even with no
+# directory. The legacy `profiles/<name>/config.json` stays on disk for
+# backward compat but is NO LONGER read.
+#
+# Fields (all optional):
+#   provider:      default provider name (omitted → falls through to the
+#                  global default_provider setting / LLM_PROVIDER env)
+#   model:         default model name (omitted → provider's default model)
+#   plan:          profile-level plan override (true/false)
+#   template:      profile-level thread template
+#   allowed_tools: allowed MCP tool names (empty list = no tools)
+profiles:
+  omni:
+    allowed_tools: []
