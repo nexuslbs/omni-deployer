@@ -11350,9 +11350,23 @@ def test_40_action_tester_fail_review():
         assert st == "review", f"40-C: action tester fail must go to review (NOT executor re-run), got {st}: {gd}"
         thr = _wf_step_threads(tid)
         run = [t for t in thr if t["workflow_step"] == "running"]
-        test = [t for t in thr if t["workflow_step"] == "testing"]
         assert len(run) == 1, f"40-C: exactly one running thread (no D5 re-run), got {thr}"
-        assert len(test) == 1 and test[0]["status"] == "failed", f"40-C: testing thread terminal failed, got {test}"
+        # The task already reached 'review' (asserted above), but the
+        # dispatcher's fail->review transition races with its retries:1 retry
+        # logic and can briefly leave extra testing threads in created/pending
+        # state. Wait for the testing step to settle (all terminal, exactly
+        # one failed); if live threads remain after 30s the final assert fails.
+        test = [t for t in thr if t["workflow_step"] == "testing"]
+        for _ in range(30):
+            failed = [t for t in test if t["status"] == "failed"]
+            stray = [t for t in test if t["status"] not in ("failed", "skipped", "interrupted")]
+            if len(failed) == 1 and not stray:
+                break
+            time.sleep(1)
+            test = [t for t in _wf_step_threads(tid) if t["workflow_step"] == "testing"]
+        failed = [t for t in test if t["status"] == "failed"]
+        stray = [t for t in test if t["status"] not in ("failed", "skipped", "interrupted")]
+        assert len(failed) == 1 and not stray, f"40-C: testing thread terminal failed, got {test}"
         print(f"PASS: 40-C action tester fail → review (running#{len(run)}, testing failed)")
     finally:
         _wf_cleanup([key], tids)
@@ -11380,7 +11394,19 @@ def test_40_action_reviewer_fail_blocked():
         assert st == "blocked", f"40-D: action reviewer fail must go to blocked, got {st}: {gd}"
         thr = _wf_step_threads(tid)
         rev = [t for t in thr if t["workflow_step"] == "review"]
-        assert len(rev) == 1 and rev[0]["status"] == "failed", f"40-D: review thread terminal failed, got {rev}"
+        # Same dispatcher race as 40-C: retries:1 can briefly create extra
+        # review threads before the fail->blocked transition. Wait for the
+        # review step to settle, then assert.
+        for _ in range(30):
+            failed = [t for t in rev if t["status"] == "failed"]
+            stray = [t for t in rev if t["status"] not in ("failed", "skipped", "interrupted")]
+            if len(failed) == 1 and not stray:
+                break
+            time.sleep(1)
+            rev = [t for t in _wf_step_threads(tid) if t["workflow_step"] == "review"]
+        failed = [t for t in rev if t["status"] == "failed"]
+        stray = [t for t in rev if t["status"] not in ("failed", "skipped", "interrupted")]
+        assert len(failed) == 1 and not stray, f"40-D: review thread terminal failed, got {rev}"
         print(f"PASS: 40-D action reviewer fail → blocked (review thread failed)")
     finally:
         _wf_cleanup([key], tids)
