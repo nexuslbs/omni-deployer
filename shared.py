@@ -1338,17 +1338,47 @@ def _get_profile_path():
 
 
 def _read_profile():
-    """Read the omni profile config."""
-    path = _get_profile_path()
-    r = oc("cat " + path)
-    if r.returncode != 0:
-        raise RuntimeError("Could not read profile: " + (r.stderr or r.stdout[:200]))
-    return json.loads(r.stdout)
+    """Read the omni profile config.
+
+    Source of truth is now config/profiles.yml (profiles API); the legacy
+    profiles/<name>/config.json is no longer materialized by the core
+    (src/profile/mod.rs: "no create_dir_all, no config.json write"). Read
+    via the API when available, falling back to the legacy file path for
+    older binaries.
+    """
+    try:
+        profiles = oc_curl("GET", "/profiles")
+        if isinstance(profiles, list):
+            for p in profiles:
+                if p.get("name") == "omni":
+                    return {
+                        "allowed_tools": p.get("allowed_tools") or [],
+                        "provider": p.get("provider"),
+                        "model": p.get("model"),
+                        "plan": p.get("plan"),
+                        "template": p.get("template"),
+                    }
+        # API reachable but no omni profile → empty declaration
+        return {"allowed_tools": []}
+    except Exception:
+        # Legacy binary / API not reachable: read the legacy config.json
+        path = _get_profile_path()
+        r = oc("cat " + path)
+        if r.returncode != 0:
+            raise RuntimeError("Could not read profile: " + (r.stderr or r.stdout[:200]))
+        return json.loads(r.stdout)
 
 
 def _write_profile(config):
-    """Write the omni profile config."""
-    oc_write(_get_profile_path(), json.dumps(config, indent=2))
+    """Write the omni profile config via the profiles API (fallback: file)."""
+    allowed = config.get("allowed_tools", [])
+    payload = {"allowed_tools": allowed}
+    try:
+        oc_curl("PATCH", "/profiles/omni", payload)
+        return
+    except Exception:
+        # Legacy path: write the legacy config.json
+        oc_write(_get_profile_path(), json.dumps(config, indent=2))
 
 
 def _restore_profile(backup):
