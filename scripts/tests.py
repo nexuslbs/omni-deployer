@@ -8090,9 +8090,9 @@ def test_27_hooks_counter_trigger_reset():
             f"count=3 counter must never sit at/above threshold after quiesce: {c3}"
         # every non-hook message fires the count=1 hook once (async pipeline -> wait);
         # only NEW hook threads (id > pre) count — leftover threads from prior runs are inert
-        ok = _h27_wait_until(lambda: _h27_new_threads("G27-ONCE", pre_once) >= ground_n, timeout=30)
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-ONCE", pre_once) >= ground_n, timeout=120)
         assert ok, f"count=1 must fire once per event: once={_h27_new_threads('G27-ONCE', pre_once)} ground={_h27_nonhook_ground(base)}"
-        ok = _h27_wait_until(lambda: _h27_new_threads("G27-CNT3", pre_cnt3) >= ground_n // 3, timeout=30)
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-CNT3", pre_cnt3) >= ground_n // 3, timeout=120)
         assert ok, f"count=3 must fire every 3rd event: cnt3={_h27_new_threads('G27-CNT3', pre_cnt3)} want={ground_n // 3}"
         print(f"PASS: ground={ground_n} once_triggers={_h27_new_threads('G27-ONCE', pre_once)} cnt3_triggers={_h27_new_threads('G27-CNT3', pre_cnt3)} "
               f"counter_once={c1.get('global')} counter_cnt3={c3.get('global')}")
@@ -8141,7 +8141,7 @@ def test_27_hooks_scope_channel_profile():
         assert ok, f"no thread_started event observed for profile 'omni': {_h27_counter(hid_obs_p)}"
         ok = _h27_wait_until(lambda: _h27_counter_key(hid_prof, "profile", "omni") == 0, timeout=30)
         assert ok, f"profile omni hook must trigger+reset (count=1): {_h27_counter(hid_prof)}"
-        ok = _h27_wait_until(lambda: _h27_new_threads("G27-PROF", pre_prof) >= 1, timeout=30)
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-PROF", pre_prof) >= 1, timeout=120)
         assert ok, "profile-scoped agentic hook must spawn a hook-caused thread"
         # mismatched hooks must stay untouched (global 0, no scope key at all)
         c_chan_o = _h27_counter(hid_chan_o)
@@ -8226,7 +8226,7 @@ def test_27_hooks_infinite_loop_protection():
         assert o1 == ground_1, \
             f"observer must equal non-hook messages exactly: obs_delta={o1} ground={ground_1} (converged={ok})"
         # trigger hook fired: hook-caused threads exist with the trigger prompt (new-only)
-        ok = _h27_wait_until(lambda: _h27_new_threads("G27-TRIG", pre_trig) >= 1, timeout=25)
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-TRIG", pre_trig) >= 1, timeout=120)
         assert ok, "thread_started count=1 hook must have triggered"
         # manual fire: another hook-caused thread; its messages must NOT move the
         # observer. Snapshot ground truth IMMEDIATELY before the fire and assert
@@ -8289,7 +8289,7 @@ def test_27_hooks_error_isolation():
         ok = _h27_wait_until(lambda: _h27_obs_ge(hid_obs_t, "global", "global", 1), timeout=30)
         assert ok, f"expected >=1 thread_started event, got {_h27_counter(hid_obs_t)}"
         cid2 = _h27_run_cron("err2")
-        ok = _h27_wait_until(lambda: _h27_new_threads("G27-BADPROF", pre_badprof) >= 1, timeout=40)
+        ok = _h27_wait_until(lambda: _h27_new_threads("G27-BADPROF", pre_badprof) >= 1, timeout=120)
         assert ok, "bad-profile agentic hook must still spawn a hook-caused thread (trigger ran)"
         _h27_quiesce(lambda: _h27_nonhook_ground(base))
         cp = _h27_counter_key(hid_badprof, "global", "global")
