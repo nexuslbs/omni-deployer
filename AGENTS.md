@@ -76,9 +76,12 @@ task actually changed). A committed scratch script or credential is an automatic
 
 1. Generates `omni.env` (no LLM keys) + seeds `remote.yml`.
 2. Stops services, removes data volumes (clean slate).
-3. `dev`/`hybrid`: builds images; dev runs cargo pretests (fmt/clippy/unit) in the
-   dev container. `hybrid` builds the production Dockerfile (its builder stage runs
-   the same quality gates).
+3. `dev`: builds images; dev runs cargo pretests (fmt/clippy/unit) in the
+   dev container. `hybrid` builds the production Dockerfile (its builder stage
+   runs the same quality gates). `ci` SKIPS pretests — the production Dockerfile
+   builder already ran the identical gates during the CI image build, so
+   re-running them on the runner (cold cargo cache, 2-core) would duplicate
+   work and blow the time budget.
 4. Starts services, registers the remote noop provider, runs the integration test
    suite (`scripts/tests.py`, GROUP 1–49), then the shared tool tests
    (`shared.run_tests()`), twice (single pass in `ci` mode — the hosted runner's

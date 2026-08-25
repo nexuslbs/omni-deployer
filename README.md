@@ -20,6 +20,7 @@ test harness), `omnidev.py` / `omnistable.py` (dev/stable stack lifecycle),
 python3 deploy.py dev
 
 # CI mode: uses pre-built images (OMNIAGENT_IMAGE, DASHBOARD_IMAGE, TOOLBOX_IMAGE must be set)
+# Pretests are skipped — the production Dockerfile builder already ran fmt/check/clippy/unit during the image build.
 WORKSPACE_DIR=/path/to/workspace python3 deploy.py ci
 
 # Hybrid mode: builds the production Dockerfile (its builder stage runs the quality gates)

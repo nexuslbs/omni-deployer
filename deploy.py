@@ -240,8 +240,11 @@ def run_pretests(mode):
     """
     Run pre-deploy checks: fmt, clippy, unit tests, build test binaries.
 
-    In CI mode, cargo runs directly on the host (GitHub runner has Rust).
     In dev mode, cargo runs inside the dev container (via docker compose run).
+    In ci/hybrid modes pretests are SKIPPED: the production Dockerfile's
+    builder stage runs the identical gates during the image build (the CI
+    build job builds the images, so re-running them on the host with a cold
+    cargo cache would duplicate work and blow the runner's time budget).
     """
     docker_mode = mode  # for compose run; only dev uses the dev overlay
     compose = compose_cmd(docker_mode)
@@ -250,9 +253,15 @@ def run_pretests(mode):
     print("  PRETESTS")
     print("=" * 60)
 
-    if mode == "hybrid":
-        # Hybrid: no separate pretests — the production Dockerfile's builder
-        # stage runs fmt, check, clippy, and unit tests during `docker build`.
+    if mode in ("ci", "hybrid"):
+        # Hybrid + CI: no separate pretests — the production Dockerfile's
+        # builder stage runs the identical gates (fmt --check, check -D
+        # warnings, clippy -D warnings, cargo test --release) during
+        # `docker build`. CI's build job already ran them (warm layered
+        # cache); re-running the same four cargo commands on the host with
+        # a cold cargo cache on the 2-core runner ballooned as the
+        # workspace grew (spill/compact/goal/cost/code-exec/prompt-sections)
+        # and pushed the job past the runner's time budget (>1h).
         print("\n[pretests] Skipping (run via production Dockerfile build)...")
         return
 
