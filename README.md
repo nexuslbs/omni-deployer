@@ -30,7 +30,9 @@ python3 deploy.py test
 ```
 
 The script generates `omni.env` with random passwords, starts services, runs
-migrations, and executes the integration test suite (`scripts/tests.py`) twice.
+migrations, and executes the integration test suite (`scripts/tests.py`) twice
+(single pass in `ci` mode — the GitHub-hosted runner's 1h budget can't fit
+the double pass; dev/hybrid keep 2 passes for extra confidence).
 
 ## Dev vs Stable stacks
 

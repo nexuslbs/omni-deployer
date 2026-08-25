@@ -872,8 +872,13 @@ def _deploy(mode):
     # Step 9: Rust integration tests (api_tests, plugin_tests)
     run_rust_integration_tests(compose, mode)
 
-    # Step 10: Python integration tests (2 passes, no retry — tests must be robust)
-    for pass_num in [1, 2]:
+    # Step 10: Python integration tests (2 passes, no retry — tests must be
+    # robust). CI runs a SINGLE pass: the GitHub-hosted runner died after
+    # >1h ("lost communication with the server") — the double pass plus the
+    # build pushed it over the runner's time budget. dev/hybrid keep the
+    # double pass for extra confidence.
+    passes = [1] if mode == "ci" else [1, 2]
+    for pass_num in passes:
         # Before each tests.py invocation, re-assert the SEED content of the
         # transient config files (plugins.yml, remote.yml, actions.yml,
         # settings.yml, workflows.yml) in the bind-mounted omni-stack config/

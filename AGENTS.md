@@ -81,7 +81,8 @@ task actually changed). A committed scratch script or credential is an automatic
    the same quality gates).
 4. Starts services, registers the remote noop provider, runs the integration test
    suite (`scripts/tests.py`, GROUP 1–49), then the shared tool tests
-   (`shared.run_tests()`), twice.
+   (`shared.run_tests()`), twice (single pass in `ci` mode — the hosted runner's
+   1h budget can't fit the double pass; dev/hybrid keep 2 passes).
 5. Restores omni-stack tracked config to HEAD.
 
 A successful run ends with `ALL TESTS PASSED (including shared tool tests)` and all
