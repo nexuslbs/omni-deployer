@@ -15,7 +15,7 @@ hooks:
         this hook and its last message.
       - channel: the channel of the triggering thread. - profile: the profile of the triggering thread.
       Read the thread contents of the threads between last_thread and current_thread (both inclusive) and IGNORE every thread after current_thread. You MAY look at threads before last_thread for context, especially nearby ones, but base your changes on the threads between the two ids. Look ONLY at threads of the profile named in the Event JSON.
-      Create/update wiki files and skills, and create/delete/merge skills and wiki files of the RESPECTIVE PROFILE ONLY (the profile in the Event JSON). You may UPDATE existing templates of that profile, but do NOT create, delete or merge templates. Avoid template updates unless REALLY important: templates are small and included in every prompt — keep only the most relevant info; weigh whether an update is REALLY valuable before doing it.
+      Create/update wiki files and skills, and create/delete/merge skills and wiki files of the RESPECTIVE PROFILE ONLY (the profile in the Event JSON). You may UPDATE existing templates of that profile, but do NOT create, delete or merge templates. Avoid template updates unless REALLY important: templates are small and included in every prompt - keep only the most relevant info; weigh whether an update is REALLY valuable before doing it.
     mode: agentic
   channel-summaries:
     enabled: true

@@ -146,7 +146,7 @@ def api_put(path, body=None):
         raise AssertionError(f"PUT {path} failed (HTTP {e.code}): {json.loads(raw)}")
 
 def get_json(path):
-    """GET without /api prefix — for root-level CRUD routes like /channels, /settings, /overview."""
+    """GET without /api prefix - for root-level CRUD routes like /channels, /settings, /overview."""
     import urllib.request, json
     try:
         r = urllib.request.urlopen(f"{BASE}{path}", timeout=10)
@@ -165,7 +165,7 @@ def get_data(path):
     return raw.get("data", raw)
 
 def post_json(path, body=None):
-    """POST without /api prefix — for root-level CRUD routes."""
+    """POST without /api prefix - for root-level CRUD routes."""
     import urllib.request, urllib.error, json
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(f"{BASE}{path}", data=data, method="POST",
@@ -179,7 +179,7 @@ def post_json(path, body=None):
         raise AssertionError(f"POST {path} failed (HTTP {e.code}): {raw}")
 
 def delete_json(path, raise_on_error=True):
-    """DELETE without /api prefix — for root-level CRUD routes."""
+    """DELETE without /api prefix - for root-level CRUD routes."""
     import urllib.request, json
     req = urllib.request.Request(f"{BASE}{path}", method="DELETE")
     try:
@@ -192,7 +192,7 @@ def delete_json(path, raise_on_error=True):
         return {"error": raw}
 
 def put_json(path, body=None):
-    """PUT without /api prefix — for root-level CRUD routes."""
+    """PUT without /api prefix - for root-level CRUD routes."""
     import urllib.request, urllib.error, json
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(f"{BASE}{path}", data=data, method="PUT",
@@ -390,7 +390,7 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
       1. Already exists at target path
       2. .remote/ directory (for remote→bundled collision tests)
       3. omni-plugins repo (/opt/workspace/omni-plugins/)
-    NOTE: there is NO omni-stack git fallback — omni-stack is a seed repo and
+    NOTE: there is NO omni-stack git fallback - omni-stack is a seed repo and
     tracks zero plugins, so there is nothing to restore from its git history.
     """
     target = f"{WORKSPACE}/plugins/{plugin_type}/{name}"
@@ -470,7 +470,7 @@ def remove_remote_plugin(name, plugin_type="tools"):
     
     The API handles .remote/ directory removal + remote.yml entry removal 
     + plugins.yml entry removal (if source matches). Does NOT touch any 
-    files directly — everything goes through the Rust code.
+    files directly - everything goes through the Rust code.
     """
     try:
         api_delete(f"/plugins/{plugin_type}/remote/{name}")
@@ -525,7 +525,7 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
     import urllib.request
     deadline = time.time() + max(timeout, 60)
 
-    # Also check via provider API — polls until the provider reports
+    # Also check via provider API - polls until the provider reports
     # itself as enabled with metadata (subprocess registration signal)
     api_ready = False
     pids_found = False
@@ -568,7 +568,7 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
                 if real_pids:
                     pids_found = True
         except FileNotFoundError:
-            # pgrep not available — fall through to ps aux fallback below
+            # pgrep not available - fall through to ps aux fallback below
             pass
         except subprocess.TimeoutExpired:
             pass
@@ -1105,7 +1105,7 @@ def test_3():
     try:
         resp = api_delete(f"/plugins/{ptype}/remote/{name}")
     finally:
-        # Restore remote.yml FIRST — the delete also removes the entry from
+        # Restore remote.yml FIRST - the delete also removes the entry from
         # remote.yml and the download endpoint needs it to re-clone.
         if os.path.exists(remote_yml_bak):
             shutil.copy2(remote_yml_bak, f"{WORKSPACE}/config/remote.yml")
@@ -1117,7 +1117,7 @@ def test_3():
             api_post(f"/plugins/{ptype}/remote/{name}/download", {})
         except Exception as e:
             print(f"  [WARN: download restore failed: {e}]")
-        # Restore plugins.yml LAST — the download handler rewrites the
+        # Restore plugins.yml LAST - the download handler rewrites the
         # plugin's plugins.yml entry with an EMPTY config (remote.yml carries
         # only url/path, not config), wiping config refs. Restoring the backup
         # afterwards + restarting re-reads the original entry.
@@ -1153,7 +1153,7 @@ def test_6():
 
     The first remote plugin found can be a CRITICAL one (e.g. `actions`,
     needed by GROUP 37/40/41). Deleting it without restoring leaves the
-    suite broken — restore YAML entries + re-clone the .remote/ dir exactly
+    suite broken - restore YAML entries + re-clone the .remote/ dir exactly
     like test_3 does (config/ is runtime-only now: there is no git restore
     to fall back on between groups)."""
     name, ptype = find_plugin("remote", skip_duplicated=False)
@@ -1166,7 +1166,7 @@ def test_6():
     try:
         resp = api_delete(f"/plugins/{ptype}/remote/{name}")
     finally:
-        # Restore remote.yml FIRST — the delete also removes the entry from
+        # Restore remote.yml FIRST - the delete also removes the entry from
         # remote.yml and the download endpoint needs it to re-clone.
         if os.path.exists(remote_yml_bak):
             shutil.copy2(remote_yml_bak, f"{WORKSPACE}/config/remote.yml")
@@ -1177,7 +1177,7 @@ def test_6():
             api_post(f"/plugins/{ptype}/remote/{name}/download", {})
         except Exception as e:
             print(f"  [WARN: download restore failed: {e}]")
-        # Restore plugins.yml LAST — the download handler rewrites the
+        # Restore plugins.yml LAST - the download handler rewrites the
         # plugin's plugins.yml entry with an EMPTY config (remote.yml carries
         # only url/path, not config), wiping config refs (e.g.
         # database_url/omni_dir on the actions plugin). Restoring the backup
@@ -1704,10 +1704,10 @@ def _git_status(repo_dir):
     return result.stdout.strip()
 
 def _git_discard_all(repo_dir):
-    """Restore all tracked files to HEAD — unstages, then restores modified/deleted files.
+    """Restore all tracked files to HEAD - unstages, then restores modified/deleted files.
     Does NOT git clean -fd (preserves compiled Rust binaries under target/).
 
-    config/* (channels.yml, tasks.yml, ...) is NOT tracked anymore — it is
+    config/* (channels.yml, tasks.yml, ...) is NOT tracked anymore - it is
     runtime-only state (gitignored, seeded from omni-deployer/seed/config), so
     git checkout never touches it. The deploy's noop channel pin and cleared
     tasks.yml persist in the runtime config/ and are removed by the deploy's
@@ -1717,16 +1717,16 @@ def _git_discard_all(repo_dir):
         ["git", "checkout", "HEAD", "--", "."],
         cwd=repo_dir, capture_output=True,
     )
-    # Intentionally no git clean -fd — that would delete compiled binaries from target/
+    # Intentionally no git clean -fd - that would delete compiled binaries from target/
 
 def check_git_clean():
-    """Raise if omni-stack repo has unstaged changes — auto-revert known test artifacts first."""
+    """Raise if omni-stack repo has unstaged changes - auto-revert known test artifacts first."""
     dirty = _git_status(OMNI_STACK_DIR)
     if dirty:
         # Known transient test artifacts that tests may leave behind on the
         # bind-mounted host directory (profiles/omni/wiki/relevant-index.md
         # rewritten by the relevance-indexer tests; untracked/ignored
-        # plugins/ residue). config/* is runtime-only now — it never appears
+        # plugins/ residue). config/* is runtime-only now - it never appears
         # in git status (untracked), so it is not part of this check.
         known_artifacts = {"plugins/"}
         dirty_lines = [l for l in dirty.split("\n") if l.strip()]
@@ -1861,7 +1861,7 @@ def _assert_remote_yml_unchanged(pre_snapshot, msg=""):
         if _attempt < 4:
             _time.sleep(0.5)
             continue
-        # Final attempt — print diagnostic diff (which entry changed)
+        # Final attempt - print diagnostic diff (which entry changed)
         pre_keys = set(pre_snapshot.get("tools", {}).keys())
         cur_keys = set(current.get("tools", {}).keys())
         diff_parts = []
@@ -1899,7 +1899,7 @@ def test_enable_source(name, source, expected_success=True):
     remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"
     if source == "remote" and expected_success and not os.path.exists(remote_dir):
         # Remote plugins must be installed before enable/disable can be
-        # exercised — install the fixture first (idempotent).
+        # exercised - install the fixture first (idempotent).
         ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
@@ -1956,7 +1956,7 @@ def test_install_source(name, source, expected_success=True):
     remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"
     if source == "remote" and expected_success and not os.path.exists(remote_dir):
         # Remote plugins must be installed before enable/disable can be
-        # exercised — install the fixture first (idempotent).
+        # exercised - install the fixture first (idempotent).
         ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if source == "remote":
@@ -1988,7 +1988,7 @@ def test_reinstall_source(name, source, expected_success=True):
     pre_remote = _remote_yml_snapshot()
     if expected_success:
         # Reinstall of a remote Rust plugin recompiles from source; same
-        # cold-cache consideration as install — keep 180s ceiling.
+        # cold-cache consideration as install - keep 180s ceiling.
         resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/reinstall", {}, timeout=180)
         _assert_yaml_state(name, ptype, expect_source=source)
         _assert_remote_yml_unchanged(pre_remote)
@@ -2007,7 +2007,7 @@ def test_download_source(name, source, expected_success=True):
     remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{name}"
     if source == "remote" and expected_success and not os.path.exists(remote_dir):
         # Remote plugins must be installed before enable/disable can be
-        # exercised — install the fixture first (idempotent).
+        # exercised - install the fixture first (idempotent).
         ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
@@ -2857,7 +2857,7 @@ def test_mm9_e2e():
     import urllib.request, urllib.error, time
     _ensure_mm_platform_binary()
     # Ensure noop provider exists (GROUP 1 tests may have deleted it).
-    # Restore from the omni-plugins repo — omni-stack is a seed and tracks no
+    # Restore from the omni-plugins repo - omni-stack is a seed and tracks no
     # plugins, so there is no git fallback.
     noop_dir = f"{WORKSPACE}/plugins/providers/noop"
     if not os.path.exists(noop_dir):
@@ -2946,7 +2946,7 @@ def test_mm9_e2e():
             pass
         _time.sleep(1)
     else:
-        raise AssertionError("[FAIL] prompt_generate tool not found after 10s — prompt plugin may not be properly enabled")
+        raise AssertionError("[FAIL] prompt_generate tool not found after 10s - prompt plugin may not be properly enabled")
 
     # 6. Find the omniagent channel created by the setup handler
     channel_id = None
@@ -2983,7 +2983,7 @@ def test_mm9_e2e():
 
     # 8. Login as testuser (setup created this user with known password).
     #    No manual admin login, password reset, or team/channel membership
-    #    needed — the setup API handled all of that.
+    #    needed - the setup API handled all of that.
     token = _mm_login(MM, test_user, test_pass)
     print("[testuser logged in]")
 
@@ -3081,8 +3081,8 @@ def test_fn_9b_provider_source_awareness():
                 noop_ok = True
                 break
             if candidate_url == "https://github.com/nexuslbs/omni-plugins.git":
-                # Both file:// and HTTPS exhausted — non-fatal, skip the rest
-                print(f"  [WARNING: noop registration failed — skipping provider source-awareness test]")
+                # Both file:// and HTTPS exhausted - non-fatal, skip the rest
+                print(f"  [WARNING: noop registration failed - skipping provider source-awareness test]")
                 print(f"  [Reason: {e}]")
             else:
                 print(f"  [file:// failed, retrying with HTTPS...]")
@@ -3245,7 +3245,7 @@ def test_fn_9b_provider_source_awareness():
     assert found_bundled, "Bundled noop provider did not reply with 'noop-bundled' within 60s"
     print("  [Phase 2 PASS: bundled noop replied correctly]")
 
-    # Cleanup: remove test-created bundled noop (omni-stack is a seed — the
+    # Cleanup: remove test-created bundled noop (omni-stack is a seed - the
     # real noop provider is built-in in the omniagent image, nothing to restore)
     if os.path.exists(NOOP_TARGET):
         shutil.rmtree(NOOP_TARGET)
@@ -3607,7 +3607,7 @@ def _compact_call(messages: list, keep_recent: int = 3,
 
     soft_budget/hard_budget are REQUIRED tool params (token budgets; the
     omniagent resolves the effective per-thread budgets from model config >
-    provider > global settings and passes them in — the plugin has NO budget
+    provider > global settings and passes them in - the plugin has NO budget
     config). Tests pass explicit values so they are independent of the
     deployed settings. thread_dir/current_iteration are optional (durable
     auto-notes + context dump)."""
@@ -3643,8 +3643,8 @@ def _compact_call(messages: list, keep_recent: int = 3,
 # (soft is the reduction target, NOT a trigger). When the size is under the
 # hard budget the tool returns messages=null (no compaction).
 #
-# Tests use the TOKEN budgets (soft_budget/hard_budget) — the only budget
-# type left after the char-budget removal — passed as REQUIRED compact-messages
+# Tests use the TOKEN budgets (soft_budget/hard_budget) - the only budget
+# type left after the char-budget removal - passed as REQUIRED compact-messages
 # PARAMS (the omniagent resolves the per-thread budgets from model config >
 # provider > global settings and passes them in; the plugin is agnostic). The
 # plugin has NO budget config. With the chars/4 fallback the deployed plugin
@@ -3662,7 +3662,7 @@ TOKEN_HARD = 100000
 def _make_big_context(pairs=8, pad_chars=70000):
     """Dynamically build a large conversation whose total content exceeds the
     hard token budget. Each message differs (index-suffixed tool names and
-    padded content) so the context is realistic and the file stays small —
+    padded content) so the context is realistic and the file stays small -
     nothing is hardcoded. 8 pairs × 70k ≈ 560k chars ≈ 140k tokens (chars/4)
     > 100k hard."""
     msgs = [_make_user_msg("Start")]
@@ -3685,7 +3685,7 @@ def _msgs_size(msgs):
 
 
 def _msgs_size_tokens(msgs):
-    """Deterministic chars/4 token estimate — the plugin's no-tokenizer
+    """Deterministic chars/4 token estimate - the plugin's no-tokenizer
     fallback (tokens ≈ chars/4). Content chars are a lower bound of the
     plugin's measure (which also counts tool-call names/args), so `// 4`
     stays safely on the asserted side of the budgets below."""
@@ -3743,7 +3743,7 @@ def test_p7_tool_names_preserved():
     resp = _compact_call(msgs, keep_recent=2)
     assert resp["was_compacted"], f"Should compact over hard budget: {resp}"
     # NOTE: compact_old_assistant_messages now writes ONE frozen system-message
-    # summary block "=== Compaction Summary ===" (compact.rs) — match on that.
+    # summary block "=== Compaction Summary ===" (compact.rs) - match on that.
     compacted = [m for m in resp["messages"] if "=== Compaction Summary ===" in m.get("content", "")]
     assert compacted, "Expected at least one compacted message"
     for m in compacted:
@@ -3788,7 +3788,7 @@ def test_p7_three_pass_cap_partial_result():
     the HARD trigger budget (100k tokens), so later iterations stop re-triggering
     compaction. 4 pairs x 300k = 1.2M chars = 300k tokens (kept under the ~2MB
     HTTP body limit): keep=3 leaves 225k tokens, keep=2 leaves 150k, keep=1
-    leaves 75k — all > 50k soft, so the 3-pass cap fires and returns the
+    leaves 75k - all > 50k soft, so the 3-pass cap fires and returns the
     partial result."""
     msgs = _make_big_context(pairs=4, pad_chars=300000)
     assert _msgs_size_tokens(msgs) > TOKEN_HARD, "Test context must exceed hard token budget"
@@ -3867,12 +3867,12 @@ def test_p7_idempotent():
 
 
 # ── Prune-in-compact tests (budgets as params; tool results drained inside
-#    compact-messages — the thread-700 re-read death-spiral fix moved from
+#    compact-messages - the thread-700 re-read death-spiral fix moved from
 #    core into the plugin) ─────────────────────────────────────────────
 
 def test_p8_prune_drains_read_results_into_auto_notes():
     """Over the hard budget, old read-type tool results are drained AND
-    auto-noted into the thread dir (survive pruning) — the plugin owns
+    auto-noted into the thread dir (survive pruning) - the plugin owns
     pruning now; budgets come in as params."""
     import tempfile
     tmp = tempfile.mkdtemp(prefix="p8-prune-")
@@ -3930,7 +3930,7 @@ def test_p8_under_budget_no_prune_no_rewrite():
 
 def test_p8_missing_budget_params_is_error():
     """compact-messages REQUIRES soft_budget/hard_budget (plugin has no budget
-    config; budgets are tool params) — missing them is a descriptive error."""
+    config; budgets are tool params) - missing them is a descriptive error."""
     r = urllib.request.urlopen(
         urllib.request.Request(
             f"{BASE}/mcp/execute",
@@ -4015,7 +4015,7 @@ def test_p9_custom_plugin_stub_interface():
                 {"role": "tool", "content": "CUSTOM CONTENT " * 500, "name": "filesystem_read",
                  "tool_call_id": "call_0"},
                 _make_assistant_msg("done")]
-        # The stub's strategy differs: it returns ITS OWN result shape — but
+        # The stub's strategy differs: it returns ITS OWN result shape - but
         # the interface contract (messages in + budgets in, JSON out) holds.
         out = rpc(3, "tools/call", {"name": "prompt_compact-messages",
                                     "arguments": {"messages": msgs, "keep_recent": 1,
@@ -4041,7 +4041,7 @@ def _wf_drain_channel(cid, timeout=90):
     """Wait until the channel has NO pending/processing threads (full drain).
 
     The channel handler claims pending threads within ~1s, but a workflow
-    test (e.g. D9) returns as soon as its task leaves 'todo' — its executor
+    test (e.g. D9) returns as soon as its task leaves 'todo' - its executor
     thread can STILL be processing. The dispatch gate counts
     pending/processing, so the next test's first dispatch would return
     dispatched:false ("Channel busy") and its task would never run. Every
@@ -4067,23 +4067,23 @@ def _wf_drain_channel(cid, timeout=90):
 
 def _wf_channel_patch():
     """Return the DEDICATED workflow-test channel (omniagent 'mattermost-test-channel',
-    Mattermost 'test-channel' in team 'omni') — PERMANENTLY configured with
+    Mattermost 'test-channel' in team 'omni') - PERMANENTLY configured with
     current_provider=noop and current_model=test-tool-caller (bare provider=/model=
     since the Aug 19 API rename), so workflow tests run
     here WITHOUT patching or restoring any channel. The channel is resolved BY NAME
-    (never by id — ids change on a fresh setup) and BOOTSTRAPPED if missing.
+    (never by id - ids change on a fresh setup) and BOOTSTRAPPED if missing.
 
     INCIDENT 2026-08-09: this function used to patch any idle mattermost channel to
     noop/test-tool-caller and restore it afterwards; a failed restore left the LIVE
     kanban channel (id 4) on noop/test-tool-caller and the next kanban dispatch ran
     on the noop provider and FALSELY marked a task (R7-D) done. NEVER patch a
-    channel for tests — fail loudly if the dedicated channel is missing.
-    Returns (channel_id, None) — _wf_channel_restore is a no-op for orig=None."""
+    channel for tests - fail loudly if the dedicated channel is missing.
+    Returns (channel_id, None) - _wf_channel_restore is a no-op for orig=None."""
     cid = _wf_dedicated_channel()
     # The workflow tests share one channel and the dispatch gate counts
     # pending/processing threads, so every test must start from a clean
     # channel (the previous test's executor thread can outlive its task
-    # status transition — see _wf_drain_channel).
+    # status transition - see _wf_drain_channel).
     _wf_drain_channel(cid)
     return cid, None
 
@@ -4092,7 +4092,7 @@ def _wf_mm_test_channel_id():
     """Return the Mattermost channel id of the dedicated wf-test MM channel
     ('test-channel' in team 'omni'), or None if it does not exist yet.
     The agent auto-creates an omniagent channel for it named
-    'mattermost-{mm_id[:8]}' — ids change on every fresh setup, so the
+    'mattermost-{mm_id[:8]}' - ids change on every fresh setup, so the
     omniagent channel is resolved by resource_identifier (== this id), NOT
     by name."""
     import json as _json
@@ -4127,7 +4127,7 @@ def _wf_bootstrap_test_channel():
     4. Rename the omniagent channel to 'mattermost-test-channel'.
     5. PATCH provider=noop / model=test-tool-caller (permanent; bare field
        names since the Aug 19 API rename).
-    Returns the omniagent channel dict. Fails loudly — never patches another channel.
+    Returns the omniagent channel dict. Fails loudly - never patches another channel.
     """
     import time
     MM = "http://mattermost:8065"
@@ -4135,13 +4135,13 @@ def _wf_bootstrap_test_channel():
     admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
                                        headers={"Content-Type": "application/json"})
     admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
-    assert admin_token, "MM admin login failed — cannot bootstrap the wf-test channel"
+    assert admin_token, "MM admin login failed - cannot bootstrap the wf-test channel"
     auth = {"Authorization": "Bearer " + admin_token}
 
     teams = json.loads(urllib.request.urlopen(
         urllib.request.Request(f"{MM}/api/v4/users/me/teams", headers=auth), timeout=10).read())
     team_id = next((t["id"] for t in teams if t["name"] == "omni"), None)
-    assert team_id, ("Cannot find Mattermost team 'omni' — is the mattermost platform "
+    assert team_id, ("Cannot find Mattermost team 'omni' - is the mattermost platform "
                      "set up? (run GROUP 9/mm9 first)")
 
     channels = json.loads(urllib.request.urlopen(
@@ -4161,7 +4161,7 @@ def _wf_bootstrap_test_channel():
         f"{MM}/api/v4/users?per_page=200", headers=auth), timeout=10).read())
     wanted = {u["username"]: u["id"] for u in users
               if u.get("username") in ("omnibot", "lucasbasquerotto", "testuser")}
-    assert "omnibot" in wanted, "Cannot find MM user 'omnibot' — is the bot set up?"
+    assert "omnibot" in wanted, "Cannot find MM user 'omnibot' - is the bot set up?"
     for uname, uid in wanted.items():
         try:
             urllib.request.urlopen(urllib.request.Request(
@@ -4179,7 +4179,7 @@ def _wf_bootstrap_test_channel():
         data=json.dumps({"channel_id": mm_channel_id, "message": "$new test-channel"}).encode(),
         method="POST", headers={"Content-Type": "application/json", "Authorization": "Bearer " + admin_token}),
         timeout=10).read()
-    print("[wf-test: posted '$new test-channel' — waiting for omniagent to create the channel...]")
+    print("[wf-test: posted '$new test-channel' - waiting for omniagent to create the channel...]")
 
     new_ch = None
     deadline = time.time() + 60
@@ -4192,13 +4192,13 @@ def _wf_bootstrap_test_channel():
             break
     assert new_ch is not None, (
         "OmniAgent did not create a channel for Mattermost 'test-channel' within 60s "
-        "after '$new test-channel' — is the mattermost platform plugin enabled and "
+        "after '$new test-channel' - is the mattermost platform plugin enabled and "
         "polling? Refusing to fall back to any other channel."
     )
 
     cid = new_ch["id"]
     # NOTE: the agent does NOT allow renaming a channel (the channel name IS
-    # the channels.yml key — PATCH name returns 500 by design), so the
+    # the channels.yml key - PATCH name returns 500 by design), so the
     # auto-created 'mattermost-{id[:8]}' name is kept. The channel is resolved
     # afterwards by resource_identifier (== the MM 'test-channel' id), which is
     # stable within a run. Only provider/model are patched (permanent).
@@ -4216,8 +4216,8 @@ def _wf_dedicated_channel():
     """Look up the DEDICATED wf-test omniagent channel BY NAME ('mattermost-test-channel',
     platform=mattermost) and assert it is permanently noop/test-tool-caller. If it does
     not exist yet, bootstrap it from the Mattermost admin API. Channel ids are NOT
-    stable across setups, so this NEVER hardcodes an id — it always resolves by name.
-    Fails loudly if missing or misconfigured — never falls back to patching any other
+    stable across setups, so this NEVER hardcodes an id - it always resolves by name.
+    Fails loudly if missing or misconfigured - never falls back to patching any other
     channel. Returns the channel id."""
     channels = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
     mm_test_id = _wf_mm_test_channel_id()
@@ -4230,12 +4230,12 @@ def _wf_dedicated_channel():
                    and (c.get("resource_identifier") == mm_test_id
                         or c.get("external_id") == mm_test_id)), None)
     if ch is None:
-        print("[wf-test: dedicated wf-test channel NOT found — bootstrapping]")
+        print("[wf-test: dedicated wf-test channel NOT found - bootstrapping]")
         ch = _wf_bootstrap_test_channel()
     assert ch.get("provider") == "noop" and ch.get("model") == "test-tool-caller", (
         f"wf-test channel id {ch.get('id')} ({ch.get('name')}) is configured "
         f"provider={ch.get('provider')!r}, "
-        f"model={ch.get('model')!r} — expected noop/test-tool-caller. "
+        f"model={ch.get('model')!r} - expected noop/test-tool-caller. "
         "Refusing to patch it or any other channel."
     )
     return ch["id"]
@@ -4245,7 +4245,7 @@ def _wf_dedicated_mm_channel_id():
     """Return the Mattermost channel id whose posts land on the DEDICATED
     wf-test channel ('mattermost-test-channel', omniagent id from
     _wf_dedicated_channel). The omniagent channel's external_id /
-    resource_identifier IS the MM channel id — scripts MUST be posted there
+    resource_identifier IS the MM channel id - scripts MUST be posted there
     (the MM 'setup' channel maps to the echo model and never executes them)."""
     channels = json.loads(urllib.request.urlopen(f"{BASE}/channels", timeout=10).read()).get("data", [])
     mm_test_id = _wf_mm_test_channel_id()
@@ -4261,7 +4261,7 @@ def _wf_dedicated_mm_channel_id():
     mm_id = ch.get("external_id") or ch.get("resource_identifier")
     assert mm_id, f"dedicated channel {ch.get('id')} has no external_id/resource_identifier"
     # Idempotently ensure the harness users (incl. testuser, who posts the
-    # scripts) are members — a channel bootstrapped by an older run may be
+    # scripts) are members - a channel bootstrapped by an older run may be
     # missing testuser, and bootstrap only runs when the channel is absent.
     try:
         _wf_ensure_mm_members(mm_id)
@@ -4272,7 +4272,7 @@ def _wf_dedicated_mm_channel_id():
 
 def _wf_ensure_mm_members(mm_channel_id):
     """Ensure omnibot/lucasbasquerotto/testuser are members of the given MM
-    channel (idempotent — 400 = already a member). Used so the dedicated
+    channel (idempotent - 400 = already a member). Used so the dedicated
     wf-test channel accepts posts from testuser on ANY run, not just fresh
     bootstraps."""
     import json as _json
@@ -4334,7 +4334,7 @@ def test_fn_12_file_upload():
     assert mm_channel_id, "Cannot find 'setup' channel"
 
     # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
-    # noop/test-tool-caller) — NEVER patch any channel (2026-08-09 incident:
+    # noop/test-tool-caller) - NEVER patch any channel (2026-08-09 incident:
     # a never-restored patch left the kanban channel on noop and a task was
     # falsely marked done).
     cid = _wf_dedicated_channel()
@@ -4392,7 +4392,7 @@ def test_fn_12_file_upload():
     post_id = msg_resp.get("id", "")
     print(f"[script sent: {post_id[:16]}...]")
 
-    # Poll for agent response — should contain "ABC123XYZ" from the file
+    # Poll for agent response - should contain "ABC123XYZ" from the file
     deadline = time.time() + 45
     while time.time() < deadline:
         time.sleep(4)
@@ -4453,7 +4453,7 @@ def test_fn_13_non_blocking():
             print(f"  [waiting: {_ex}]")
         time.sleep(2)
     else:
-        raise AssertionError("Timed out waiting for test-python_lorem to register — tool was not available after enable")
+        raise AssertionError("Timed out waiting for test-python_lorem to register - tool was not available after enable")
 
     try:
         admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
@@ -4470,7 +4470,7 @@ def test_fn_13_non_blocking():
         assert mm_channel_id
 
         # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
-        # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
+        # noop/test-tool-caller) - NEVER patch any channel (2026-08-09
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
         cid = _wf_dedicated_channel()
@@ -4503,7 +4503,7 @@ def test_fn_13_non_blocking():
         msg_resp = json.loads(urllib.request.urlopen(msg_req, timeout=10).read())
         print(f"[non-blocking test: message sent]")
 
-        # Poll for agent response — expect "All 4 tool call(s) completed"
+        # Poll for agent response - expect "All 4 tool call(s) completed"
         deadline = time.time() + 120
         while time.time() < deadline:
             time.sleep(4)
@@ -4518,7 +4518,7 @@ def test_fn_13_non_blocking():
                     # The task runs for 6s. Total elapsed should be ~6-12s,
                     # NOT 120s (the wait timeout). The wait_task returns as soon
                     # as the background task finishes.
-                    assert elapsed < 30, f"Took {elapsed:.1f}s — should be ~6s (lorem duration)"
+                    assert elapsed < 30, f"Took {elapsed:.1f}s - should be ~6s (lorem duration)"
                     print("[non-blocking test PASSED]")
                     return
         assert False, "No completion message within 60s"
@@ -4573,7 +4573,7 @@ def test_fn_14_cancel_task():
             print(f"  [waiting: {_ex}]")
         time.sleep(2)
     else:
-        raise AssertionError("Timed out waiting for test-python_lorem to register — tool was not available after enable")
+        raise AssertionError("Timed out waiting for test-python_lorem to register - tool was not available after enable")
 
     try:
         admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": "Mattermost_Fresh_Start_1"}).encode()
@@ -4590,7 +4590,7 @@ def test_fn_14_cancel_task():
         assert mm_channel_id
 
         # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
-        # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
+        # noop/test-tool-caller) - NEVER patch any channel (2026-08-09
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
         cid = _wf_dedicated_channel()
@@ -4622,7 +4622,7 @@ def test_fn_14_cancel_task():
         msg_resp = json.loads(urllib.request.urlopen(msg_req, timeout=10).read())
         print(f"[cancel test: message sent]")
 
-        # Poll for agent response — expect "3 tool call" and "cancelled"
+        # Poll for agent response - expect "3 tool call" and "cancelled"
         deadline = time.time() + 35
         last_posts = {}
         while time.time() < deadline:
@@ -4697,13 +4697,13 @@ def test_fn_16_tool_message_formats():
             if ch.get("platform") == "mattermost":
                 mm_channel = ch
                 break
-    assert mm_channel, "No mattermost channel found — run GROUP 9 (mm9) first"
+    assert mm_channel, "No mattermost channel found - run GROUP 9 (mm9) first"
 
     cid = mm_channel["id"]
     mm_channel_ext = mm_channel.get("external_id") or mm_channel.get("resource_identifier") or ""
 
     # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
-    # noop/test-tool-caller) — NEVER patch any channel.
+    # noop/test-tool-caller) - NEVER patch any channel.
     cid = _wf_dedicated_channel()
     # Post/poll the DEDICATED channel's MM id, NOT the setup channel's
     # external_id (echo model never executes the 2-step script).
@@ -4963,12 +4963,12 @@ services:
         # 50 x 30s parallel execs finish in ~30s + docker daemon exec-setup
         # overhead. On a loaded host (after G17's 150 parallel calls) that
         # overhead is observed up to ~12s (41.7s total) even though the plugin
-        # is fully concurrent — the docker daemon serializes exec create/shim
+        # is fully concurrent - the docker daemon serializes exec create/shim
         # setup, not the plugin. A serial plugin loop would take 50*30=1500s,
         # so <60s still detects it with 25x margin while being load-robust.
         assert total_elapsed < 60, (
             f"Duration {total_elapsed:.1f}s should be < 60s for {N} parallel 30s "
-            f"docker exec calls — plugin server loop is serial (calls queued)"
+            f"docker exec calls - plugin server loop is serial (calls queued)"
         )
         print(f"[G17b PASSED: {N} parallel docker exec completed in {total_elapsed:.1f}s (< 40s)]")
     finally:
@@ -5163,7 +5163,7 @@ if __name__ == "__main__":
             print(f"  [waiting: {_ex}]")
         time.sleep(1)
     else:
-        raise AssertionError("Timed out waiting for prompt_compact-messages tool to register — prompt plugin may not be properly enabled")
+        raise AssertionError("Timed out waiting for prompt_compact-messages tool to register - prompt plugin may not be properly enabled")
 
     for fn in [
         test_p1_basic_response_structure,
@@ -5201,7 +5201,7 @@ if __name__ == "__main__":
         test(fn)
 
     # Disable the prompt plugin after tests (restore default state)
-    # Use 60s timeout — cargo-watch rebuilds from PASS 1's file changes
+    # Use 60s timeout - cargo-watch rebuilds from PASS 1's file changes
     # can temporarily block the API
     resp = api_post_body("/plugins/tools/built-in/prompt/disable", {}, timeout=60)
     print("  ✓ Prompt plugin disabled after GROUP 11")
@@ -5233,7 +5233,7 @@ if __name__ == "__main__":
     _check_mm_container()
 
     # Re-enable the prompt plugin (G11 disabled it at the end of its tests)
-    # Use 60s timeout — cargo-watch rebuilds may temporarily block the API
+    # Use 60s timeout - cargo-watch rebuilds may temporarily block the API
     resp = api_post_body("/plugins/tools/built-in/prompt/enable", {}, timeout=60)
     pass
     print("  ✓ Prompt plugin enabled for G12")
@@ -5289,7 +5289,7 @@ if __name__ == "__main__":
     assert mm_channel_id, "Cannot find 'setup' channel"
 
     # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
-    # noop/test-tool-caller) — NEVER patch any channel (2026-08-09 incident:
+    # noop/test-tool-caller) - NEVER patch any channel (2026-08-09 incident:
     # a never-restored patch left the kanban channel on noop and a task was
     # falsely marked done).
     cid = _wf_dedicated_channel()
@@ -5319,7 +5319,7 @@ def test_fn_13b_bg_task_single_execution():
     Root cause fixed Aug 2026 (main_loop.rs): the executor's fast-path
     timeout DROPPED the in-flight MCP future (the request was already sent
     to the plugin) and the bg fallback RE-SENT the same call. Serial MCP
-    plugins (docker_compose — handle_tools_call awaited inline) executed the
+    plugins (docker_compose - handle_tools_call awaited inline) executed the
     command TWICE: request #2 queued behind request #1, so the bg task
     resolved only after the second execution (2x duration, 2x side effects),
     or never when the agent re-dispatched repeatedly (each retry queued
@@ -5377,9 +5377,9 @@ services:
 
         # Channel -> noop/test-tool-caller. Resolve the MM "setup" channel via
         # the Mattermost API (the SAME channel every other test-tool-caller
-        # test uses — G13/G14/G16 resolve ch["name"] == "setup"), then patch
+        # test uses - G13/G14/G16 resolve ch["name"] == "setup"), then patch
         # the omniagent channel whose external_id matches that MM channel id.
-        # Matching by external_id (NOT by omniagent channel NAME — names are
+        # Matching by external_id (NOT by omniagent channel NAME - names are
         # derived from the MM channel id, e.g. "mattermost-8nopfj9f", and do
         # not exist in future runs) guarantees the patched channel is exactly
         # the one the script lands on.
@@ -5399,7 +5399,7 @@ services:
         assert mm_channel_id, "Cannot find MM 'setup' channel"
 
         # Use the DEDICATED wf-test channel (omniagent 'mattermost-test-channel', permanently
-        # noop/test-tool-caller) — NEVER patch any channel (2026-08-09
+        # noop/test-tool-caller) - NEVER patch any channel (2026-08-09
         # incident: a never-restored patch left the kanban channel on noop
         # and a task was falsely marked done).
         cid = _wf_dedicated_channel()
@@ -5505,7 +5505,7 @@ def test_fn_15_settings_hardcoded():
     assert "max_tokens" in all_settings, f"missing max_tokens, got keys={list(all_settings.keys())[:5]}..."
     assert "temperature" in all_settings, "missing temperature"
     # The agent must reflect the values committed in omni-stack/settings.yml
-    # (NOT hardcoded in the binary). Read the yml and compare — this keeps the
+    # (NOT hardcoded in the binary). Read the yml and compare - this keeps the
     # test valid for any committed value.
     import yaml as _yaml
     _sett_path = f"{WORKSPACE}/config/settings.yml"
@@ -5625,8 +5625,8 @@ def test_fn_15_settings_secret_ref():
         urllib.request.urlopen(req, timeout=10)
     except urllib.error.HTTPError as e:
         if e.code != 409:
-            raise  # any unexpected error — fail the test
-        # Secret already exists — update it via PUT
+            raise  # any unexpected error - fail the test
+        # Secret already exists - update it via PUT
         req2 = urllib.request.Request(
             f"{BASE}/secrets/TEST_SETTING_SECRET",
             data=json.dumps({"fieldType": "password", "value": "test-secret-value-42"}).encode(),
@@ -5757,7 +5757,7 @@ def test_fn_18_platform_multi_source():
             if "already" in err:
                 print(f"  [ensure_remote_plugin: '{plat_name}' already registered, skipping]")
             else:
-                print(f"  [SKIP: {plat_name} — install-git failed: {str(e)[:120]}]")
+                print(f"  [SKIP: {plat_name} - install-git failed: {str(e)[:120]}]")
                 continue
 
         # Install remote platform via API (compiles Rust binary at .remote/ location)
@@ -5871,7 +5871,7 @@ def test_fn_18_platform_multi_source():
         print(f"  [plugins.yml: {plat_name} source=bundled OK]")
 
         # ═══════════════════════════════════════════════════════════
-        #  Phase 3: Binary existence check (complementary — the
+        #  Phase 3: Binary existence check (complementary - the
         #  install/enable API above already verified functionality)
         # ═══════════════════════════════════════════════════════════
         print(f"  [Phase 3: Binary existence check for {plat_name}]")
@@ -5992,7 +5992,7 @@ test(test_23_1_import_several_from_remote_yml)
 
 
 def test_23_2_import_from_remote_test_yml():
-    """Import the plugins listed in remote.test.yml — kanban, cron, subtasks,
+    """Import the plugins listed in remote.test.yml - kanban, cron, subtasks,
     (the 'actions' crate was removed by the task_18cc73ad22835e2d port;
     the actions plugin now lives in nexuslbs/omni-plugins tools/actions.)"""
     backup_remote_yml()
@@ -6224,7 +6224,7 @@ test(test_fn_24_read_offset_limit)
 # ═══════════════════════════════════════════════════════════════════════
 # test_fn_25_db_vectorizer: proves the background message vectorizer
 # (vectorize_messages: true, 5s poll) populates embedding_vec for new
-# messages by itself — no manual seeding — and that query_search-messages
+# messages by itself - no manual seeding - and that query_search-messages
 # then returns the vectorized content via semantic similarity.
 # test_fn_25_search_wiki: google-like keyword search over the wiki tree
 # (recursive .md scan with line-matching previews; no vectorization needed).
@@ -6234,7 +6234,7 @@ def _g25_toolbox_name():
 
     The toolbox runs psycopg2 (and PGHOST/PGUSER/PGPASSWORD/PGDATABASE env),
     so tests that need direct DB access shell into it via docker exec.
-    Discovered via the Docker API label filter — no hardcoded container names
+    Discovered via the Docker API label filter - no hardcoded container names
     (project name differs across dev/hybrid/CI: omnideploy/omnidev/omni).
     """
     import urllib.parse
@@ -6289,7 +6289,7 @@ try:
     )
     cur.close()
 
-    # The worker (5s poll) must backfill embedding_vec — the test does NOT seed it.
+    # The worker (5s poll) must backfill embedding_vec - the test does NOT seed it.
     t0 = time.time()
     n = 0
     while time.time() - t0 < 120:
@@ -6627,7 +6627,7 @@ test(test_fn_19_ensure_disabled)
 # correct data structures and handle full CRUD lifecycles.
 #
 # Each test uses the running omniagent API (localhost:8080) with a real
-# PostgreSQL database. No LLM calls are made — the agent's auto-detection
+# PostgreSQL database. No LLM calls are made - the agent's auto-detection
 # handles any side effects.
 
 print(f"\n{'=' * 60}")
@@ -6656,7 +6656,7 @@ def test_20_2_channels():
     if ch:
         print(f"  first: id={ch[0].get('id')}, name={ch[0].get('name')}")
         # task_18cd0a9e3b7a7e1a: channel `cause` removed from the model
-        # (channels.yml schema + API response) — no entry may carry it.
+        # (channels.yml schema + API response) - no entry may carry it.
         bad = [c.get("id") for c in ch if "cause" in c]
         assert not bad, f"channel entries must not carry a 'cause' key: {bad}"
 
@@ -6830,8 +6830,8 @@ def test_20_8_schedule_crud():
 def tasks_yml_remove_keys(pred):
     """Remove schedule/hook blocks from {OMNI_DIR}/config/tasks.yml whose
     (section, key) satisfies pred. Preserves all other lines (comments, other
-    entries, ordering). Definitions live in tasks.yml now — NOT in the
-    cron_jobs/hooks DB tables — so tests must clean up the yml directly."""
+    entries, ordering). Definitions live in tasks.yml now - NOT in the
+    cron_jobs/hooks DB tables - so tests must clean up the yml directly."""
     path = f"{WORKSPACE}/config/tasks.yml"
     if not os.path.exists(path):
         return
@@ -6873,7 +6873,7 @@ def tasks_yml_remove_keys(pred):
         i += 1
     # Atomic write (tmp + rename): the hooks engine loads tasks.yml on every
     # event, and _h27_run_cron removes its schedule IMMEDIATELY after the run
-    # POST returns — the same moment the thread_started event fires. A
+    # POST returns - the same moment the thread_started event fires. A
     # non-atomic truncate+write lets the engine read a partial file, which
     # parse-fails and is treated as EMPTY -> every hook misses the event
     # (flaky GROUP 27 failures). os.replace is atomic on POSIX. The temp
@@ -7171,11 +7171,11 @@ test(test_22_6_kanban_invalid_status)
 #  threads run with the CHANNEL's provider/model, so the mattermost channel is
 #  temporarily patched to noop/test-tool-caller and restored after each test.
 #  threads.workflow_id / threads.workflow_step are not exposed by the /threads
-#  API — they are read back via psycopg2 (harness runs inside the omniagent
+#  API - they are read back via psycopg2 (harness runs inside the omniagent
 #  container where DATABASE_URL is present).
 # ═══════════════════════════════════════════════════════════════════════
 print(f"\n{'=' * 60}")
-print("GROUP 22: Workflow Implementation (R7) — combos, fail-thread, interruption, retries, clear_executions_on_review, D9")
+print("GROUP 22: Workflow Implementation (R7) - combos, fail-thread, interruption, retries, clear_executions_on_review, D9")
 print("=" * 60)
 
 WF_SCRIPT_OK = json.dumps([{"name": "ok", "tool": "test-python_lorem", "arguments": {"seconds": 1}}])
@@ -7191,7 +7191,7 @@ def _wf_ensure_test_python():
     agent-mode executor threads that build their prompt with prompt_generate, so we
     also wait for prompt_generate AND settle for the async MCP server spawn: the
     plugin reload respawns ALL MCP servers asynchronously and the /mcp/tools registry
-    fills in gradually — without this, 40-C/D/E hit 'Unknown tool: prompt_generate' /
+    fills in gradually - without this, 40-C/D/E hit 'Unknown tool: prompt_generate' /
     'Unknown tool: test-python_lorem' right after the enable reload."""
     ensure_bundled_plugin("test-python", "tools")
     yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
@@ -7251,7 +7251,7 @@ def _wf_create_task(title, key, script, cid):
             "workflow": key, "channel": cid, "body": script}
     # Boards feature gate: when config/boards.yml exists (omnidev dev stack),
     # the dispatch gate (server/kanban.rs:2336) skips tasks with no/unknown
-    # board — so workflow-test tasks need a VALID board to ever dispatch.
+    # board - so workflow-test tasks need a VALID board to ever dispatch.
     # The task's explicit channel/workflow win over the board's fallbacks,
     # so any board key from the file works. Inert on stacks without boards.yml.
     boards_path = f"{WORKSPACE}/config/boards.yml"
@@ -7351,7 +7351,7 @@ def _wf_bootstrap_trunc_channel():
     admin_req = urllib.request.Request(f"{MM}/api/v4/users/login", data=admin_data, method="POST",
                                        headers={"Content-Type": "application/json"})
     admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
-    assert admin_token, "MM admin login failed — cannot bootstrap the truncation channel"
+    assert admin_token, "MM admin login failed - cannot bootstrap the truncation channel"
     auth = {"Authorization": "Bearer " + admin_token}
     teams = json.loads(urllib.request.urlopen(
         urllib.request.Request(f"{MM}/api/v4/users/me/teams", headers=auth), timeout=10).read())
@@ -7502,7 +7502,7 @@ def test_22_workflow_4_fail_thread_running_retry_then_blocked():
         # "running" window (observed flake Aug 8: task already 'blocked' when poll saw n>=2).
         # Assert durable evidence instead: kanban_history records the retry transition
         # (action='workflow', initial_board='running', final_board='running', comment
-        # "Creating thread #N+1") the moment it fires — no timing sensitivity.
+        # "Creating thread #N+1") the moment it fires - no timing sensitivity.
         deadline = time.time() + 60
         retry_seen = False
         while time.time() < deadline:
@@ -7602,7 +7602,7 @@ def test_22_workflow_7_clear_executions_on_review():
         post_json("/kanban/dispatch", {})
         st1, _ = _wf_wait_status(t_true, {"review", "blocked", "done"}, timeout=120)
         assert st1 == "review", f"clear_executions_on_review=true should end in review, got {st1}"
-        # Dispatcher fires ONE task per invocation — dispatch again for t_false.
+        # Dispatcher fires ONE task per invocation - dispatch again for t_false.
         post_json("/kanban/dispatch", {})
         st2, _ = _wf_wait_status(t_false, {"review", "blocked", "done"}, timeout=120)
         assert st2 == "blocked", f"clear_executions_on_review=false should end in blocked, got {st2}"
@@ -7650,7 +7650,7 @@ def test_22_workflow_8_d9_dependency_gate():
 def test_22_workflow_9_dispatch_channel_busy_gate():
     """D10: a todo task whose channel has an active (queued/running) thread must NOT be
     dispatched; once the channel drains it is. Regression: the gate is STATUS-based
-    (pending/processing) — a skipped thread with terminal=false never blocks dispatch."""
+    (pending/processing) - a skipped thread with terminal=false never blocks dispatch."""
     cid, orig = _wf_channel_patch()
     _wf_ensure_test_python()
     key = "wf_test_d10_" + uuid.uuid4().hex[:8]
@@ -7834,7 +7834,7 @@ test(test_26_plain_kanban_terminal_clean_completion_review)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 27: Event-driven Hooks system (omniagent 9797aa6)
-#  thread_started / thread_finished / new_message — counter trigger/reset,
+#  thread_started / thread_finished / new_message - counter trigger/reset,
 #  scope filtering (channel/profile), infinite-loop protection, both
 #  execution modes (agentic + actions.yml action), error isolation.
 # ═══════════════════════════════════════════════════════════════════════
@@ -7917,7 +7917,7 @@ def _h27_obs_ge(hid, scope, key, n):
 
 def _h27_cleanup():
     """Remove g27 test hooks and schedules. Definitions live in config/tasks.yml
-    (git-tracked) — NOT in the (dormant/dropped) hooks/cron_jobs tables — so
+    (git-tracked) - NOT in the (dormant/dropped) hooks/cron_jobs tables - so
     cleanup goes through the /hooks API (which also removes hook_counters rows)
     and direct tasks.yml block removal. Runtime cadence rows (task_runs) are
     cleaned directly. Hook-caused threads are intentionally LEFT in place:
@@ -8089,7 +8089,7 @@ def test_27_hooks_counter_trigger_reset():
         assert c3.get("global") in (0, 1, 2), \
             f"count=3 counter must never sit at/above threshold after quiesce: {c3}"
         # every non-hook message fires the count=1 hook once (async pipeline -> wait);
-        # only NEW hook threads (id > pre) count — leftover threads from prior runs are inert
+        # only NEW hook threads (id > pre) count - leftover threads from prior runs are inert
         ok = _h27_wait_until(lambda: _h27_new_threads("G27-ONCE", pre_once) >= ground_n, timeout=120)
         assert ok, f"count=1 must fire once per event: once={_h27_new_threads('G27-ONCE', pre_once)} ground={_h27_nonhook_ground(base)}"
         ok = _h27_wait_until(lambda: _h27_new_threads("G27-CNT3", pre_cnt3) >= ground_n // 3, timeout=120)
@@ -8101,14 +8101,14 @@ def test_27_hooks_counter_trigger_reset():
 
 
 def test_27_hooks_scope_channel_profile():
-    """GROUP 27-B: channel scope (target by name) and profile scope (target by name) — matching
+    """GROUP 27-B: channel scope (target by name) and profile scope (target by name) - matching
     events trigger the scoped counter+reset, mismatched events are ignored. Action mode executes
     an actions.yml action (a3 = builtin_read-attached-file; its params error on the missing
     file_id, but reaching the tool proves the registry executed it).
     Evidence is DB/API-based (journald drops log lines under load):
       - channel/profile observer hooks (count=100000, never trigger) count the thread_started
         events that actually reached the scope;
-      - the count=1 hooks reset to 0 on every event — a hook that never triggered would sit
+      - the count=1 hooks reset to 0 on every event - a hook that never triggered would sit
         at the observer's count. The action-execution log line is best-effort evidence only."""
     _h27_cleanup()
     hid_obs_c = _h27_create_hook(name="g27-obs-c", event="thread_started", scope="channel",
@@ -8171,7 +8171,7 @@ def test_27_hooks_infinite_loop_protection():
         no pending/processing threads in ANY channel (executor backlog, cron
         threads, kanban role threads) AND no kanban task the in-process
         dispatcher (15s poll) could promote next. A dispatchable task is
-        status='todo', unarchived, every non-archived dependency 'done' — with
+        status='todo', unarchived, every non-archived dependency 'done' - with
         the thread quiesce above no channel is busy, so the channel gate is
         satisfied for every candidate. Cross-group contamination (GROUP 22/26
         workflow threads spawned mid-Group-27) was the 2026-08-22 flake root
@@ -8258,7 +8258,7 @@ def test_27_hooks_infinite_loop_protection():
 
 
 def test_27_hooks_error_isolation():
-    """GROUP 27-D: failing hooks (bad action_id / bad profile) are isolated — counter still resets
+    """GROUP 27-D: failing hooks (bad action_id / bad profile) are isolated - counter still resets
     (threshold reached), /health + /channels stay alive, message processing continues. Trigger
     evidence is DB/API-based (observer + reset semantics + hook-caused thread carrying the bad
     profile); the exact error text is logged but journald may drop lines under load (best-effort).
@@ -8470,7 +8470,7 @@ test(test_27_hooks_event_action)
 
 #  GROUP 28: Terminal status invariant (task_18cb83096b238872)
 print(f"\n{'=' * 60}")
-print("GROUP 28: Terminal status invariant — skipped/completed/failed/interrupted/system always terminal=true")
+print("GROUP 28: Terminal status invariant - skipped/completed/failed/interrupted/system always terminal=true")
 print(f"{'=' * 60}")
 
 
@@ -8481,10 +8481,10 @@ def test_28_terminal_status_invariant():
 
     28-A: POST /stop/<channel> on a pending thread -> 'skipped' + terminal=true
           + ended_at set (regression: the operator stop used to write 'skipped'
-          WITHOUT terminal=true — the 13 bad rows observed on channel 4).
+          WITHOUT terminal=true - the 13 bad rows observed on channel 4).
     28-B: the CHECK constraint exists and REJECTS the old-style write
           (status='skipped' leaving terminal=false).
-    28-C: DB audit clean — no terminal-status row in the whole DB with terminal=false.
+    28-C: DB audit clean - no terminal-status row in the whole DB with terminal=false.
     """
     ch = "term-inv-" + uuid.uuid4().hex[:8]
     try:
@@ -8510,7 +8510,7 @@ def test_28_terminal_status_invariant():
         assert term is True, f"skipped thread must have terminal=true, got {term!r}"
         assert ended is True, "skipped thread must have ended_at set"
 
-        # 28-B: structural enforcement — a FRESH pending thread flipped to 'skipped'
+        # 28-B: structural enforcement - a FRESH pending thread flipped to 'skipped'
         # by the old-style write (no terminal=true) must be rejected by the CHECK.
         _h27_sql(
             "INSERT INTO threads (status, cause, channel_id, profile, terminal, plan) "
@@ -8531,7 +8531,7 @@ def test_28_terminal_status_invariant():
         st2, = _h27_sql("SELECT status FROM threads WHERE id = %s", (tid2,))[0]
         assert st2 == "pending", f"rejected write must leave the thread untouched, got {st2!r}"
 
-        # 28-C: whole-DB audit — no terminal status with terminal=false.
+        # 28-C: whole-DB audit - no terminal status with terminal=false.
         bad = _h27_sql(
             "SELECT COUNT(*) FROM threads WHERE status IN "
             "('skipped','completed','failed','interrupted','system') AND NOT terminal")
@@ -8576,7 +8576,7 @@ def _g29_assert_thread_status_marker(tid):
     thread_status is 'scheduled' the moment the dispatch returns, but the
     channel handler flips it to 'running' as soon as it picks the thread up
     (kanban_updater on pickup). With an idle handler the pickup can land
-    BEFORE the test's read — both values prove the dispatch marker was set,
+    BEFORE the test's read - both values prove the dispatch marker was set,
     so the assertion accepts either.
     """
     ts = _g29_kanban_thread_status(tid)
@@ -8610,7 +8610,7 @@ def _g29_make_task(title, status="todo", workflow_id="omniagent-dev", cid="kanba
     if workflow_id:
         body["workflow"] = workflow_id
     # Boards feature gate: with boards.yml present the dispatch gate skips
-    # boardless tasks — use the first valid board (the task's explicit
+    # boardless tasks - use the first valid board (the task's explicit
     # channel/workflow win over the board's fallbacks). PLAIN tasks
     # (workflow_id=None) must use the workflow-less 'plain' board instead:
     # boards main/dev inject workflow omniagent-dev via board defaults, which
@@ -8723,7 +8723,7 @@ def test_29_status_change_dispatch_review():
 
 
 def test_29_status_change_no_workflow_noop():
-    """29-D: non-workflow task — PATCH->running dispatches the executor (plain path);
+    """29-D: non-workflow task - PATCH->running dispatches the executor (plain path);
     PATCH running->testing is a NO-OP (no tester role, no workflow)."""
     cid, orig = _wf_channel_patch()
     tids = []
@@ -8752,7 +8752,7 @@ def test_29_status_change_no_workflow_noop():
 
 
 def test_29_redispatch_endpoint():
-    """29-E: POST /kanban/tasks/{id}/redispatch — creates the role thread for the
+    """29-E: POST /kanban/tasks/{id}/redispatch - creates the role thread for the
     task's CURRENT status without changing it; no-op with an active thread or a
     status with no role; 404 for a missing task."""
     cid, orig = _wf_channel_patch()
@@ -8822,7 +8822,7 @@ test(test_29_redispatch_endpoint)
 
 #  GROUP 30: Surgical stop-thread (task_18cbcd7a8c4a6f5e)
 print(f"\n{'=' * 60}")
-print("GROUP 30: Surgical stop-thread — never cancel the channel handler for another "
+print("GROUP 30: Surgical stop-thread - never cancel the channel handler for another "
       "thread; a stopped kanban thread clears its task's thread_status")
 print(f"{'=' * 60}")
 
@@ -8894,7 +8894,7 @@ def _g30_delete_channel(cid):
 
 
 def _g30_max_thread_id():
-    """Current max thread id — baseline for finding only NEWLY created threads."""
+    """Current max thread id - baseline for finding only NEWLY created threads."""
     return _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0][0]
 
 
@@ -8906,7 +8906,7 @@ def _g30_live_find_thread(cid, marker, since_id=0):
     role/msg_type rename; role='user' is kept for backward compatibility with
     older rows. `since_id` excludes STALE threads from earlier tests whose
     content happens to contain the same marker (e.g. GROUP 13's long_run
-    scripts) — without it the live tests can latch onto an old thread and
+    scripts) - without it the live tests can latch onto an old thread and
     "never reach processing" because it is already terminal.
     """
     rows = _h27_sql(
@@ -8922,7 +8922,7 @@ def test_30_stop_thread_pending_never_cancels_handler():
     the same channel WITH a live channel handler -> handler_cancelled=false, the
     handler keeps running, the processing thread is untouched, the target stays
     terminal. The target is inserted terminal=true so the live handler can never claim
-    it (claim requires status='pending' AND NOT terminal) — this makes the test
+    it (claim requires status='pending' AND NOT terminal) - this makes the test
     deterministic while still exercising the exact decision: status at lookup is
     'pending', so stop_thread_cancels_handler() must be false. Regression: pre-fix
     code cancelled the channel token unconditionally (incident 2026-08-14: stopping
@@ -8930,10 +8930,10 @@ def test_30_stop_thread_pending_never_cancels_handler():
     cid = _g30_channel("a")
     t_proc = t_pend = None
     try:
-        # Precondition: a live handler owns this channel (token present) — otherwise
+        # Precondition: a live handler owns this channel (token present) - otherwise
         # the test cannot discriminate old vs new behavior.
         ok = _h27_wait_until(lambda: _g30_handler_running(cid), timeout=30, step=2)
-        assert ok, f"no live handler on {cid} — declare it in channels.yml of the instance under test"
+        assert ok, f"no live handler on {cid} - declare it in channels.yml of the instance under test"
 
         t_proc = _g30_insert_thread("processing", cid)
         t_pend = _g30_insert_thread("pending", cid, terminal=True)
@@ -8966,7 +8966,7 @@ def test_30_stop_thread_processing_cancels_handler_and_respawns():
     t_proc = t_pend = None
     try:
         ok = _h27_wait_until(lambda: _g30_handler_running(cid), timeout=30, step=2)
-        assert ok, f"no live handler on {cid} — declare it in channels.yml of the instance under test"
+        assert ok, f"no live handler on {cid} - declare it in channels.yml of the instance under test"
 
         t_proc = _g30_insert_thread("processing", cid)
         t_pend = _g30_insert_thread("pending", cid)
@@ -9015,7 +9015,7 @@ def test_30_stop_thread_kanban_clears_thread_status():
     stop outcomes: Block (running -> blocked, marker dropped) and Noop (todo stays todo,
     marker dropped; NULL stays NULL). The task's own status is preserved in Noop.
     Channel g30-c has NO handler (not declared) so the pending threads are never claimed
-    mid-test — skip_thread flips them to skipped deterministically."""
+    mid-test - skip_thread flips them to skipped deterministically."""
     cid = _g30_channel("c")
     tasks = []
     tids = []
@@ -9124,7 +9124,7 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
              "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 60}},
         ])
         # Baseline BEFORE posting: earlier tests (GROUP 13) also post scripts
-        # whose content contains "long_run" — without the baseline the finder
+        # whose content contains "long_run" - without the baseline the finder
         # latches onto that stale (already-terminal) thread and the
         # "processing" wait can never succeed.
         pre_a = _g30_max_thread_id()
@@ -9188,7 +9188,7 @@ test(test_30_stop_thread_kanban_clears_thread_status)
 test(test_30_stop_thread_live_pending_stop_keeps_processing)
 
 
-# ── GROUP 31: Kanban Boards (config/boards.yml) — task_18cc48e8eace4df3 ──────
+# ── GROUP 31: Kanban Boards (config/boards.yml) - task_18cc48e8eace4df3 ──────
 # Boards group kanban tasks and carry default execution options. The feature is
 # gated on the presence of config/boards.yml (omnidev only; omnistable has no
 # boards.yml so all kanban behavior there is unchanged). When boards.yml is
@@ -9196,11 +9196,11 @@ test(test_30_stop_thread_live_pending_stop_keeps_processing)
 # (create + ?board= filter); board defaults fill the resolution chain
 # (task > board > channel). Since task_18cd074f62d194f2, POST /kanban/tasks
 # REQUIRES a valid board (missing/unknown -> 400) and PATCH /kanban/tasks/{id}
-# cannot clear or set an unknown board (400; missing field keeps the board) —
+# cannot clear or set an unknown board (400; missing field keeps the board) -
 # invalid-board tasks can now only arise from legacy rows or boards.yml edits,
 # and the dispatcher still skips them (no thread); any thread-creation path on
 # an invalid-board task creates the thread and fails it with a clear Error
-# message. Boards CRUD (PUT/DELETE /boards/{key}) is backed by boards.yml —
+# message. Boards CRUD (PUT/DELETE /boards/{key}) is backed by boards.yml -
 # the test snapshots and restores the file byte-for-byte.
 
 def _g31_boards_file():
@@ -9254,7 +9254,7 @@ def test_31_boards_list_and_filter():
     """31-A: boards.yml present -> GET /boards returns configured boards;
     task create accepts a board; ?board= filter returns only that board's tasks."""
     if not _g31_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
         return
     keys = _g31_board_keys()
     assert "main" in keys and "dev" in keys, f"expected boards main+dev, got {keys}"
@@ -9285,7 +9285,7 @@ def test_31_dispatch_skips_invalid_board():
     rows, boards.yml edits) are still skipped by the dispatcher: they stay todo
     with no thread row."""
     if not _g31_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
         return
     tids = []
     try:
@@ -9325,11 +9325,11 @@ def test_31_dispatch_skips_invalid_board():
 
 def test_31_thread_creation_fails_invalid_board():
     """31-C: with boards.yml present, status-change dispatch on an invalid-board
-    task (board mutated to an unknown name — e.g. its board removed from
+    task (board mutated to an unknown name - e.g. its board removed from
     boards.yml) creates the thread and immediately fails it with a clear Error
     message (reusing the existing fail-thread machinery)."""
     if not _g31_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
         return
     tids = []
     try:
@@ -9363,7 +9363,7 @@ def test_31_update_board_validation():
     board ("") or set an unknown board (both 400); a missing board field keeps
     the existing board; a valid board updates it."""
     if not _g31_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
         return
     tids = []
     try:
@@ -9392,7 +9392,7 @@ def test_31_update_board_validation():
         assert st == 200, f"PATCH to valid board must succeed, got {st} {resp}"
         rows = _h27_sql("SELECT board FROM kanban_tasks WHERE id = %s", (tid,))
         assert rows and rows[0][0] == "dev", f"board must update to dev: {rows}"
-        print("PASS: PATCH board validation — clear/unknown -> 400 (board kept); "
+        print("PASS: PATCH board validation - clear/unknown -> 400 (board kept); "
               "missing field keeps board; valid board updates")
     finally:
         _g31_cleanup_tasks(tids)
@@ -9403,7 +9403,7 @@ def test_31_boards_crud_and_resolution():
     board defaults fill the resolution chain (task with board but no channel ->
     thread channel = board channel). boards.yml restored byte-for-byte."""
     if not _g31_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled, nothing to test")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
         return
     bfile = _g31_boards_file()
     with open(bfile) as f:
@@ -9452,7 +9452,7 @@ test(test_31_update_board_validation)
 
 
 
-# ── GROUP 32: External / Agnostic MCP Reference Servers — task_18cc528e459bcad0 ──
+# ── GROUP 32: External / Agnostic MCP Reference Servers - task_18cc528e459bcad0 ──
 # The 7 modelcontextprotocol reference servers (github.com/modelcontextprotocol/servers)
 # are registered as remote MCP tool plugins (remote.yml + plugins.yml, source: remote)
 # and live under plugins/tools/.remote/mcp-<server>/. Each test makes ≥1 tool call
@@ -9493,7 +9493,7 @@ def _g32_mcp_execute(name, args):
 def test_32_everything_echo():
     """32-A: mcp-everything echo returns 'Echo: <message>'."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     out = _g32_mcp_execute("mcp-everything.echo", {"message": "Hello from omniagent"})
     assert out == "Echo: Hello from omniagent", f"echo return wrong: {out!r}"
@@ -9503,7 +9503,7 @@ def test_32_everything_echo():
 def test_32_fetch_raw():
     """32-B: mcp-fetch fetch with raw=true returns the page contents."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     out = _g32_mcp_execute("mcp-fetch.fetch", {"url": "https://example.com", "raw": True})
     assert "Contents of https://example.com/" in out, f"fetch return missing contents marker: {out[:200]}"
@@ -9514,7 +9514,7 @@ def test_32_fetch_raw():
 def test_32_filesystem_list_allowed():
     """32-C: mcp-filesystem list_allowed_directories returns /opt/workspace."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     out = _g32_mcp_execute("mcp-filesystem.list_allowed_directories", {})
     assert "Allowed directories:" in out and "/opt/workspace" in out, \
@@ -9525,7 +9525,7 @@ def test_32_filesystem_list_allowed():
 def test_32_git_status():
     """32-D: mcp-git git_status returns branch info for the omniagent repo."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     out = _g32_mcp_execute("mcp-git.git_status", {"repo_path": "/opt/workspace/omniagent"})
     assert "On branch main" in out, f"git_status return wrong: {out[:200]}"
@@ -9535,7 +9535,7 @@ def test_32_git_status():
 def test_32_memory_create_entities():
     """32-E: mcp-memory create_entities persists and echoes the entity."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     ent = f"g32-{uuid.uuid4().hex[:8]}"
     out = _g32_mcp_execute("mcp-memory.create_entities", {
@@ -9548,7 +9548,7 @@ def test_32_memory_create_entities():
 def test_32_sequentialthinking():
     """32-F: mcp-sequentialthinking sequentialthinking returns the thought record."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     out = _g32_mcp_execute("mcp-sequentialthinking.sequentialthinking", {
         "thought": "Test thought", "thoughtNumber": 1, "totalThoughts": 1,
@@ -9561,7 +9561,7 @@ def test_32_sequentialthinking():
 def test_32_time_get_current_time():
     """32-G: mcp-time get_current_time returns timezone+datetime for UTC."""
     if not _g32_servers_present():
-        print("SKIP: reference MCP servers absent (omnistable) — nothing to test")
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
         return
     out = _g32_mcp_execute("mcp-time.get_current_time", {"timezone": "UTC"})
     d = json.loads(out)
@@ -9582,15 +9582,15 @@ test(test_32_time_get_current_time)
 
 print("TEST SUMMARY")
 print(f"{'=' * 60}")
-print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow — completed")
+print(f"Groups 20-22 (incl. Workflow Impl): API CRUD, Noop Provider, Edge Cases, Workflow - completed")
 print(f"Passed: see test runner output above")
 
 
 
-# ── GROUP 33: Python Telegram Platform Plugin (mock Bot API) — task_18cc528e459bcad0 ──
+# ── GROUP 33: Python Telegram Platform Plugin (mock Bot API) - task_18cc528e459bcad0 ──
 # Boots the omni-plugins python telegram platform (platforms/telegram/platform.py)
 # against the MOCK Telegram Bot API (platforms/telegram/tests/mock_telegram_api.py)
-# via the api_base_url config override. NO real token is used anywhere — the mock
+# via the api_base_url config override. NO real token is used anywhere - the mock
 # accepts any non-empty token and all state stays in-memory on localhost.
 # Asserts outbound deliver/edit/delete/react payloads (via the mock's /admin/sent
 # + /admin/reactions) and inbound getUpdates flow (injected via /admin/inject ->
@@ -9696,7 +9696,7 @@ def _g33_mock_post(base, path, payload):
 
 
 def test_33_telegram_outbound_mock():
-    """33-A: telegram platform outbound against the MOCK — initialize, configure
+    """33-A: telegram platform outbound against the MOCK - initialize, configure
     (api_base_url->mock), deliver (sendMessage), edit_message (editMessageText),
     delete_message (deleteMessage), react (setMessageReaction) with correct
     payloads and correct returns."""
@@ -9769,7 +9769,7 @@ def test_33_telegram_outbound_mock():
         assert reactions and str(reactions[-1]["message_id"]) == str(ext2), \
             f"setMessageReaction not recorded: {reactions}"
 
-        print("PASS: 33-A telegram outbound against mock — initialize/configure/"
+        print("PASS: 33-A telegram outbound against mock - initialize/configure/"
               "deliver/edit/delete/react payloads + returns correct")
     finally:
         _g33_stop_proc(plat)
@@ -9777,7 +9777,7 @@ def test_33_telegram_outbound_mock():
 
 
 def test_33_telegram_inbound_mock():
-    """33-B: telegram platform inbound against the MOCK — injected getUpdates
+    """33-B: telegram platform inbound against the MOCK - injected getUpdates
     flow back as inbound_message + message_edited notifications on stdout with
     correct resource_identifier/text/external_id."""
     port = _g33_free_port()
@@ -9827,7 +9827,7 @@ def test_33_telegram_inbound_mock():
         assert p.get("text") == "edited inbound text", f"edited text wrong: {p}"
         assert p.get("resource_identifier") == "-1001112223", f"edited resource wrong: {p}"
 
-        print("PASS: 33-B telegram inbound against mock — injected getUpdates "
+        print("PASS: 33-B telegram inbound against mock - injected getUpdates "
               "-> inbound_message + message_edited notifications correct")
     finally:
         _g33_stop_proc(plat)
@@ -9835,7 +9835,7 @@ def test_33_telegram_inbound_mock():
 
 
 def test_33_telegram_errors_mock():
-    """33-C: telegram platform error paths — unknown method -> protocol error;
+    """33-C: telegram platform error paths - unknown method -> protocol error;
     deliver without token -> API error (mock unreachable/401 style)."""
     port = _g33_free_port()
     mock = plat = None
@@ -9863,7 +9863,7 @@ def test_33_telegram_errors_mock():
         }, req_id=11)
         assert "error" in r, f"deliver with unreachable api must error: {r}"
 
-        print("PASS: 33-C telegram error paths — unknown method, no-token "
+        print("PASS: 33-C telegram error paths - unknown method, no-token "
               "deliver, unreachable api all return protocol errors")
     finally:
         _g33_stop_proc(plat)
@@ -9887,14 +9887,14 @@ test(test_33_telegram_errors_mock)
 
 
 
-# ── GROUP 34: Builtin SSH plugin (mcp-server-ssh) — task_79 ────────────────
+# ── GROUP 34: Builtin SSH plugin (mcp-server-ssh) - task_79 ────────────────
 # Spawns the mcp-server-ssh binary directly and drives it over MCP JSON-RPC
 # stdio (initialize → configure → tools/call), mirroring GROUP 33's approach
 # for the telegram platform. Targets a REAL local throwaway sshd on
 # 127.0.0.1:<port> when openssh-server is available and usable (dev
 # container: apt install is allowed; the deployer image may not ship sshd).
 # When a real sshd cannot be started, falls back to a fake ssh/scp shim in
-# PATH that records the invocations and returns canned output — asserting
+# PATH that records the invocations and returns canned output - asserting
 # the plugin builds the correct args/options (BatchMode, ConnectTimeout,
 # -F config, -p/-P port, scp -r, direction ordering, exit handling).
 import select as _g34_select
@@ -10174,7 +10174,7 @@ def _g34_tool(proc, name, args, req_id=None, timeout=25):
 
 # ── Test setup: real sshd OR shim ─────────────────────────────────────────
 # Computed once per run. The real-sshd path is used only when sshd exists,
-# /dev/null is usable and key generation works — otherwise fall back to the
+# /dev/null is usable and key generation works - otherwise fall back to the
 # shim so the tests still assert plugin arg construction everywhere.
 _g34_SSHD = None
 _g34_SSH_BIN = None
@@ -10225,7 +10225,7 @@ def _g34_prepare():
         _g34_write(f"{_g34_SHIM_DIR}/scp", _g34_SHIM_SCRIPT("scp"))
         os.chmod(f"{_g34_SHIM_DIR}/ssh", 0o755)
         os.chmod(f"{_g34_SHIM_DIR}/scp", 0o755)
-        print(f"  [G34: no usable sshd — using ssh/scp shim in {_g34_SHIM_DIR}]")
+        print(f"  [G34: no usable sshd - using ssh/scp shim in {_g34_SHIM_DIR}]")
 
 
 _g34_prepare()
@@ -10255,7 +10255,7 @@ def _g34_test_dir(name):
 # ── 34-A: ssh_run ──────────────────────────────────────────────────────────
 
 def test_34_ssh_run():
-    """34-A: ssh_run against the local throwaway sshd (or shim) — command
+    """34-A: ssh_run against the local throwaway sshd (or shim) - command
     output, exit code, error propagation. Verifies the tool returns the
     remote stdout and a non-zero exit_code is surfaced as isError."""
     port = _g34_free_port()
@@ -10291,7 +10291,7 @@ def test_34_ssh_run():
         text, is_error = _g34_tool(proc, "run", {"host": "g34test"})
         assert is_error and "command" in text, f"missing command should error: {text!r}"
 
-        print("PASS: 34-A ssh_run — command output, exit_code 7 surfaced, missing-command error")
+        print("PASS: 34-A ssh_run - command output, exit_code 7 surfaced, missing-command error")
     finally:
         _g34_stop_proc(sshd)
         _g34_stop_proc(proc)
@@ -10300,7 +10300,7 @@ def test_34_ssh_run():
 # ── 34-B: ssh_copy ─────────────────────────────────────────────────────────
 
 def test_34_ssh_copy():
-    """34-B: ssh_copy roundtrip against the local sshd — to-remote then
+    """34-B: ssh_copy roundtrip against the local sshd - to-remote then
     from-remote, file content preserved; recursive directory copy; shim
     asserts scp arg construction (-r, -P, direction ordering)."""
     port = _g34_free_port()
@@ -10376,7 +10376,7 @@ def test_34_ssh_copy():
             "source": "a", "destination": "b"})
         assert is_error and "direction" in text, f"bad direction should error: {text!r}"
 
-        print("PASS: 34-B ssh_copy — to-remote/from-remote roundtrip, recursive, bad-direction error")
+        print("PASS: 34-B ssh_copy - to-remote/from-remote roundtrip, recursive, bad-direction error")
     finally:
         _g34_stop_proc(sshd)
         _g34_stop_proc(proc)
@@ -10385,7 +10385,7 @@ def test_34_ssh_copy():
 # ── 34-C: error paths ──────────────────────────────────────────────────────
 
 def test_34_ssh_errors():
-    """34-C: ssh error paths — unreachable host, timeout, bad key, missing
+    """34-C: ssh error paths - unreachable host, timeout, bad key, missing
     ssh_dir auto-created, world-readable key chmod-600'd before running."""
     port = _g34_free_port()
     base = _g34_test_dir("t34c")
@@ -10418,7 +10418,7 @@ def test_34_ssh_errors():
         assert is_error, "timeout should be isError"
         assert "timed out" in text.lower(), f"timeout error text wrong: {text!r}"
 
-        # 3) bad key: real sshd — key not in authorized_keys; shim — PERMDENY sentinel
+        # 3) bad key: real sshd - key not in authorized_keys; shim - PERMDENY sentinel
         if _g34_REAL:
             _g34_write(f"{base}/authorized_keys", "ssh-ed25519 AAAA-not-the-right-key\n")
             time.sleep(0.2)
@@ -10449,7 +10449,7 @@ def test_34_ssh_errors():
             mode = os.stat(key).st_mode & 0o777
             assert mode == 0o600, f"key should be chmod 600 before running, got {oct(mode)}"
 
-        print("PASS: 34-C ssh error paths — unreachable host, timeout, bad key, "
+        print("PASS: 34-C ssh error paths - unreachable host, timeout, bad key, "
               "missing ssh_dir auto-created, world-readable key secured")
     finally:
         _g34_stop_proc(sshd)
@@ -10463,7 +10463,7 @@ test(test_34_ssh_errors)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 35: Subtasks lifecycle — plan-mode workflow drives
+#  GROUP 35: Subtasks lifecycle - plan-mode workflow drives
 #  subtasks_manage-subtasks end-to-end through the real agent loop
 #  (noop/test-tool-caller fake agent). Verifies: subtask rows created via
 #  action=add, listed, updated to completed, counts; the executor thread
@@ -10534,15 +10534,15 @@ test(test_35_subtasks_plan_mode_lifecycle)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 36: Paperclip service + official MCP server integration —
+#  GROUP 36: Paperclip service + official MCP server integration -
 #  task_18cc6c4199f913f9. Verifies the compose service (profiles
 #  paperclip/all, pinned sha-e55d702, volume paperclip-data), the config
 #  wiring (plugins.yml / remote.yml / allowed_tools), the vendored
 #  @paperclipai/mcp-server plugin files, the deploy.py remote.yml seed, and
 #  a live MCP stdio initialize+tools/list against the vendored binary (no
-#  paperclip container needed — tools/list is static). A live /api/health
+#  paperclip container needed - tools/list is static). A live /api/health
 #  check runs only when the paperclip service is actually up (SKIP
-#  otherwise — omnidev does not run the paperclip profile).
+#  otherwise - omnidev does not run the paperclip profile).
 # ═══════════════════════════════════════════════════════════════════════
 print(f"\n{'=' * 60}")
 print("GROUP 36: Paperclip service + official MCP server integration")
@@ -10561,7 +10561,7 @@ def _g36_installed_dir():
 def _g36_ensure_paperclip_installed():
     """Clone + install paperclip via the plugin APIs so node_modules exist.
 
-    node_modules are NEVER vendored in the repo — the install endpoint runs
+    node_modules are NEVER vendored in the repo - the install endpoint runs
     npm ci from the tracked package-lock.json. Returns the stdio.js path.
     """
     stdio_js = f"{_g36_installed_dir()}/node_modules/@paperclipai/mcp-server/dist/stdio.js"
@@ -10639,7 +10639,7 @@ def test_36_config_wiring():
     assert "nexuslbs/omni-plugins.git" in remote_txt, \
         "remote.yml must point at nexuslbs/omni-plugins"
     assert "tools/paperclip" in remote_txt, "remote.yml path must be tools/paperclip"
-    # The seed ships no profiles/ dir — the core auto-DECLARES the default
+    # The seed ships no profiles/ dir - the core auto-DECLARES the default
     # profile in config/profiles.yml at startup (profiles.yml is the single
     # source of truth; profiles/<name>/config.json is legacy and is NOT
     # auto-created anymore). An operator grants tools by editing that runtime
@@ -10674,7 +10674,7 @@ def test_36_config_wiring():
 
 
 def test_36_plugin_files():
-    """36-D: omni-plugins tools/paperclip plugin files — plugin.json (type
+    """36-D: omni-plugins tools/paperclip plugin files - plugin.json (type
     mcp, config_schema), mcp-config.json (stdio node dist/stdio.js,
     allowed_tools ['*']), package.json pinned @paperclipai/mcp-server
     2026.722.0, node_modules installed via the install endpoint (npm ci)."""
@@ -10698,7 +10698,7 @@ def test_36_plugin_files():
     dep = pkg.get("dependencies", {}).get("@paperclipai/mcp-server")
     assert dep == "2026.722.0", \
         f"@paperclipai/mcp-server must be pinned 2026.722.0: {dep}"
-    # node_modules must NOT be vendored in the repo — install them via the
+    # node_modules must NOT be vendored in the repo - install them via the
     # plugin install endpoint (npm ci from the tracked package-lock.json).
     installed = _g36_installed_dir()
     stdio_js = _g36_ensure_paperclip_installed()
@@ -10711,7 +10711,7 @@ def test_36_plugin_files():
 
 def test_36_deploy_seed():
     """36-E: deploy.py generate_env seeds config/remote.yml from the TRACKED
-    SEED (omni-deployer/seed/config/remote.yml — the FULL remote plugin
+    SEED (omni-deployer/seed/config/remote.yml - the FULL remote plugin
     manifest) so deployed stacks register the paperclip MCP plugin. config/
     is runtime-only now (gitignored in omni-stack/omni-root); the seed is
     the source of truth, not git HEAD."""
@@ -10730,7 +10730,7 @@ def test_36_deploy_seed():
 
 def test_36_mcp_stdio_tools():
     """36-F: spawn the installed @paperclipai/mcp-server (node stdio) and do
-    MCP initialize + tools/list — the paperclip_* tools must be present.
+    MCP initialize + tools/list - the paperclip_* tools must be present.
     Does not need the paperclip container (tools/list is static)."""
     import subprocess as _g36_sp
     import threading as _g36_th
@@ -10774,7 +10774,7 @@ def test_36_mcp_stdio_tools():
 
 def test_36_live_health():
     """36-G: if the paperclip service is up in this stack, /api/health
-    returns 200 (SKIP otherwise — omnidev does not run the paperclip
+    returns 200 (SKIP otherwise - omnidev does not run the paperclip
     profile, so the container is absent)."""
     try:
         r = urllib.request.urlopen("http://paperclip:3100/api/health", timeout=5)
@@ -10794,7 +10794,7 @@ test(test_36_live_health)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 37: Remote python actions plugin (omni-plugins tools/actions) —
+#  GROUP 37: Remote python actions plugin (omni-plugins tools/actions) -
 #  task_18cc73ad22835e2d. Verifies the port of the built-in Rust actions
 #  plugin to a remote python MCP plugin: config wiring (plugins.yml
 #  tools.actions source: remote + database_url/omni_dir; remote.yml →
@@ -10803,7 +10803,7 @@ test(test_36_live_health)
 #  the omniagent built-in removal (Cargo.toml member, plugins/tools/actions
 #  dir, mcp-server-actions refs), the python plugin files (plugin.json /
 #  mcp-config.json / server.py registering exactly hindsight_populator,
-#  relevance_indexer, setup_knowledge_pipeline — no kanban_dispatcher), a
+#  relevance_indexer, setup_knowledge_pipeline - no kanban_dispatcher), a
 #  live MCP stdio initialize + tools/list, and REAL action runs via the
 #  API: relevance_indexer rewrites relevant-index.md, hindsight_populator
 #  advances hindsight_watermark.json, setup_knowledge_pipeline creates the
@@ -10817,7 +10817,7 @@ print(f"{'=' * 60}")
 
 
 def test_37_config_wiring():
-    """37-A: config wiring — plugins.yml tools.actions source: remote with
+    """37-A: config wiring - plugins.yml tools.actions source: remote with
     database_url/omni_dir; remote.yml points at nexuslbs/omni-plugins
     tools/actions; actions.yml keeps the 3 builtin_* entries mapped to the
     actions_* python tool names (no builtin_kanban_dispatcher); omniagent
@@ -10861,7 +10861,7 @@ def test_37_config_wiring():
 
 
 def test_37_plugin_files():
-    """37-B: omni-plugins tools/actions python plugin — plugin.json (type
+    """37-B: omni-plugins tools/actions python plugin - plugin.json (type
     mcp, config_schema database_url/omni_dir), mcp-config.json (stdio
     python3 server.py, allowed_tools ['*']), server.py registers exactly the
     3 action tools (no kanban_dispatcher), requirements.txt manifest."""
@@ -10889,11 +10889,11 @@ def test_37_plugin_files():
 
 
 def test_37_live_plugin_status():
-    """37-C: live API — /plugins lists actions as remote+enabled; GET
+    """37-C: live API - /plugins lists actions as remote+enabled; GET
     /actions lists the 3 builtin_* entries with actions_* tool names and
     no builtin_kanban_dispatcher."""
     # The deploy env carries actions in remote.yml but does not auto-install
-    # remote plugins — install the fixture (idempotent) and wait for the
+    # remote plugins - install the fixture (idempotent) and wait for the
     # plugin manager to register it before asserting the live state.
     ensure_remote_plugin("actions", "tools")
     deadline = time.time() + 60
@@ -10925,7 +10925,7 @@ def test_37_live_plugin_status():
 
 def test_37_mcp_stdio_tools():
     """37-D: spawn the python actions MCP server over stdio and do MCP
-    initialize + tools/list — exactly the 3 action tools, no
+    initialize + tools/list - exactly the 3 action tools, no
     kanban_dispatcher."""
     import subprocess as _g37_sp
     server = f"{REMOTE_REPO}/tools/actions/server.py"
@@ -11003,7 +11003,7 @@ def test_37_live_actions():
         r2 = post_json("/actions/builtin_setup_knowledge_pipeline/run")
         assert isinstance(r2, dict) and r2.get("is_error") is False, f"setup run2: {r2}"
         assert "already exists" in r2.get("result", ""), r2
-        print("PASS: live actions — relevant-index written, hindsight watermark "
+        print("PASS: live actions - relevant-index written, hindsight watermark "
               "advanced, knowledge_pipeline schedule created idempotently")
     finally:
         put_json("/actions/builtin_setup_knowledge_pipeline", {"enabled": False})
@@ -11021,7 +11021,7 @@ test(test_37_live_actions)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 38: Skills plugin lifecycle — task_18cc76881db8a89a
+#  GROUP 38: Skills plugin lifecycle - task_18cc76881db8a89a
 #  (prompt get_skills frontmatter display fix + Hermes create_skill layout
 #   + prompt nudge). Spawns the built mcp-server-skills / mcp-server-prompt
 #   binaries over MCP stdio (mirroring GROUP 34/37) with a TEMP omni_dir so
@@ -11097,7 +11097,7 @@ def _g38_create_demo_skill(proc, base, name="g38-demo"):
     return content
 
 def test_38_skills_create_list_view():
-    """38-A: skills lifecycle over MCP stdio with a temp omni_dir — Hermes
+    """38-A: skills lifecycle over MCP stdio with a temp omni_dir - Hermes
     dir layout, enriched frontmatter, list/view resolution, duplicate +
     >1024-char rejection."""
     import tempfile as _g38_tf
@@ -11135,7 +11135,7 @@ def test_38_skills_create_list_view():
         assert is_error, ">1024 description must fail"
         assert "1024" in text, f"long-desc error msg: {text}"
 
-        print(f"PASS: 38-A create/list/view — Hermes SKILL.md layout, license MIT, "
+        print(f"PASS: 38-A create/list/view - Hermes SKILL.md layout, license MIT, "
               f"use-when prefix, metadata.hermes tags/related_skills, dup+>1024 rejected")
     finally:
         _g34_stop_proc(proc)
@@ -11175,7 +11175,7 @@ def test_38_prompt_renders_skills_block():
         assert "create a skill with create_skill so future threads reuse it" in text, \
             f"create-skill nudge missing:\n{text[:1200]}"
         assert "- g38-demo: ---" not in text, "raw --- fence leaked into prompt"
-        print("PASS: 38-B prompt block — frontmatter description rendered, "
+        print("PASS: 38-B prompt block - frontmatter description rendered, "
               "no --- fence, create-skill nudge present")
     finally:
         _g34_stop_proc(sk)
@@ -11188,7 +11188,7 @@ test(test_38_prompt_renders_skills_block)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 39: Plugin consolidation — task_18cc76a266a194f9
+#  GROUP 39: Plugin consolidation - task_18cc76a266a194f9
 #  search/query/metrics merged into ONE search plugin (7 search_* tools),
 #  cron+kanban replaced by generic builtin_omniagent-api tool +
 #  DELETE /schedule/{id}, telegram/hindsight out of omniagent (remote).
@@ -11197,7 +11197,7 @@ print("GROUP 39: Plugin consolidation (search merge, omniagent-api generic tool,
 
 
 def test_39_plugins_yml_consolidated():
-    """39-A: config/plugins.yml — query/metrics entries gone; search has
+    """39-A: config/plugins.yml - query/metrics entries gone; search has
     database_url; cron+kanban disabled; prompt built-in enabled."""
     with open(f"{WORKSPACE}/config/plugins.yml", encoding="utf-8") as f:
         txt = f.read()
@@ -11212,11 +11212,11 @@ def test_39_plugins_yml_consolidated():
     assert "enabled: false" in kanban_txt, "kanban must be disabled"
     prompt_txt = tools_txt.split("prompt:")[1]
     assert "source: built-in" in prompt_txt, "prompt must stay built-in"
-    print("PASS: plugins.yml — query/metrics gone, search w/ database_url, cron+kanban disabled")
+    print("PASS: plugins.yml - query/metrics gone, search w/ database_url, cron+kanban disabled")
 
 
 def test_39_live_plugins():
-    """39-B: live /plugins — query/metrics absent; search built-in enabled;
+    """39-B: live /plugins - query/metrics absent; search built-in enabled;
     cron+kanban disabled; prompt enabled."""
     # The seed plugins.yml (verified by 39-A) disables cron+kanban, but
     # earlier lifecycle groups in this suite (e.g. GROUP 23-2 installs then
@@ -11268,7 +11268,7 @@ def test_39_search_tools_listed():
 
 
 def test_39_schedule_delete():
-    """39-D: DELETE /schedule/{id} — hard assert: create → delete → gone."""
+    """39-D: DELETE /schedule/{id} - hard assert: create → delete → gone."""
     import uuid as _g39_uuid
     name = f"g39del{_g39_uuid.uuid4().hex[:8]}"
     sid = None
@@ -11298,7 +11298,7 @@ def test_39_schedule_delete():
 
 
 def test_39_omniagent_api_generic_tool():
-    """39-E: builtin_omniagent-api generic tool e2e — kanban CRUD + schedule
+    """39-E: builtin_omniagent-api generic tool e2e - kanban CRUD + schedule
     CRUD incl DELETE via the generic MCP tool (method/path/body to :8080)."""
     import uuid as _g39_uuid
     title = f"g39api{_g39_uuid.uuid4().hex[:8]}"
@@ -11371,7 +11371,7 @@ test(test_39_omniagent_api_generic_tool)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 40: Workflow role mode (agent/action) + auto_approve +
-#  review_on_fail — task_18cc95fc8fbba9e0
+#  review_on_fail - task_18cc95fc8fbba9e0
 #  Live behavior: action-mode roles execute actions.yml tools via the plugin
 #  manager instead of the agent loop. Routing matrix:
 #    - action-mode executor fail → blocked (NOT executor re-run)
@@ -11443,7 +11443,7 @@ def test_40_action_tester_fail_review():
     (action-mode tester fail→review, NOT the agent-mode D5 executor re-run).
     Exactly one running thread (no re-run); testing thread terminal 'failed'.
     Uses action-mode executor (builtin_hindsight_populator) for the SUCCESS setup
-    step — the agent-mode noop+test-python_lorem setup was flaky (tool-registration
+    step - the agent-mode noop+test-python_lorem setup was flaky (tool-registration
     race -> 'Unknown tool: test-python_lorem' -> executor half-finished -> blocked)."""
     cid, orig = _wf_channel_patch()
     key = "wf40_testerfail_" + uuid.uuid4().hex[:8]
@@ -11486,7 +11486,7 @@ def test_40_action_reviewer_fail_blocked():
     """40-D: ACTION-mode executor+tester SUCCESS + reviewer mode=action FAIL → task
     BLOCKED (action-mode reviewer fail→blocked). Review thread terminal 'failed'.
     Uses action-mode executor+tester (builtin_hindsight_populator) for the SUCCESS
-    setup steps — the agent-mode noop+test-python_lorem setup was flaky (tool-
+    setup steps - the agent-mode noop+test-python_lorem setup was flaky (tool-
     registration race -> executor half-finished -> blocked before review reached)."""
     cid, orig = _wf_channel_patch()
     key = "wf40_revfail_" + uuid.uuid4().hex[:8]
@@ -11523,10 +11523,10 @@ def test_40_action_reviewer_fail_blocked():
 
 
 def test_40_auto_approve_done_direct():
-    """40-E: auto_approve=true — reviewer role ignored: tester passes → task
+    """40-E: auto_approve=true - reviewer role ignored: tester passes → task
     goes DIRECTLY to done (no review step thread, no manual review).
     Uses action-mode executor+tester (builtin_hindsight_populator) for the SUCCESS
-    setup steps — the agent-mode noop+test-python_lorem setup was flaky (tool-
+    setup steps - the agent-mode noop+test-python_lorem setup was flaky (tool-
     registration race -> executor half-finished -> blocked before auto_approve)."""
     cid, orig = _wf_channel_patch()
     key = "wf40_autoapp_" + uuid.uuid4().hex[:8]
@@ -11552,7 +11552,7 @@ def test_40_auto_approve_done_direct():
 
 
 def test_40_review_on_fail_goes_review():
-    """40-F: review_on_fail=true — failed executor step goes to REVIEW instead
+    """40-F: review_on_fail=true - failed executor step goes to REVIEW instead
     of blocked. Use action-mode executor fail (normally → blocked) + the flag."""
     cid, orig = _wf_channel_patch()
     key = "wf40_ronfail_" + uuid.uuid4().hex[:8]
@@ -11618,7 +11618,7 @@ WF_SCRIPT_FAIL_REASON = json.dumps([{"name": "fail", "tool": "builtin_fail-threa
 def _wf41_wait_retry(tid, timeout=60):
     """Wait for a workflow retry in kanban_history: executor re-run
     (running→running) OR tester-fail re-dispatch to the executor
-    (testing→running) — both recorded as 'Creating thread #N+1'."""
+    (testing→running) - both recorded as 'Creating thread #N+1'."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         for r in _wf_history_rows(tid):
@@ -11633,8 +11633,8 @@ def _wf41_wait_retry(tid, timeout=60):
 
 
 def _wf41_roles_exec_action_tester_agent():
-    """Action-mode executor (hindsight_populator — succeeds instantly) + agent-mode
-    tester (noop/test-tool-caller — runs the body script)."""
+    """Action-mode executor (hindsight_populator - succeeds instantly) + agent-mode
+    tester (noop/test-tool-caller - runs the body script)."""
     return {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
             "tester": {"provider": "noop", "model": "test-tool-caller", "template": "wf_tester.md"}}
 
@@ -11668,7 +11668,7 @@ def test_41_executor_f0_rerun_vs_review():
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid2, {"review", "blocked", "done"}, timeout=120)
         assert st == "review", f"41-A: F0 + review_on_fail must go to review, got {st}: {gd}"
-        print("PASS: 41-A executor F0 — flag false → executor re-run (then blocked at limit); flag true → review")
+        print("PASS: 41-A executor F0 - flag false → executor re-run (then blocked at limit); flag true → review")
     finally:
         _wf_remove_test_python()
         _wf_cleanup([key_f, key_t], tids)
@@ -11700,7 +11700,7 @@ def test_41_tester_f0_rerun_vs_review():
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid2, {"review", "blocked", "done"}, timeout=120)
         assert st == "review", f"41-B: tester F0 + review_on_fail must go to review, got {st}: {gd}"
-        print("PASS: 41-B tester F0 — flag false → executor re-run; flag true → review")
+        print("PASS: 41-B tester F0 - flag false → executor re-run; flag true → review")
     finally:
         _wf_remove_test_python()
         _wf_cleanup([key_f, key_t], tids)
@@ -11709,7 +11709,7 @@ def test_41_tester_f0_rerun_vs_review():
 
 def test_41_explicit_running_honored_both_flags():
     """Explicit workflow_step='running' from the TESTER (F1): executor re-run under
-    BOTH flags — review_on_fail converts only blocked-bound outcomes, not the
+    BOTH flags - review_on_fail converts only blocked-bound outcomes, not the
     explicit destination."""
     cid, orig = _wf_channel_patch()
     _wf_ensure_test_python()
@@ -11759,7 +11759,7 @@ def test_41_blocked_restriction():
         post_json("/kanban/dispatch", {})
         st, gd = _wf_wait_status(tid2, {"review", "blocked", "done"}, timeout=120)
         assert st == "review", f"41-D: non-reviewer explicit blocked + flag true must go to review, got {st}: {gd}"
-        print("PASS: 41-D blocked restriction — flag false → blocked; flag true (non-reviewer) → review")
+        print("PASS: 41-D blocked restriction - flag false → blocked; flag true (non-reviewer) → review")
     finally:
         _wf_remove_test_python()
         _wf_cleanup([key_f, key_t], tids)
@@ -11860,7 +11860,7 @@ test(test_41_fail_reason_propagates_to_rerun_cause)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 42: Plugins omni_dir config field (task_18cd0c7a02d3884f) —
+#  GROUP 42: Plugins omni_dir config field (task_18cd0c7a02d3884f) -
 #  data dir resolved via the omni_dir config field (default $env:OMNI_DIR),
 #  no hardcoded /opt/omni / ~/.omniagent fallbacks.
 # ═══════════════════════════════════════════════════════════════════════
@@ -11899,7 +11899,7 @@ def test_42_source_audit():
         r = _g42_sp.run(["grep", "-rn", "--exclude-dir=.git", "--exclude-dir=node_modules",
                          pat, REMOTE_REPO], capture_output=True, text=True)
         assert r.returncode != 0, f"hardcoded fallback {pat} found:\n{r.stdout}"
-    print("PASS: 42-A source audit — config-first resolution, no hardcoded "
+    print("PASS: 42-A source audit - config-first resolution, no hardcoded "
           "fallbacks, omni_dir config_schema in all 3 plugin.json files")
 
 
@@ -11921,7 +11921,7 @@ def _g42_spawn(server_path, extra_env):
 def test_42_unset_omni_dir_errors():
     """42-B: with OMNI_DIR AND omni_dir both unset in the subprocess env, every
     python plugin must fail with a clear error naming the omni_dir config field
-    — NEVER a silent write to /opt/omni or ~/.omniagent."""
+    - NEVER a silent write to /opt/omni or ~/.omniagent."""
     cases = [
         ("memory", "promote_to_memory",
          {"name": "g42-unset", "content": "x", "confidence": "high"}),
@@ -12001,7 +12001,7 @@ def test_42_custom_omni_dir_config():
                                    {"profile_name": "omni", "user_message": "hello"},
                                    profile_name="omni", timeout=60)
         if is_error:
-            # data_dir must have resolved from the config — any failure here
+            # data_dir must have resolved from the config - any failure here
             # must be downstream (DB), never the omni_dir resolution itself
             assert "omni_dir" not in text.lower(), \
                 f"prompt: data_dir not resolved from omni_dir config: {text}"
@@ -12009,7 +12009,7 @@ def test_42_custom_omni_dir_config():
         else:
             assert "Active Hermes profile: omni" in text, \
                 f"prompt output missing profile line: {text[:200]}"
-        print("  PASS: 42-C custom omni_dir config — memory promote/list, actions "
+        print("  PASS: 42-C custom omni_dir config - memory promote/list, actions "
               "relevance, prompt generate all operate under the custom path")
     finally:
         for p in procs:
@@ -12025,7 +12025,7 @@ test(test_42_custom_omni_dir_config)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 43: Sub-prompts — pending user prompts appended to running thread
+#  GROUP 43: Sub-prompts - pending user prompts appended to running thread
 #  (task_18cd0d0fb878a9d5). Covers the omniagent implementation:
 #  43-A source audit (migration original_thread_id, DB helpers, settings
 #       wiring, main-loop injection BEFORE the condense call, gate + its
@@ -12096,7 +12096,7 @@ def test_43_source_audit():
         sy = f.read()
     assert "sub_prompt_max_chars" in sy and "sub_prompt_iteration_percent" in sy, \
         "omni-stack settings.yml defaults missing"
-    print("PASS: 43-A source audit — migration, DB helpers, pre-condense "
+    print("PASS: 43-A source audit - migration, DB helpers, pre-condense "
           "injection, settings wiring + defaults all present")
 
 
@@ -12134,7 +12134,7 @@ def test_43_settings_api():
             after.get("sub_prompt_max_chars")
         assert str(after.get("sub_prompt_iteration_percent")) == "77", \
             after.get("sub_prompt_iteration_percent")
-        print("PASS: 43-B settings API — GET exposes both settings, PUT "
+        print("PASS: 43-B settings API - GET exposes both settings, PUT "
               "updates live (7777/77)")
     finally:
         put_json("/settings", {"updates": [
@@ -12151,7 +12151,7 @@ def test_43_settings_api():
 def test_43_db_schema():
     '''43-C: the dev DB messages table has original_thread_id BIGINT (nullable).'''
     db_url = os.environ.get("DATABASE_URL", "")
-    assert db_url, "DATABASE_URL not set — run inside the omniagent container"
+    assert db_url, "DATABASE_URL not set - run inside the omniagent container"
     import psycopg2
     with psycopg2.connect(db_url) as conn:
         cur = conn.cursor()
@@ -12161,7 +12161,7 @@ def test_43_db_schema():
         rows = cur.fetchall()
     assert len(rows) == 1, f"original_thread_id column not found: {rows}"
     assert rows[0][0] == "bigint" and rows[0][1] == "YES", rows
-    print("PASS: 43-C DB schema — messages.original_thread_id BIGINT NULL present")
+    print("PASS: 43-C DB schema - messages.original_thread_id BIGINT NULL present")
 
 
 def test_43_appendable_pending_sql():
@@ -12171,9 +12171,9 @@ def test_43_appendable_pending_sql():
     other channels/profiles/statuses/parents are excluded. Also verifies the
     sub_cause recording contract (msg_type/msg_subtype/original_thread_id) and
     the skipped terminal flip. All writes run inside a transaction that is
-    ROLLED BACK for cleanup (messages is append-only — rows cannot be DELETEd).'''
+    ROLLED BACK for cleanup (messages is append-only - rows cannot be DELETEd).'''
     db_url = os.environ.get("DATABASE_URL", "")
-    assert db_url, "DATABASE_URL not set — run inside the omniagent container"
+    assert db_url, "DATABASE_URL not set - run inside the omniagent container"
     import psycopg2
     conn = psycopg2.connect(db_url)
     ch = "g43-" + uuid.uuid4().hex[:8]
@@ -12214,7 +12214,7 @@ def test_43_appendable_pending_sql():
         assert p_other_profile not in found and p_other_chan not in found and \
             p_other_parent not in found and p_not_pending not in found and \
             p_terminal not in found
-        # sub_cause recording contract (INSERT only — messages is append-only)
+        # sub_cause recording contract (INSERT only - messages is append-only)
         cur.execute(
             "INSERT INTO messages (thread_id, role, content, thread_sequence, "
             "msg_type, msg_subtype, original_thread_id, iteration_number) "
@@ -12240,7 +12240,7 @@ def test_43_appendable_pending_sql():
         conn.close()
 
 
-print("GROUP 43: Sub-prompts — append pending user prompts to running thread")
+print("GROUP 43: Sub-prompts - append pending user prompts to running thread")
 test(test_43_source_audit)
 test(test_43_settings_api)
 test(test_43_db_schema)
@@ -12250,7 +12250,7 @@ test(test_43_appendable_pending_sql)
 # ── GROUP 44: builtin omniagent-api via test-tool-caller + fetch method gating ──
 def test_44_tool_caller_omniagent_api():
     """44-A: test-tool-caller channel script drives builtin_omniagent-api end
-    to end: GET /kanban/tasks, POST /kanban/tasks (create), GET again —
+    to end: GET /kanban/tasks, POST /kanban/tasks (create), GET again -
     proving the builtin tool reaches the real API with no host/scheme/port
     knowledge. Follows the GROUP 12/13 pattern: JSON script posted to the
     DEDICATED wf-test channel (pinned noop/test-tool-caller); NEVER patches
@@ -12316,7 +12316,7 @@ def test_44_tool_caller_omniagent_api():
 
 
 def test_44_plugin_endpoint_via_builtin_tool():
-    """44-B: enable/disable a plugin THROUGH the builtin tool — proves the
+    """44-B: enable/disable a plugin THROUGH the builtin tool - proves the
     mutating plugin lifecycle endpoint works with just method+path. Uses the
     GROUP 12 safety pattern: disable then immediately re-enable the noop
     provider."""
@@ -12391,8 +12391,8 @@ test(test_44_fetch_method_gating)
 def test_45_skill_file():
     # 45-A: the wiki skill file (profiles/omni/skills/wiki.md) carries
     # frontmatter and a complete filesystem-tool worked example (Karpathy +
-    # Obsidian format). The seed ships no profiles/ dir — the runtime data
-    # dir owns profile content — so the test seeds the fixture itself.
+    # Obsidian format). The seed ships no profiles/ dir - the runtime data
+    # dir owns profile content - so the test seeds the fixture itself.
     skill_path = f"{WORKSPACE}/profiles/omni/skills/wiki.md"
     os.makedirs(os.path.dirname(skill_path), exist_ok=True)
     with open(skill_path, "w", encoding="utf-8") as f:
@@ -12540,7 +12540,7 @@ def _g46_data(resp):
     return resp
 
 def _g46_post_status(path, body=None, timeout=20):
-    """POST and return (status_code, response_text) — never raises."""
+    """POST and return (status_code, response_text) - never raises."""
     url = f"{BASE}/api{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method="POST",
@@ -12766,7 +12766,7 @@ test(test_46_refresh_upsert)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GROUP 47: Resolve fallback fields ONCE at load — kanban task defaults
+#  GROUP 47: Resolve fallback fields ONCE at load - kanban task defaults
 #  (task_18cd45eecd7f6dab). Board tasks carry NULL workflow_id/channel_id/
 #  profile/plan; the board (boards.yml) supplies the effective values. The
 #  live bug: fail routing read kanban_tasks.workflow_id raw -> board tasks
@@ -12775,7 +12775,7 @@ test(test_46_refresh_upsert)
 #  resolution (manual_review_decision) as the reviewer fail-tool path.
 #  API + SQL only (no mattermost/agent threads needed). Temp workflows
 #  carry provider/model per role (GROUP 41 pattern) + tester/reviewer
-#  templates (server validation) — the board's workflow must be
+#  templates (server validation) - the board's workflow must be
 #  role-specified for thread creation.
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -12823,7 +12823,7 @@ def _g47_req(method, path, body=None):
 def _g47_put_wf(key):
     """Temp workflow with provider/model on every role (GROUP 41/22 pattern).
     tester/reviewer get templates (server-side validation requires them when
-    the role is present). NO plan_mode — so a role with plan_mode unset falls
+    the role is present). NO plan_mode - so a role with plan_mode unset falls
     back to the task's resolved plan (the board's plan flag propagates)."""
     roles = {
         "executor": {"provider": "noop", "model": "test-tool-caller"},
@@ -12895,7 +12895,7 @@ def test_47_review_rework_board_task():
     workflow/channel/profile/plan resolved from the BOARD; kanban_history
     shows 'Creating thread'. Before the fix: has_wf=false -> 'blocked'."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -12943,7 +12943,7 @@ def test_47_review_retest_board_task():
     """47-B: board task + reviewer 'retest' -> status testing + NEW tester
     thread (workflow_step=testing) resolved from the board."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -12980,7 +12980,7 @@ def test_47_review_block_board_task():
     """47-C: board task + reviewer explicit 'block' -> status blocked, NO
     new thread (block decision semantics unchanged)."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -13015,7 +13015,7 @@ def test_47_status_change_dispatch_board_task():
     with NULL workflow_id/channel_id -> the role thread resolves channel +
     workflow from the BOARD."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -13055,7 +13055,7 @@ def test_47_redispatch_board_task():
     thread. Before the fix the role gate read the RAW workflow_id (NULL) and
     answered {"redispatch": false, "reason": "no role to run"}."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -13092,10 +13092,10 @@ def test_47_redispatch_board_task():
 
 def test_47_explicit_task_fields_win_over_board():
     """47-E: task with EXPLICIT channel/workflow on a board keeps the EXPLICIT
-    values (task > board precedence — non-board behavior unchanged). Board
+    values (task > board precedence - non-board behavior unchanged). Board
     says channel=kanban; task says channel=hooks; thread must be hooks."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -13135,7 +13135,7 @@ def test_47_unknown_board_fail_loud():
     (POST /review returns non-200 mentioning the board), never a silent
     empty fallback that changes behavior."""
     if not _g47_boards_enabled():
-        print("SKIP: boards.yml absent (omnistable) — boards disabled")
+        print("SKIP: boards.yml absent (omnistable) - boards disabled")
         return
     bfile = _g47_boards_file()
     with open(bfile) as f:
@@ -13173,7 +13173,7 @@ test(test_47_status_change_dispatch_board_task)
 test(test_47_redispatch_board_task)
 test(test_47_explicit_task_fields_win_over_board)
 test(test_47_unknown_board_fail_loud)
-print("GROUP 47: resolve fallback fields ONCE at load — kanban task defaults (task->board->channel->global)")
+print("GROUP 47: resolve fallback fields ONCE at load - kanban task defaults (task->board->channel->global)")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -13229,7 +13229,7 @@ def test_48_cli_unknown():
 def test_48_advisory_lock_refuses_second():
     """48-D: second instance against an already-owned DB refuses to start.
     In the deploy suite the LIVE omniagent already holds the app advisory
-    lock (key 72700123) — that IS the first instance. Try to acquire the
+    lock (key 72700123) - that IS the first instance. Try to acquire the
     lock ourselves; if it is already held, that is equally valid. Either
     way a second `omniagent` process must refuse to boot with the
     lock-refusal message and a non-zero exit (no DB writes)."""
@@ -13242,7 +13242,7 @@ def test_48_advisory_lock_refuses_second():
             cur.execute("SELECT pg_try_advisory_lock(72700123)")
             acquired_by_test = bool(cur.fetchone()[0])
         if not acquired_by_test:
-            print("  [app advisory lock already held by the live omniagent — first instance present]")
+            print("  [app advisory lock already held by the live omniagent - first instance present]")
         r = sh(f"{OMNIAGENT_BIN} 2>&1; echo RC=$?")
         out = r.stdout + r.stderr
         assert "another omniagent instance is already running" in out, \
@@ -13263,7 +13263,7 @@ print("GROUP 48: single-instance advisory lock + CLI arg handling (task_18cd5041
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  GROUP 49: omni-dashboard UI/UX fixes — 8 items (task_18cd65247cfc4d9e)
+#  GROUP 49: omni-dashboard UI/UX fixes - 8 items (task_18cd65247cfc4d9e)
 #  Regression contract for the UI/UX pass at omni-dashboard origin/main (877a9e7).
 #  The running omnidev dashboard image predates these fixes, so we assert the
 #  implementation markers in the checked-out source (/opt/workspace/omni-dashboard,
@@ -13279,7 +13279,7 @@ def _g49_read(rel: str) -> str:
         return _f.read()
 
 def test_49_db_tables_search_database():
-    """49-A: DB page 502 root cause — server/routes/db.ts forwards to the REAL
+    """49-A: DB page 502 root cause - server/routes/db.ts forwards to the REAL
     MCP tool `search_database` (query_database does not exist on the backend)."""
     db_ts = _g49_read("server/routes/db.ts")
     assert 'name: "search_database"' in db_ts, "49-A: db.ts must call search_database"
@@ -13318,7 +13318,7 @@ def test_49_backend_serves_search_database():
     print("PASS: 49-A runtime backend tool serving (route contract verified)")
 
 def test_49_kanban_board_custom_selects():
-    """49-B: board selector (kanban page) + Create/Edit Board modals — every editable
+    """49-B: board selector (kanban page) + Create/Edit Board modals - every editable
     field is a custom stylized select with an empty/none option."""
     kb = _g49_read("src/lib/kanban-boards.ts")
     for sid in ["board-form-channel", "board-form-profile", "board-form-workflow",
@@ -13336,7 +13336,7 @@ def test_49_kanban_board_custom_selects():
     print("PASS: 49-B board selector + Create/Edit Board modals use custom selects")
 
 def test_49_workflow_options():
-    """49-C: workflow create/edit options — text, order, defaults (3a-3e)."""
+    """49-C: workflow create/edit options - text, order, defaults (3a-3e)."""
     wf = _g49_read("src/pages/workflows.ts")
     assert "default off" not in wf.lower(), "49-C (3a): 'default off' must NOT appear in option text"
     assert "(ignored while auto-approve is on, as if disabled)" in wf, "49-C (3b): expected 'ignored while auto-approve is on, as if disabled'"
@@ -13356,7 +13356,7 @@ def test_49_workflow_options():
     print("PASS: 49-C workflow option text/order/defaults")
 
 def test_49_hooks_modal():
-    """49-D: hook modal — trigger count tel; channel/profile scope custom selects
+    """49-D: hook modal - trigger count tel; channel/profile scope custom selects
     with empty first option; template resolves from chosen profile."""
     hk = _g49_read("src/lib/hooks-detail.ts")
     assert 'id="hook-count" type="tel" inputmode="numeric" pattern="[0-9]*"' in hk, "49-D (4a): trigger count must be type=tel"
@@ -13388,7 +13388,7 @@ def test_49_templates_all_profiles_sorted():
     print("PASS: 49-E template selects (global behavior)")
 
 def test_49_red_cancel_opaque_modal():
-    """49-F: Import Tools from remote.yml (and similar) modals — red Cancel button,
+    """49-F: Import Tools from remote.yml (and similar) modals - red Cancel button,
     opaque modal (not transparent)."""
     pi = _g49_read("src/lib/plugin-import.ts")
     assert 'class="btn btn-danger"' in pi, "49-F: Cancel must use red btn-danger styling"
@@ -13429,6 +13429,6 @@ test(test_49_templates_all_profiles_sorted)
 test(test_49_red_cancel_opaque_modal)
 test(test_49_plugin_remove_non_builtin)
 test(test_49_explorer_git_box_bottom)
-print("GROUP 49: omni-dashboard UI/UX fixes — DB 502, custom selects, workflow options, hooks, templates, red cancel, plugin remove, explorer git box (task_18cd65247cfc4d9e)")
+print("GROUP 49: omni-dashboard UI/UX fixes - DB 502, custom selects, workflow options, hooks, templates, red cancel, plugin remove, explorer git box (task_18cd65247cfc4d9e)")
 
 sys.exit(0 if tests_fail == 0 else 1)

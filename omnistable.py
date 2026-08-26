@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OmniStack stable launcher — thin wrapper around shared.py.
+OmniStack stable launcher - thin wrapper around shared.py.
 
 Usage:
   python3 omnistable.py setup
@@ -12,19 +12,19 @@ The `setup` command:
      :latest image tags (omniagent, dashboard, toolbox)
   2. Starts Docker Compose (project=omnistable, profiles=noop,mattermost)
      with `--pull always` so the newest :latest images are always fetched
-     (the `memory` profile — hindsight+qdrant — is DEV-only; stable does
+     (the `memory` profile - hindsight+qdrant - is DEV-only; stable does
      not run it, see shared.py generate_env)
   3. Creates secrets (from secrets.env + Mattermost credentials)
   4. Enables + configures + runs the Mattermost platform setup
      (team `omni`, channel `stable-channel`, admin/test/bot users)
   5. Patches the stable-channel to deepseek/deepseek-v4-flash
 
-IMPORTANT — image-based deployment: omnistable runs the omniagent binary and
+IMPORTANT - image-based deployment: omnistable runs the omniagent binary and
 all built-in plugin binaries FIXED in the CI-built image (no dev overlay, no
 source repo mount at /app). The omniagent + built-in plugins are only updated
 when a new CI stable build publishes new images; bundled/remote plugins can be
 added at runtime via the plugin API. Source builds from the repo are what
-omnidev does — never omnistable.
+omnidev does - never omnistable.
 
 The `test` command runs the full tool-test suite (Phase 0/1/2) against the
 stable stack. The `agent` command posts a math question to #stable-channel
@@ -55,7 +55,7 @@ OMNI_ROOT_DIR = os.path.join(WORKSPACE_DIR, "omni-root")
 settings = shared.Settings(
     env_path=os.path.join(SCRIPT_DIR, "omnistable.env"),
     compose_file=os.path.join(OMNI_ROOT_DIR, "docker-compose.yml"),
-    dev_overlay=None,  # stable mode — pull production GHCR images, no source build
+    dev_overlay=None,  # stable mode - pull production GHCR images, no source build
     project_name="omnistable",
     container="omnistable-omniagent-1",
     setup_channel="stable-channel",

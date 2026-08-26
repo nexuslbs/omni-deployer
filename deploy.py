@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OmniAgent deployer — orchestration + integration tests.
+OmniAgent deployer - orchestration + integration tests.
 
 Single entry point for deploying the OmniAgent stack and running the
 full integration test suite. Handles env generation, Docker Compose
@@ -44,7 +44,7 @@ def patch_deploy_channels_noop():
     """Pin the deploy environment's system channels to the noop provider.
 
     The deploy runs on a FRESH database with NO LLM secrets (never seeds
-    secrets.env — that is omnidev/omnistable-only). But channels.yml is the
+    secrets.env - that is omnidev/omnistable-only). But channels.yml is the
     shared bind-mounted config, and the `omni` profile pins
     provider=deepseek, so any thread on a channel WITHOUT an explicit
     provider (e.g. the `cron` channel used by the hooks/schedule tests)
@@ -73,14 +73,14 @@ def patch_deploy_channels_noop():
     import re
     m = re.search(r"(?ms)^  cron:\n(?:    [^\n]*\n)*", content)
     if not m:
-        print("  [WARNING: no cron channel block found in channels.yml — noop pin skipped]")
+        print("  [WARNING: no cron channel block found in channels.yml - noop pin skipped]")
         return
     block = m.group(0)
     if re.search(r"(?m)^    provider:", block):
-        print("  ✓ cron channel already pinned (noop) — skipping")
+        print("  ✓ cron channel already pinned (noop) - skipping")
         return
     if not re.search(r"(?m)^    profile:", block):
-        print("  [WARNING: cron channel block has no profile line — noop pin skipped]")
+        print("  [WARNING: cron channel block has no profile line - noop pin skipped]")
         return
     new_block = re.sub(
         r"(?m)^    profile: [^\n]*$",
@@ -104,7 +104,7 @@ def clear_deploy_tasks():
 
     The seeded tasks.yml (HEAD) carries live hooks (wiki-maintenance,
     channel-summaries) that fire on `thread_finished` events. The deploy DB
-    has NO LLM secrets — the `omni` profile pins deepseek, so any hook thread
+    has NO LLM secrets - the `omni` profile pins deepseek, so any hook thread
     on the `hooks` channel 401s with "api key invalid" (the key resolves to a
     variable NAME, not a value). Those failures are parallel background noise
     that pollutes logs and has produced 401-class flakes.
@@ -141,7 +141,7 @@ if shutil.which("sudo") is None:
         _f.write("#!/bin/sh\nexec \"$@\"\n")
     os.chmod(os.path.join(_sudo_shim_dir, "sudo"), 0o755)
     os.environ["PATH"] = _sudo_shim_dir + os.pathsep + os.environ["PATH"]
-    print(f"[deploy] sudo not found (running as root) — installed no-op sudo shim")
+    print(f"[deploy] sudo not found (running as root) - installed no-op sudo shim")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -154,7 +154,7 @@ def sh(cmd):
 
 def ensure_git_safe_dirs():
     """git refuses to operate on repos owned by another user (dubious
-    ownership) — when deploy.py runs under sudo, `git clean`/`git checkout`
+    ownership) - when deploy.py runs under sudo, `git clean`/`git checkout`
     on the hermes-owned workspace repos fail silently unless the repos are
     whitelisted. Register them so the sweep and final restore actually run."""
     for d in [OMNI_STACK_DIR, SCRIPT_DIR, OMNIAGENT_DIR]:
@@ -185,14 +185,14 @@ def compose_cmd(mode):
     cmd = ["docker", "compose", "-f", os.path.join(OMNI_STACK_DIR, "docker-compose.yml")]
     if mode == "dev":
         cmd += ["-f", os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")]
-    # Local S3 (MinIO) service for the S3 backup/restore/checkpoint test —
+    # Local S3 (MinIO) service for the S3 backup/restore/checkpoint test -
     # every deploy mode carries it so the S3 test can round-trip locally.
     # The overlay lives in THIS repo (omni-deployer), resolved via SCRIPT_DIR.
     # Guarded: an omni-deployer checkout without the overlay still deploys;
     # the S3 test then skips (see test_s3_backup_restore).
     if os.path.exists(os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")):
         cmd += ["-f", os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")]
-    # hybrid and ci use no overlay — base docker-compose.yml + omni.env.
+    # hybrid and ci use no overlay - base docker-compose.yml + omni.env.
     # The base compose is image-only (no build sections): hybrid builds the
     # three images locally with the omni.env tags BEFORE `up` (see Step 0b),
     # ci pulls pre-built images, omnistable pulls GHCR. run/exec/up all go
@@ -254,7 +254,7 @@ def run_pretests(mode):
     print("=" * 60)
 
     if mode in ("ci", "hybrid"):
-        # Hybrid + CI: no separate pretests — the production Dockerfile's
+        # Hybrid + CI: no separate pretests - the production Dockerfile's
         # builder stage runs the identical gates (fmt --check, check -D
         # warnings, clippy -D warnings, cargo test --release) during
         # `docker build`. CI's build job already ran them (warm layered
@@ -313,7 +313,7 @@ def run_pretests(mode):
     check_cargo(["cargo", "fmt", "--all", "--check"], label="cargo fmt --check")
     print("  ✓ Format check passed")
 
-    # 2. cargo check -D warnings (via RUSTFLAGS) — whole workspace, all targets
+    # 2. cargo check -D warnings (via RUSTFLAGS) - whole workspace, all targets
     print("\n[pretests] Running cargo check (warnings as errors, workspace all targets)...")
     # RUSTFLAGS is used because `cargo check` doesn't support `--` passthrough to rustc
     # --workspace --all-targets: lints core AND every plugin crate (incl. tests/benches)
@@ -324,7 +324,7 @@ def run_pretests(mode):
     )
     print("  ✓ cargo check passed")
 
-    # 3. cargo clippy -D warnings — whole workspace, all targets
+    # 3. cargo clippy -D warnings - whole workspace, all targets
     print("\n[pretests] Running cargo clippy (warnings as errors, workspace all targets)...")
     # clippy DOES support `--` to pass args to rustc
     check_cargo(
@@ -346,10 +346,10 @@ def run_rust_integration_tests(compose, mode="dev"):
     Only works in dev mode where the dev image has the Rust toolchain
     and all build dependencies. In CI/hybrid mode, the production image
     is too minimal (no cargo, no libssl-dev, no pkg-config) to compile
-    Rust code — Python integration tests cover end-to-end flows instead.
+    Rust code - Python integration tests cover end-to-end flows instead.
     """
     if mode != "dev":
-        print("[integration] Skipping Rust integration tests (dev mode only — "
+        print("[integration] Skipping Rust integration tests (dev mode only - "
               "production image lacks build toolchain)")
         return
 
@@ -387,7 +387,7 @@ def run_rust_integration_tests(compose, mode="dev"):
 def generate_env(mode):
     p1 = os.urandom(24).hex()
     p2 = os.urandom(24).hex()
-    # Local S3 (MinIO) credentials — generated at the START of the deploy so
+    # Local S3 (MinIO) credentials - generated at the START of the deploy so
     # the S3 backup/restore/checkpoint test round-trips against a local MinIO
     # instead of real object storage. The SAME pair is used for the MinIO
     # root creds (MINIO_ROOT_USER/PASSWORD) and the toolbox rclone client
@@ -405,7 +405,7 @@ def generate_env(mode):
         f.write("COMPOSE_PROJECT_NAME=omnideploy\n")
         f.write("COMPOSE_PROFILES=mattermost,noop\n")
         # omnideploy (deploy/ci/hybrid) binds the omni-stack checkout at
-        # /opt/omni — the compose mount interpolates HOST_OMNI_DIR. This is
+        # /opt/omni - the compose mount interpolates HOST_OMNI_DIR. This is
         # the ONE launcher that maps to omni-stack; omnidev/omnistable map to
         # omni-root (see shared.generate_env).
         f.write(f"HOST_OMNI_DIR={OMNI_STACK_DIR}\n")
@@ -437,7 +437,7 @@ def generate_env(mode):
 
     # The toolbox backup scripts REQUIRE {OMNI_DIR}/.env to exist (backup.sh
     # Step 1 copies it to data/credentials/.env under `set -euo pipefail`)
-    # and to carry POSTGRES_PASSWORD for the omniagent pg_dump — the toolbox
+    # and to carry POSTGRES_PASSWORD for the omniagent pg_dump - the toolbox
     # container env only exposes PGPASSWORD. Write the S3 + DB creds there so
     # the local S3 test can back up and restore the omniagent DB. Removed at
     # deploy end (restore_seed_config) to keep the seed checkout pristine.
@@ -461,14 +461,14 @@ def generate_env(mode):
     os.unlink(tmp_path)
     print(f"[deploy] Generated {stack_env} (local MinIO S3 creds)")
 
-    # Seed remote.yml from the tracked seed — the FULL remote plugin manifest
+    # Seed remote.yml from the tracked seed - the FULL remote plugin manifest
     # (actions, hindsight, paperclip, telegram, test-rust-tool, ...). The
     # bind-mounted plugins.yml (also from seed) enables actions/telegram/etc.
     # as source: remote, so the deploy env must carry the same remote.yml a
-    # real deployment has — otherwise those plugins resolve to
+    # real deployment has - otherwise those plugins resolve to
     # status=not_found and the live-plugin tests (GROUP 37/40/41, t6 platform)
     # fail. plugin_tests also needs test-rust-tool registered.
-    # config/ is runtime-only now (not gitignored — seed model); the seed lives in
+    # config/ is runtime-only now (not gitignored - seed model); the seed lives in
     # omni-deployer/seed/config (see shared.ensure_seed_config).
     remote_yml_path = os.path.join(OMNI_STACK_DIR, "config", "remote.yml")
     # Ensure .remote/ directories are clean before seeding (prevents stale git state)
@@ -480,14 +480,14 @@ def generate_env(mode):
                        capture_output=True, text=True, timeout=10)
     remote_yml_content = r.stdout if r.returncode == 0 else None
     if remote_yml_content is None:
-        print("[deploy] WARNING: could not read seed config/remote.yml — leaving remote.yml untouched")
+        print("[deploy] WARNING: could not read seed config/remote.yml - leaving remote.yml untouched")
     existing = ""
     if remote_yml_content is not None and os.path.exists(remote_yml_path):
         r = subprocess.run(["cat", remote_yml_path], capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
             existing = r.stdout
     if remote_yml_content is not None and existing.strip() != remote_yml_content.strip():
-        # tempfile is imported at module level (line 21) — do NOT re-import
+        # tempfile is imported at module level (line 21) - do NOT re-import
         # here: a local `import tempfile` would shadow the module binding and
         # break the earlier NamedTemporaryFile call in generate_env.
         tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yml")
@@ -505,7 +505,7 @@ def generate_env(mode):
 # volumes (cargo-registry, cargo-target, omniagent-target) are preserved.
 # ⚠️ SAFETY: only volumes whose name starts with the deploy project prefix
 # ("omnideploy_") are ever deleted. The compose project is forced to
-# "omnideploy" via COMPOSE_PROJECT_NAME in omni.env — this guard makes that
+# "omnideploy" via COMPOSE_PROJECT_NAME in omni.env - this guard makes that
 # explicit so a future project-name change can never make deploy wipe the
 # wrong project's data (e.g. the "omni" project volumes from omni-stack).
 DATA_VOLUMES = ["postgres_data", "mm-db", "mm-config", "mm-data", "mm-logs", "mm-plugins",
@@ -525,7 +525,7 @@ def remove_data_volumes():
             continue
         suffix = vol[len(DEPLOY_VOLUME_PREFIX):]
         if suffix not in DATA_VOLUMES:
-            continue  # build cache / other data — preserved
+            continue  # build cache / other data - preserved
         subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
         removed.append(vol)
     if removed:
@@ -533,24 +533,24 @@ def remove_data_volumes():
 
 
 def _deploy(mode):
-    """Internal deploy body — wrapped by deploy() which guarantees the seed
+    """Internal deploy body - wrapped by deploy() which guarantees the seed
     restore runs in a finally on BOTH success and failure paths."""
     if not os.path.isdir(OMNI_STACK_DIR):
         raise RuntimeError(f"omni-stack not found at {OMNI_STACK_DIR}")
 
     # Step 0.5: Verify omni-stack is clean BEFORE touching anything ──
     # The stack dir is bind-mounted into the container, so state persists
-    # on the host. NEVER auto-discard user changes — `git checkout HEAD -- .`
+    # on the host. NEVER auto-discard user changes - `git checkout HEAD -- .`
     # is forbidden here: it silently reverts uncommitted work (e.g. an env
     # or compose edit). Instead, fail fast and let the user discard, stage,
     # or commit their changes first. This check must run before generate_env()
     # because that function writes remote.yml back to the tracked file.
     #
-    # EXCEPTION — untracked test residue: a run that dies mid-tests (OOM,
+    # EXCEPTION - untracked test residue: a run that dies mid-tests (OOM,
     # SIGKILL, Ctrl-C) never reaches the final cleanup step, leaving the bind
     # mount dirty and blocking the NEXT run's Step 0.5. profiles/omni is no
     # longer tracked (the runtime data dir materializes it), so there is no
-    # known TRACKED residue to auto-restore — any tracked dirt fails fast.
+    # known TRACKED residue to auto-restore - any tracked dirt fails fast.
     # Untracked plugins/ entries are test-created plugin residue that the
     # post-clean already removes; sweeping ONLY those is safe: it cannot
     # touch user edits, which are anything NOT under plugins/.
@@ -562,11 +562,11 @@ def _deploy(mode):
         if tracked_dirty:
             raise RuntimeError(
                 "Uncommitted changes detected in omni-stack. deploy.py will NOT "
-                "discard them automatically — discard, stage, or commit them "
+                "discard them automatically - discard, stage, or commit them "
                 "first, then re-run deploy.\n\n"
                 + "\n".join(tracked_dirty)
             )
-        print("[deploy] Detected untracked test residue in omni-stack — auto-restoring...")
+        print("[deploy] Detected untracked test residue in omni-stack - auto-restoring...")
         # Untracked plugins/ residue is test-created (seed tracks zero plugins);
         # the same sweep the post-clean runs, so a fresh run starts like CI.
         for u in untracked:
@@ -575,7 +575,7 @@ def _deploy(mode):
         r = sh("cd /opt/workspace/omni-stack && git status --porcelain")
         # Untracked files are the LIVE agent's own data-dir artifacts (wiki
         # pages, config symlinks / plugins.yml at the data-dir root, the
-        # auto-created profiles/<default>/config.json) — NOT deploy residue, so
+        # auto-created profiles/<default>/config.json) - NOT deploy residue, so
         # they must not block the run. Only tracked files count as dirt (same
         # rule as the end-of-run check below).
         tracked_dirty = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
@@ -590,7 +590,7 @@ def _deploy(mode):
     # gitignored build/test residue (target/, .remote/ clones, test-* tools)
     # that the container wrote into the bind mount. `git clean -fdX` removes
     # ONLY ignored files (`.remote/` clones) and `git clean -fd` removes
-    # untracked test tools — tracked files are never touched, so nothing needs
+    # untracked test tools - tracked files are never touched, so nothing needs
     # restoring and user work can never be discarded. omni-stack is a seed and
     # tracks zero plugins, so there is no bundled plugin to preserve. Removing
     # the residue keeps local runs as fresh as a CI checkout.
@@ -601,7 +601,7 @@ def _deploy(mode):
 
     # ── Runtime-state gate (user rule 2026-08-22) ──────────────────────────
     # omni-stack is a SEED checkout: config/, plugins/ and any profiles/ dir
-    # are runtime-only state — never part of the repo. dev
+    # are runtime-only state - never part of the repo. dev
     # regenerates everything from the tracked seed + the plugin API (temporary
     # during the deploy, removed at the end); hybrid/ci require a pristine
     # checkout and fail fast otherwise.
@@ -616,7 +616,7 @@ def _deploy(mode):
     shared.ensure_seed_config(OMNI_STACK_DIR)
 
     # deploy.py (project "omnideploy") tears down the launcher stacks
-    # BEFORE starting its own — CI wants a clean slate (fresh runner, nothing
+    # BEFORE starting its own - CI wants a clean slate (fresh runner, nothing
     # running to preserve). In DEV mode ONLY omnidev is stopped: omnistable is
     # the agent's own live runtime and must never be torn down while the
     # deploy is running. In HYBRID mode NEITHER omnidev NOR omnistable is
@@ -638,7 +638,7 @@ def _deploy(mode):
     patch_deploy_channels_noop()
 
     # Step 0.6b: Clear tasks.yml so no seeded hook/schedule thread can spawn
-    # during the deploy (they'd 401 — deploy DB has no LLM secrets). Restored
+    # during the deploy (they'd 401 - deploy DB has no LLM secrets). Restored
     # to HEAD by restore_seed_config() in the finally below.
     print("\n[deploy] Clearing tasks.yml (deploy-only, no real-LLM threads)...")
     clear_deploy_tasks()
@@ -661,11 +661,11 @@ def _deploy(mode):
     # Step 0b (hybrid): Build the images locally like CI would, tagged with
     # the exact names omni.env references (local/omniagent:latest,
     # local/omni-dashboard:latest, local/omni-toolbox:latest). The base
-    # compose is image-only — services consume pre-built images by tag, so
+    # compose is image-only - services consume pre-built images by tag, so
     # the images MUST exist before `up`. For services that carry a build
     # section in the base compose (toolbox), `docker compose build` tags
     # them per the service `image:`; for image-only services (omniagent,
-    # dashboard) we fall back to `docker build -t <tag>` — the goal is the
+    # dashboard) we fall back to `docker build -t <tag>` - the goal is the
     # tagged image on disk for the services to use. The omniagent build is
     # the production Dockerfile whose builder stage runs fmt/check/clippy/
     # test offline against the committed .sqlx cache (the hybrid pretest
@@ -673,7 +673,7 @@ def _deploy(mode):
     if mode == "hybrid":
         def build_image(tag, dockerfile=None, context=None, service=None):
             if service is not None:
-                # Service has a build section in the compose file — let
+                # Service has a build section in the compose file - let
                 # compose build it and tag per the service image:.
                 print(f"\n[deploy] Building {service} (docker compose build)...")
                 run_compose_check(compose, "build", service, label=f"{service} image build")
@@ -716,7 +716,7 @@ def _deploy(mode):
 
     # Step 5 (dev): Build db-migrations binary, run migrations, THEN run
     # pretests. Dev builds use SQLX_OFFLINE=false (dev overlay compose env) so
-    # sqlx validates queries against the live migrated DB at compile time —
+    # sqlx validates queries against the live migrated DB at compile time -
     # the schema must exist before any workspace build/check/clippy/test.
     # db-migrations has no compile-time sqlx macros, so it builds fine against
     # an empty DB.
@@ -733,14 +733,14 @@ def _deploy(mode):
             "/target/release/db-migrations", label="migrations",
         )
 
-    # Step 0: Pretests — AFTER the DB is migrated (dev) so SQLX_OFFLINE=false
+    # Step 0: Pretests - AFTER the DB is migrated (dev) so SQLX_OFFLINE=false
     # validates against the live schema. In dev mode cargo runs inside the dev
     # container; in CI mode cargo runs on the host (uses committed .sqlx cache).
     run_pretests(mode)
 
     # Step 5b (dev): prepare.py + build all binaries (after pretests)
     if mode == "dev":
-        # prepare.py: cargo fmt + cargo sqlx prepare --workspace — formats the
+        # prepare.py: cargo fmt + cargo sqlx prepare --workspace - formats the
         # Rust sources and regenerates the offline .sqlx query cache against
         # the live migrated DB, so committed caches stay fresh for
         # SQLX_OFFLINE=true (stable/CI) builds.
@@ -796,11 +796,11 @@ def _deploy(mode):
     # so remote.yml has the entry needed by test_fn_9b (provider source-awareness).
     print("[deploy] Registering remote noop provider...")
     # Two-tier URL strategy:
-    #   1. file:// with container path (fast, offline, no auth — needs bind-mount)
+    #   1. file:// with container path (fast, offline, no auth - needs bind-mount)
     #   2. HTTPS GitHub URL (works everywhere but needs internet)
     # We try file:// first if the repo exists ON THE HOST.  If file:// fails,
     # switch to HTTPS.  HTTPS retries are persistent.  If BOTH fail, we log a
-    # warning and continue — test_fn_9b will attempt its own registration later.
+    # warning and continue - test_fn_9b will attempt its own registration later.
     CONTAINER_REMOTE = "/opt/workspace/omni-plugins"
     HTTPS_URL = "https://github.com/nexuslbs/omni-plugins.git"
     if os.path.isdir(REMOTE_REPO):
@@ -831,7 +831,7 @@ def _deploy(mode):
                         install_url = HTTPS_URL
                         using_https = True
                         continue
-                    # HTTPS is also failing — keep retrying (it may be a
+                    # HTTPS is also failing - keep retrying (it may be a
                     # transient issue like network hiccup)
                     if attempt >= 25:
                         print(f"  [HTTPS still failing after many retries: {resp_data['error'][:80]}]")
@@ -857,7 +857,7 @@ def _deploy(mode):
             print(".", end="", flush=True)
         time.sleep(3)
     if not noop_registered:
-        print("  [WARNING: could not register remote noop — test_fn_9b will retry on its own]")
+        print("  [WARNING: could not register remote noop - test_fn_9b will retry on its own]")
         print("  [This is non-fatal: the deploy continues and the test handles its own setup]")
     print()
     time.sleep(2)
@@ -881,9 +881,9 @@ def _deploy(mode):
     # Step 9: Rust integration tests (api_tests, plugin_tests)
     run_rust_integration_tests(compose, mode)
 
-    # Step 10: Python integration tests (2 passes, no retry — tests must be
+    # Step 10: Python integration tests (2 passes, no retry - tests must be
     # robust). CI runs a SINGLE pass: the GitHub-hosted runner died after
-    # >1h ("lost communication with the server") — the double pass plus the
+    # >1h ("lost communication with the server") - the double pass plus the
     # build pushed it over the runner's time budget. dev/hybrid keep the
     # double pass for extra confidence.
     passes = [1] if mode == "ci" else [1, 2]
@@ -891,7 +891,7 @@ def _deploy(mode):
         # Before each tests.py invocation, re-assert the SEED content of the
         # transient config files (plugins.yml, remote.yml, actions.yml,
         # settings.yml, workflows.yml) in the bind-mounted omni-stack config/
-        # so a re-run starts from a known state (config/ is runtime-only now —
+        # so a re-run starts from a known state (config/ is runtime-only now -
         # nothing is git-restored; the tracked seed is the source of truth).
         # tasks.yml is intentionally NOT re-seeded here: clear_deploy_tasks()
         # emptied it at deploy start so no real-LLM hook/schedule thread can
@@ -902,11 +902,11 @@ def _deploy(mode):
                              "settings.yml", "workflows.yml"],
         )
         # Re-assert the empty tasks.yml (tests.py's own hook tests may have
-        # added entries during the previous pass — they clean up, but the
+        # added entries during the previous pass - they clean up, but the
         # deploy contract is ZERO tasks at all times).
         clear_deploy_tasks()
         print(f"\n{'=' * 60}")
-        print(f"  INTEGRATION TESTS — PASS {pass_num}")
+        print(f"  INTEGRATION TESTS - PASS {pass_num}")
         print(f"{'=' * 60}")
         run_tests(compose)
 
@@ -926,7 +926,7 @@ def _deploy(mode):
     print("  ALL TESTS PASSED")
     print(f"{'=' * 60}")
 
-    # Step 11: Shared tool tests (Phase 1 + Phase 2) — all modes
+    # Step 11: Shared tool tests (Phase 1 + Phase 2) - all modes
     print(f"\n{'=' * 60}")
     print("  SHARED TOOL TESTS (Phase 1 + Phase 2)")
     print(f"{'=' * 60}")
@@ -941,7 +941,7 @@ def _deploy(mode):
     print("  ALL TESTS PASSED (including shared tool tests)")
     print(f"{'=' * 60}")
 
-    # Step 11b: Local S3 (MinIO) backup/restore/checkpoint test — runs LAST
+    # Step 11b: Local S3 (MinIO) backup/restore/checkpoint test - runs LAST
     # because restore_backup/restore_checkpoint drop + recreate the omniagent
     # DB, which would invalidate any subsequent test's data.
     test_s3_backup_restore(compose)
@@ -953,8 +953,8 @@ def restore_seed_config():
     The tree was verified clean at Step 0.5. profiles/omni is no longer
     tracked (the runtime data dir materializes profiles/<default>/config.json
     at startup); config/*, hindsight_watermark.json and plugins/* are
-    runtime-only (NOT gitignored — seed model: tracked-able, no files in the
-    seed) — they are removed by cleanup_runtime_state(),
+    runtime-only (NOT gitignored - seed model: tracked-able, no files in the
+    seed) - they are removed by cleanup_runtime_state(),
     never git-restored.
 
     Runs on BOTH success and failure paths (deploy() wraps its body in a
@@ -964,7 +964,7 @@ def restore_seed_config():
     print("\n[Restoring omni-stack tracked config to HEAD...]")
     # Remove the deploy-generated stack .env (local MinIO S3 creds). It is
     # gitignored so git status stays clean either way, but the deploy leaves
-    # a pristine seed checkout — the creds were generated for THIS run only.
+    # a pristine seed checkout - the creds were generated for THIS run only.
     sh("sudo rm -f /opt/workspace/omni-stack/.env 2>/dev/null; true")
 
     # Fail loudly if the restore did not actually work (e.g. git dubious
@@ -974,7 +974,7 @@ def restore_seed_config():
     dirty = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
     if dirty:
         raise RuntimeError(
-            "omni-stack not clean after test restore — Step 0.5 would fail "
+            "omni-stack not clean after test restore - Step 0.5 would fail "
             f"on the next run. Dirty entries:\n" + "\n".join(dirty[:10])
         )
     print("  ✓ omni-stack clean after restore")
@@ -985,7 +985,7 @@ def deploy(mode):
 
     deploy.py creates runtime-only state in omni-stack (config/, plugins/,
     profiles/) as a side effect of testing. The runtime cleanup must therefore
-    run whether the deploy succeeded or crashed mid-way — otherwise the bind
+    run whether the deploy succeeded or crashed mid-way - otherwise the bind
     mount stays dirty and the NEXT run's Step 0.5 fails. A hard kill
     (SIGKILL/OOM) can still skip this finally; Step 0.5's untracked-residue
     sweep covers that case.
@@ -1002,7 +1002,7 @@ def deploy(mode):
             print(f"  [WARNING: seed restore failed: {e}]")
         try:
             # Per user rule: ALL deploy modes end with a pristine seed
-            # checkout — config/, plugins/ and profiles/ are runtime-only
+            # checkout - config/, plugins/ and profiles/ are runtime-only
             # and removed when the deploy ends.
             shared.cleanup_runtime_state(OMNI_STACK_DIR)
         except Exception as e:
@@ -1115,7 +1115,7 @@ def test_s3_backup_restore(compose):
             raise RuntimeError(f"{stage}: expected last secret {name!r}, got {got!r}")
         print(f"  ✓ {stage}: DB last secret = {name}")
 
-    # Clean slate — the deploy DB may carry secrets created by earlier tests
+    # Clean slate - the deploy DB may carry secrets created by earlier tests
     # (plugin configs). Deterministic assertions need an empty secrets table.
     run_compose(compose, "exec", "-T", "postgres", "psql", "-U", "omniagent",
                 "-d", "omniagent", "-c", "DELETE FROM secrets;")
@@ -1166,8 +1166,8 @@ def test_s3_backup_restore(compose):
     assert_last("secret-04", "after add secret-04")
 
     print(f"  [S3] running restore_checkpoint.sh {ckpt_date} ← local minio...")
-    # restore_checkpoint.sh drops/recreates the omniagent DB but — unlike
-    # restore_backup.sh — does NOT stop the live omniagent first. The agent's
+    # restore_checkpoint.sh drops/recreates the omniagent DB but - unlike
+    # restore_backup.sh - does NOT stop the live omniagent first. The agent's
     # pool reconnects between the script's pg_terminate_backend and the DROP,
     # so the DROP fails with 'database "omniagent" is being accessed by other
     # users' (observed on a clean run). Stop omniagent for the checkpoint
@@ -1178,7 +1178,7 @@ def test_s3_backup_restore(compose):
     if r.returncode != 0:
         raise RuntimeError(
             f"restore_checkpoint.sh failed: {r.stdout[-500:]} {r.stderr[-500:]}")
-    # omniagent was stopped above for the DB drop — restart it so its pool
+    # omniagent was stopped above for the DB drop - restart it so its pool
     # reconnects against the restored schema.
     run_compose_check(compose, "restart", "omniagent",
                       label="omniagent restart after checkpoint restore")

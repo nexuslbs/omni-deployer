@@ -25,19 +25,19 @@ settings = shared.Settings(
 shared.init(settings)
 s = shared.sett()
 
-TASK = """TASK (FOLLOW-UP — the implementation is DONE, do NOT rewrite it): The previous turn implemented but hit the iteration limit before building/verifying/committing/pushing. The changes are ALREADY in the working trees:
+TASK = """TASK (FOLLOW-UP - the implementation is DONE, do NOT rewrite it): The previous turn implemented but hit the iteration limit before building/verifying/committing/pushing. The changes are ALREADY in the working trees:
 
-1. /opt/workspace/omniagent — plugins/tools/query/src/main.rs (237 insertions): added WRITE_KEYWORDS token scan (blocks data-modifying CTEs), strip_sql_literals_and_comments, readonly_database_url() swapping the DSN username omniagent -> omniagent_readonly, BEGIN TRANSACTION READ ONLY + COMMIT/ROLLBACK around queries, and the configure callback now connects via the read-only role.
+1. /opt/workspace/omniagent - plugins/tools/query/src/main.rs (237 insertions): added WRITE_KEYWORDS token scan (blocks data-modifying CTEs), strip_sql_literals_and_comments, readonly_database_url() swapping the DSN username omniagent -> omniagent_readonly, BEGIN TRANSACTION READ ONLY + COMMIT/ROLLBACK around queries, and the configure callback now connects via the read-only role.
 
-2. /opt/workspace/omni-dashboard — src/pages/database.ts + src/style.css (stacked up/down sort arrows with active direction highlighted).
+2. /opt/workspace/omni-dashboard - src/pages/database.ts + src/style.css (stacked up/down sort arrows with active direction highlighted).
 
-YOUR JOB IS ONLY: build, verify, commit, push. Do NOT re-implement anything. Keep tool calls tight — you have a limited budget.
+YOUR JOB IS ONLY: build, verify, commit, push. Do NOT re-implement anything. Keep tool calls tight - you have a limited budget.
 
-STEP 1 — Verify the omniagent plugin compiles and deploy it:
+STEP 1 - Verify the omniagent plugin compiles and deploy it:
 - cd /opt/workspace/omniagent && cargo fmt --check (fix with cargo fmt if needed) and cargo clippy --package mcp-server-query 2>&1 | tail -5 (fix real warnings if trivial)
 - Rebuild ONLY the query plugin inside the dev container:
   docker exec omnidev-omniagent-1 bash -c 'cd /app && cargo build --release -p mcp-server-query'
-  (plugin binaries resolve as siblings of current_exe() under /target/release/ — no cp needed)
+  (plugin binaries resolve as siblings of current_exe() under /target/release/ - no cp needed)
 - docker restart omnidev-omniagent-1
 - Wait ~10s, then verify read-only enforcement via curl INSIDE the container:
   docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d '{"name":"query_database","arguments":{"operation":"query","sql":"SELECT current_user"}}'
@@ -48,7 +48,7 @@ STEP 1 — Verify the omniagent plugin compiles and deploy it:
   c) DROP TABLE messages                                           -> MUST fail
   d) SELECT table_name FROM information_schema.tables LIMIT 3       -> MUST succeed
 
-STEP 2 — Build + test the dashboard:
+STEP 2 - Build + test the dashboard:
 - Fix any root-owned files: sudo chown -R hermes:hermes /opt/workspace/omni-dashboard/dist /opt/workspace/omni-dashboard/node_modules/.vite /opt/workspace/omni-dashboard/node_modules/.vite-temp
 - cd /opt/workspace/omni-dashboard && npm run build  (frontend + server, 0 errors)
 - npm run test:unit -> all pass, 0 skipped (58 tests)
@@ -62,7 +62,7 @@ STEP 2 — Build + test the dashboard:
   - POST /api/db/query {"table":"messages","page":1,"pageSize":5,"sortField":"id","sortDir":"desc"} -> sorted
   - Confirm the query tool reports current_user=omniagent_readonly through the dashboard path as well.
 
-STEP 3 — Commit + push (origin/main ONLY, never stable):
+STEP 3 - Commit + push (origin/main ONLY, never stable):
 - omniagent: git add plugins/tools/query/src/main.rs && git commit -m "fix: query tool enforces read-only at DB level via omniagent_readonly role + hardened validation" && git push origin main
 - omni-dashboard: git add src/pages/database.ts src/style.css && git commit -m "feat: database page sort headers show stacked up/down arrows" && git push origin main
 - Remove scratch files. Verify both pushes: git log origin/main --oneline -1 in each repo.

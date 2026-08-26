@@ -11,7 +11,7 @@ Regression test for the "agent never sees its task" bug:
 CI-safe: uses the noop provider + test-tool-caller model as a FAKE LLM
 (no API keys, no real HTTP LLM calls). The planning prompt is persisted to
 the messages table BEFORE the LLM call, so the assertion verifies the
-prompt *building* path — exactly what regressed.
+prompt *building* path - exactly what regressed.
 
 Flow:
   1. Create a kanban task with a distinctive body marker on the mm-kanban
@@ -144,7 +144,7 @@ def main():
             out("PROMPT CONTENT (first 2000 chars):")
             out(prompt_content[:2000])
             raise AssertionError(
-                f"TASK BODY NOT IN PROMPT — marker {MARKER} missing from planning prompt"
+                f"TASK BODY NOT IN PROMPT - marker {MARKER} missing from planning prompt"
             )
         out("✓ task body marker found in planning prompt")
         out("")

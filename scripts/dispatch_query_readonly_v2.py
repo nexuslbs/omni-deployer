@@ -4,7 +4,7 @@
 Key fixes vs prior dispatch:
 - NO omniagent_readonly role / username swap. Connect with the MAIN user via
   the plugin's `database_url` config field (default `$env:DATABASE_URL`,
-  resolved by the framework before the configure message reaches the plugin —
+  resolved by the framework before the configure message reaches the plugin -
   plugin code must NOT read env vars directly).
 - Read-only is enforced by PostgreSQL itself: BEGIN TRANSACTION READ ONLY
   around every query (already implemented) + keyword scan + SELECT/WITH start
@@ -53,33 +53,33 @@ THE CORRECT DESIGN (do NOT create/alter any DB role, do NOT swap usernames):
      configure callback connect with the plain resolved URL. The plugin must NOT read env vars directly:
        let url = config.database_url.clone();  // framework already resolved $env:DATABASE_URL default
      If config.database_url is empty, log a clear error (do NOT fall back to std::env::var in the plugin).
-2. Read-only enforcement stays PostgreSQL-native (already implemented — KEEP it):
+2. Read-only enforcement stays PostgreSQL-native (already implemented - KEEP it):
    - handle_query wraps every query in BEGIN TRANSACTION READ ONLY ... COMMIT/ROLLBACK (main.rs ~408-455).
      PostgreSQL refuses ANY write inside a read-only transaction (SQLSTATE 25006) regardless of role grants.
    - Keep the app-level checks as defense in depth: statement must start with SELECT/WITH, WRITE_KEYWORDS
      token scan after stripping literals/comments (blocks data-modifying CTEs), and note that
-     `AssertSqlSafe` is a sqlx MARKER type, NOT a semicolon validator — multi-statement is blocked by the
+     `AssertSqlSafe` is a sqlx MARKER type, NOT a semicolon validator - multi-statement is blocked by the
      extended query protocol. FIX the misleading comment at ~line 387 accordingly.
 3. Dashboard (server/routes/db.ts): runQueryTool currently only checks body.success and silently returns []
    when body.content is non-JSON (e.g. a tool error string). FIX: if body.is_error is true, throw
    ApiError(502, error message) so failures surface instead of empty tables.
-4. Do NOT touch db-migrations/src/lib.rs create_readonly_user — it becomes dead weight but is harmless.
-   Do NOT restart the omnidev-omniagent-1 container (you run inside it — restart kills your own thread;
+4. Do NOT touch db-migrations/src/lib.rs create_readonly_user - it becomes dead weight but is harmless.
+   Do NOT restart the omnidev-omniagent-1 container (you run inside it - restart kills your own thread;
    the dispatcher restarts after you finish).
 
 YOUR JOB:
-STEP 1 — omniagent plugin:
+STEP 1 - omniagent plugin:
 - cd /opt/workspace/omniagent && cargo fmt --check (fix with cargo fmt if needed)
 - cargo clippy --package mcp-server-query 2>&1 | tail -5 (fix real warnings if trivial)
 - Build the plugin INSIDE the dev container (compiles the new binary; NO restart):
   docker exec omnidev-omniagent-1 bash -c 'cd /app && cargo build --release -p mcp-server-query'
 - Ensure it compiles cleanly (this is the verification that the code is correct).
 
-STEP 2 — dashboard:
+STEP 2 - dashboard:
 - Fix runQueryTool is_error handling in /opt/workspace/omni-dashboard/server/routes/db.ts
 - cd /opt/workspace/omni-dashboard && npm run build (0 errors) and npm run test:unit (all pass, 0 skipped)
 
-STEP 3 — Commit + push (origin/main ONLY, never stable):
+STEP 3 - Commit + push (origin/main ONLY, never stable):
 - omniagent: git add plugins/tools/query/src/main.rs && git commit -m "fix: query tool connects with main DB user; read-only enforced by READ ONLY transactions" && git push origin main
 - omni-dashboard: git add server/routes/db.ts && git commit -m "fix: database API surfaces query tool errors (is_error) instead of empty results" && git push origin main
 - Remove scratch files. Verify both pushes: git log origin/main --oneline -1 in each repo.

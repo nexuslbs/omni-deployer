@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-real_test.py — end-to-end kanban implementation test for omni stacks.
+real_test.py - end-to-end kanban implementation test for omni stacks.
 
 Usage:
   python3 real_test.py run dev       # omnidev: build from host repos (fast feedback)
@@ -8,17 +8,17 @@ Usage:
   python3 real_test.py verify dev    # wait for task completion + verify deliverable pushed
 
 Flow:
-  1. setup  — build/start/configure stack + Mattermost (via shared.setup)
-  2. test   — shared tool tests (17 tools × 3 states via test-tool-caller)
-  3. kanban — create a Mattermost channel (mm-kanban), post `$new` so the
+  1. setup  - build/start/configure stack + Mattermost (via shared.setup)
+  2. test   - shared tool tests (17 tools × 3 states via test-tool-caller)
+  3. kanban - create a Mattermost channel (mm-kanban), post `$new` so the
      omniagent registers it, patch the channel to deepseek/deepseek-v4-flash
      + profile omni, write the omni profile allowed_tools config, and create
      a Kanban task in Todo status linked to that channel with the
      dev-development template and plan mode enabled.
-  4. verify — (post-task) wait for the kanban task to reach a terminal status,
+  4. verify - (post-task) wait for the kanban task to reach a terminal status,
      then check the movie-db repo is ACTUALLY pushed (local HEAD == origin,
      clean tree, no scratch helper files). A "completed" thread is NOT the
-     deliverable — the task body says "commit AND push".
+     deliverable - the task body says "commit AND push".
 """
 
 import argparse
@@ -281,7 +281,7 @@ def create_kanban_task(omni_channel_id):
 
 # ── Post-task artifact verification (Fix #8) ────────────────────────────────
 # Golden rule: a completed thread is NOT the deliverable. The task body says
-# "commit AND push" — so after the task reaches a terminal status we must
+# "commit AND push" - so after the task reaches a terminal status we must
 # verify the repo is actually pushed (local HEAD == origin) and that no
 # scratch helper files (toolbox/, patch containers) leaked into the repo.
 
@@ -365,7 +365,7 @@ def verify(mode):
     """Post-task verification: wait for the movie-db kanban task to finish,
     then verify the repo was actually pushed (not just committed)."""
     print(f"{BORD}")
-    print(f"  REAL TEST VERIFY — mode={mode}")
+    print(f"  REAL TEST VERIFY - mode={mode}")
     print(f"{BORD}")
 
     settings = make_settings(mode)
@@ -383,7 +383,7 @@ def verify(mode):
     status = wait_kanban_terminal(task_id)
     if status == "blocked":
         raise RuntimeError(
-            f"Kanban task {task_id} ended BLOCKED — the deliverable was not "
+            f"Kanban task {task_id} ended BLOCKED - the deliverable was not "
             f"completed (final tool result errored or thread failed)."
         )
 
@@ -399,7 +399,7 @@ def verify(mode):
 
 def run(mode):
     print(f"{BORD}")
-    print(f"  REAL TEST — mode={mode}")
+    print(f"  REAL TEST - mode={mode}")
     print(f"{BORD}")
 
     settings = make_settings(mode)

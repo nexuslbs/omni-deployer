@@ -207,7 +207,7 @@ def configure_secret_refs():
     yml_path = os.path.join(s.omni_stack_dir, "config", "plugins.yml")
     r = sh("sudo cat " + yml_path)
     if r.returncode != 0:
-        print("  WARNING: Could not read plugins.yml — skipping secret ref config")
+        print("  WARNING: Could not read plugins.yml - skipping secret ref config")
         return
     yml = r.stdout
     changed = False
@@ -285,7 +285,7 @@ def load_secrets_env():
     path = os.path.join(s.script_dir, "secrets.env")
     secrets = {}
     if not os.path.exists(path):
-        print(f"  WARNING: {path} not found — no API secrets will be created")
+        print(f"  WARNING: {path} not found - no API secrets will be created")
         return secrets
     with open(path) as f:
         for line in f:
@@ -307,7 +307,7 @@ def ensure_secret(name, value):
     """Create or update a secret via the omniagent API (uses docker exec)."""
     s = sett()
     if s.use_api:
-        # omnistable mode — direct API call
+        # omnistable mode - direct API call
         url = s.base_url + "/secrets"
         data = json.dumps({"name": name, "fieldType": "password", "value": value}).encode()
         try:
@@ -331,7 +331,7 @@ def ensure_secret(name, value):
         except urllib.error.URLError as e:
             raise RuntimeError(f"POST /secrets connection failed: {e.reason}")
     else:
-        # omnidev mode — via docker exec
+        # omnidev mode - via docker exec
         body = json.dumps({"name": name, "fieldType": "password", "value": value})
         oc_write("/tmp/_secret.json", body)
         r = oc("curl -sf -X POST http://localhost:8080/secrets -H 'Content-Type: application/json' -d @/tmp/_secret.json")
@@ -358,7 +358,7 @@ def _remove_data_volumes(project_name):
     """Remove only data volumes for the given compose project.
 
     Hard guard: only volumes prefixed with the project name are considered,
-    and within those only suffixes in DATA_VOLUMES are removed — build caches
+    and within those only suffixes in DATA_VOLUMES are removed - build caches
     and search/memory data (qdrant_data, hindsight-data) are preserved.
     """
     listed = subprocess.run(
@@ -385,16 +385,16 @@ def _remove_data_volumes(project_name):
 # overlay, and omnidev is the only launcher that publishes ports), so the
 # two stacks do not conflict. Each launcher therefore tears down ONLY the
 # projects it actually conflicts with:
-#   - omnidev    → stops omnideploy (CI/deploy project) only — NEVER omnistable
-#   - omnistable → stops omnideploy only — NEVER omnidev
+#   - omnidev    → stops omnideploy (CI/deploy project) only - NEVER omnistable
+#   - omnistable → stops omnideploy only - NEVER omnidev
 #   - omnideploy → stops both launchers by default (CI wants a clean slate);
-#                  DEV mode stops ONLY omnidev — omnistable is the agent's
+#                  DEV mode stops ONLY omnidev - omnistable is the agent's
 #                  own live runtime and must never be torn down (see
 #                  stop_other_stacks mode='dev'); HYBRID mode stops NEITHER
 #                  omnidev NOR omnistable (it only manages its own
-#                  omnideploy containers — see MODE_STOP_EXCLUDE).
+#                  omnideploy containers - see MODE_STOP_EXCLUDE).
 # No fixed container_name / network name / volume name entries exist in the
-# base compose — all containers (and networks/volumes) are auto-named with the
+# base compose - all containers (and networks/volumes) are auto-named with the
 # compose project prefix ({project}-{service}-{index}, {project}_{volume}), so
 # omnidev, omnistable, and omnideploy can run side-by-side without colliding.
 OMNI_STACK_PROJECTS = ["omnidev", "omnideploy", "omnistable"]
@@ -407,10 +407,10 @@ STOP_TARGETS = {
 }
 
 # Projects deploy.py NEVER stops, per mode. omnistable is the agent's own
-# live runtime — `deploy.py dev` stopping it would kill the running agent
+# live runtime - `deploy.py dev` stopping it would kill the running agent
 # mid-task, so dev mode excludes it (stops only omnidev). `deploy.py hybrid`
 # runs from a launcher stack too (it builds images locally + runs the
-# omnideploy stack), so it must not tear down EITHER omnidev or omnistable —
+# omnideploy stack), so it must not tear down EITHER omnidev or omnistable -
 # it manages only its own omnideploy containers. Only CI keeps the
 # clean-slate behavior (fresh runner, nothing running to preserve).
 MODE_STOP_EXCLUDE = {
@@ -424,11 +424,11 @@ def stop_other_stacks(current_project, mode=None):
 
     omnidev and omnistable run side-by-side (host ports are dev-overlay-only,
     so they do not collide), therefore each stops ONLY omnideploy (the
-    deploy/CI project) — never each other. deploy.py (omnideploy) stops both
+    deploy/CI project) - never each other. deploy.py (omnideploy) stops both
     launchers by default: CI wants a clean slate. In dev mode (mode='dev')
     omnistable is excluded so the agent's own live runtime is never torn
     down while the deploy runs; in hybrid mode (mode='hybrid') BOTH launcher
-    stacks are excluded — hybrid only manages its own omnideploy containers.
+    stacks are excluded - hybrid only manages its own omnideploy containers.
 
     Containers are matched by the compose project label
     (com.docker.compose.project), NOT by name prefix, so unrelated containers
@@ -461,14 +461,14 @@ def generate_env(mode="dev"):
     p2 = secrets.token_hex(24)
 
     with open(s.env_path, "w") as f:
-        f.write(f"# omni-{mode} dev env — generated by shared.py\n")
+        f.write(f"# omni-{mode} dev env - generated by shared.py\n")
         f.write(f"COMPOSE_PROJECT_NAME={s.project_name}\n")
-        # Data dir checkout the stack binds at /opt/omni — the launcher's
+        # Data dir checkout the stack binds at /opt/omni - the launcher's
         # omni_stack_dir (omni-root for omnidev/omnistable; omni-stack for
         # deploy/omnideploy). The compose mount interpolates HOST_OMNI_DIR;
         # default /opt/omni covers bare `docker compose up`.
         f.write(f"HOST_OMNI_DIR={s.omni_stack_dir}\n")
-        # 'memory' profile (hindsight + qdrant) is NOT enabled for omnidev —
+        # 'memory' profile (hindsight + qdrant) is NOT enabled for omnidev -
         # user rule 2026-08-22: no hindsight/qdrant in dev for now (hindsight
         # has no LLM key wired in omni-root compose; qdrant unused: vectorization
         # is pgvector/local, search_wiki_qdrant has no callers).
@@ -495,7 +495,7 @@ def generate_env(mode="dev"):
 def stop_stack():
     """Tear down the stack.
 
-    Stable mode: `down -v` (no build caches to preserve — fresh volumes).
+    Stable mode: `down -v` (no build caches to preserve - fresh volumes).
     Dev mode: `down` + remove only data volumes, preserving the
     cargo-registry/cargo-target build caches so re-runs don't recompile deps.
     """
@@ -541,7 +541,7 @@ def build_dev():
     # it builds fine with SQLX_OFFLINE=false against an empty DB), then run
     # migrations so the schema exists BEFORE the workspace build. Dev builds
     # use SQLX_OFFLINE=false (dev overlay), so sqlx validates every query
-    # against the live migrated DB at compile time — no stale .sqlx cache.
+    # against the live migrated DB at compile time - no stale .sqlx cache.
     print("\n=== Building db-migrations binary ===")
     run_compose_check(
         "run", "--rm", "omniagent",
@@ -553,7 +553,7 @@ def build_dev():
     print("\n=== Running migrations ===")
     run_compose_check("run", "--rm", "omniagent", "/target/release/db-migrations", label="migrations")
 
-    # prepare.py: cargo fmt + cargo sqlx prepare --workspace — formats the Rust
+    # prepare.py: cargo fmt + cargo sqlx prepare --workspace - formats the Rust
     # sources and regenerates the offline .sqlx query cache against the live
     # migrated DB, so committed caches stay fresh for SQLX_OFFLINE=true
     # (stable/CI) builds.
@@ -572,7 +572,7 @@ def build_dev():
 
     # Build all binaries via build.py (workspace member auto-discovery).
     # SQLX_OFFLINE comes from the compose env (false in dev overlay, true in
-    # base/stable) — no hardcoded flag here.
+    # base/stable) - no hardcoded flag here.
     print("\n=== Building all binaries (build.py) ===")
     run_compose_check(
         "run", "--rm", "omniagent",
@@ -605,7 +605,7 @@ def start_services():
 
 
 def _api_call(use_api, path, method="GET", body=None, timeout=15):
-    """Generic API call — works in both docker-exec and localhost modes."""
+    """Generic API call - works in both docker-exec and localhost modes."""
     s = sett()
     if use_api:
         url = s.base_url + path
@@ -632,8 +632,8 @@ def _api_call(use_api, path, method="GET", body=None, timeout=15):
 def _wait_for_mattermost(timeout=180):
     """Wait until mattermost's API + DB are fully serving.
 
-    The ping endpoint returns 200 as soon as the HTTP server listens — even
-    while first-run DB migrations are still running in background jobs — so it
+    The ping endpoint returns 200 as soon as the HTTP server listens - even
+    while first-run DB migrations are still running in background jobs - so it
     is NOT a reliable readiness gate (that is exactly the race that made the
     setup POST fail with transport errors). A DB-backed endpoint
     (GET /api/v4/users, which requires auth) returns a definitive 401 only
@@ -691,7 +691,7 @@ def setup():
 
     # omnidev and omnistable run side-by-side (host ports are dev-overlay-only,
     # so they don't collide). Each launcher stops only the projects it
-    # conflicts with (see STOP_TARGETS) — never each other.
+    # conflicts with (see STOP_TARGETS) - never each other.
     stop_other_stacks(s.project_name)
 
     # Generate env file
@@ -699,8 +699,8 @@ def setup():
     generate_env(mode)
 
     # Ensure the runtime config/ exists (seed from omni-deployer/seed/config).
-    # config/ is runtime state (not gitignored — seed model: tracked-able,
-    # no files in the seed) in omni-root/omni-stack — a fresh
+    # config/ is runtime state (not gitignored - seed model: tracked-able,
+    # no files in the seed) in omni-root/omni-stack - a fresh
     # checkout has none and must run with zero manual intervention. Existing
     # live config (channels/boards the agent wrote) is preserved: only MISSING
     # seed files are copied.
@@ -766,7 +766,7 @@ def setup():
     # Seed remote plugins from remote.yml (install-git). The chain's test suite
     # expects remote tool plugins (actions, paperclip, ...) registered; on a
     # fresh data-dir checkout (e.g. omni-root) their .remote/ clones do NOT
-    # exist yet — they were previously carried over as residue from deploy
+    # exist yet - they were previously carried over as residue from deploy
     # runs. Seeding here makes setup self-sufficient regardless of data dir.
     seed_remote_plugins()
 
@@ -780,13 +780,13 @@ def seed_remote_plugins():
 
     Mirrors scripts/tests.py ensure_remote_plugin: the omniagent API clones the
     repo (file:// omni-plugins first, HTTPS fallback) into plugins/<type>/.remote/
-    and registers the plugin — no direct filesystem writes. Idempotent: the API
+    and registers the plugin - no direct filesystem writes. Idempotent: the API
     returns success for already-registered plugins. Call AFTER the stack is up.
     """
     s = sett()
     remote_yml = os.path.join(s.omni_stack_dir, "config", "remote.yml")
     if not os.path.isfile(remote_yml):
-        print(f"  [seed_remote_plugins: no {remote_yml} — nothing to seed]")
+        print(f"  [seed_remote_plugins: no {remote_yml} - nothing to seed]")
         return
     # Reuse the same YAML loader tests.py uses (PyYAML if available, else a
     # minimal parser). The omni-deployer container has PyYAML (deployrunner
@@ -798,7 +798,7 @@ def seed_remote_plugins():
     except Exception:
         parsed = {}
     # remote.yml shape: {tools: {name: {url, path}}, platforms: {...},
-    # providers: {...}} — top-level keys ARE the plugin types; paths carry the
+    # providers: {...}} - top-level keys ARE the plugin types; paths carry the
     # same type prefix (tools/actions, platforms/telegram, providers/noop).
     if not isinstance(parsed, dict):
         parsed = {}
@@ -816,7 +816,7 @@ def seed_remote_plugins():
     installed = 0
     for name, plugin_type, meta in sorted(entries):
         # remote.yml paths carry the type prefix (tools/actions,
-        # platforms/telegram, providers/noop) — reuse it when present so the
+        # platforms/telegram, providers/noop) - reuse it when present so the
         # install-git path matches the registered plugin type exactly.
         url = meta.get("url") or HTTPS_URL
         path = (meta.get("path") or name).strip("/")
@@ -865,9 +865,9 @@ def seed_remote_plugins():
 
 
 # ── Runtime state vs seed ────────────────────────────────────────────────────
-# User rule 2026-08-22: omni-stack/omni-root are SEED repos — they carry only
+# User rule 2026-08-22: omni-stack/omni-root are SEED repos - they carry only
 # the minimal entrypoint (compose) + services. config/, plugins/ and
-# profiles/ are RUNTIME state (NOT gitignored — they stay tracked-able so
+# profiles/ are RUNTIME state (NOT gitignored - they stay tracked-able so
 # forked data repos like omni-root can commit their own content; the seed
 # simply ships none). They are generated at setup/deploy time from the
 # tracked seed (omni-deployer/seed/config) + the plugin API (install-git)
@@ -884,7 +884,7 @@ def seed_config_dir():
 def ensure_seed_config(stack_dir=None, overwrite_files=None):
     """Ensure {stack_dir}/config exists with the seed config files.
 
-    config/ is runtime state (not gitignored — seed model keeps it
+    config/ is runtime state (not gitignored - seed model keeps it
     tracked-able with no files in the seed); the tracked
     seed lives in omni-deployer/seed/config. Called by setup() (launcher
     chains) and deploy.py at the start of a deploy so a fresh checkout runs
@@ -899,7 +899,7 @@ def ensure_seed_config(stack_dir=None, overwrite_files=None):
     stack_dir = stack_dir or s.omni_stack_dir
     seed_dir = seed_config_dir()
     if not os.path.isdir(seed_dir):
-        print(f"  [ensure_seed_config: no seed dir {seed_dir} — nothing to seed]")
+        print(f"  [ensure_seed_config: no seed dir {seed_dir} - nothing to seed]")
         return None
     target = os.path.join(stack_dir, "config")
     os.makedirs(target, exist_ok=True)
@@ -920,7 +920,7 @@ def ensure_seed_config(stack_dir=None, overwrite_files=None):
     if copied:
         print(f"  [ensure_seed_config: seeded {copied} file(s) into {target}]")
     else:
-        print(f"  [ensure_seed_config: {target} already seeded — untouched]")
+        print(f"  [ensure_seed_config: {target} already seeded - untouched]")
     return target
 
 
@@ -929,7 +929,7 @@ def cleanup_runtime_state(stack_dir=None):
 
     Removes config/, plugins/, the ENTIRE profiles/ dir, and the root-level
     runtime config artifacts (actions.yml/plugins.yml/remote.yml/settings.yml/
-    workflows.yml — gitignored leftovers). Used by deploy.py at the START of
+    workflows.yml - gitignored leftovers). Used by deploy.py at the START of
     dev (regenerates everything from seed + plugin API) and at the END of ALL
     modes (deploy leaves a pristine seed checkout).
     """
@@ -962,21 +962,21 @@ def verify_runtime_clean(stack_dir=None):
 
     deploy.py hybrid/ci require a pristine seed checkout BEFORE the deploy:
     if config/, plugins/ or the profiles/ dir exist at all (including
-    profiles/omni), fail fast — the deploy would otherwise discard unknown
+    profiles/omni), fail fast - the deploy would otherwise discard unknown
     state.
     """
     # ── Seed-repo model (why this guard exists) ──────────────────────────
     # omni-stack is a SEED repo: config/, profiles/ and plugins/ are NOT
     # gitignored (they stay tracked-able so forked repos like omni-root can
     # commit their own content); they simply have NO files in omni-stack
-    # itself. The dirs exist only temporarily during a deploy — auto-created
+    # itself. The dirs exist only temporarily during a deploy - auto-created
     # by the core at startup (profiles/<default>/config.json) or by test
-    # fixtures — and are removed when the deploy ends
+    # fixtures - and are removed when the deploy ends
     # (cleanup_runtime_state). This validation is the GUARD against
     # accidentally pushing these dirs to the seed repo: if they exist at
     # ci/hybrid start, fail fast. It is the safety net that replaces
     # gitignore. If you hit this error: remove the runtime dirs from the
-    # checkout (they are runtime state, not seed content) — do NOT "fix" it
+    # checkout (they are runtime state, not seed content) - do NOT "fix" it
     # by adding them to .gitignore.
     s = sett()
     stack_dir = stack_dir or s.omni_stack_dir
@@ -989,7 +989,7 @@ def verify_runtime_clean(stack_dir=None):
         problems.append(f"{stack_dir}/profiles exists (runtime state)")
     if problems:
         raise RuntimeError(
-            "Runtime state present in checkout — hybrid/ci require a pristine "
+            "Runtime state present in checkout - hybrid/ci require a pristine "
             "seed checkout (config/, plugins/ and profiles/ are generated "
             "during the deploy and removed at the end).\n" + "\n".join(problems)
         )
@@ -1175,7 +1175,7 @@ def agent():
     last_msg = full_msg
     print(f"\n  Last agent message: {str(last_msg)[:300]}")
 
-    # Verify it answered — require the actual math result, not the question
+    # Verify it answered - require the actual math result, not the question
     # being echoed back (e.g. a noop/test-tool-caller canned reply echoes the
     # question text, which would match a "15 * 37" substring check).
     if "597" in str(last_msg):
@@ -1184,7 +1184,7 @@ def agent():
         print(f"{'=' * 50}")
     else:
         print(f"\n  {'=' * 50}")
-        print(f"  ❌ AGENT TEST FAILED — answer not found in response")
+        print(f"  ❌ AGENT TEST FAILED - answer not found in response")
         print(f"{'=' * 50}")
         raise RuntimeError("Agent test failed: expected '597' in response")
 
@@ -1253,7 +1253,7 @@ def prepare():
         mm_channel_id = json.loads(r.stdout)["id"]
         print(f"  Channel mm-kanban created: {mm_channel_id}")
 
-    # Add members (201 created / 400 if already member — both fine)
+    # Add members (201 created / 400 if already member - both fine)
     for uid, label in [(bot_id, "bot"), (test_id, "testuser"), (admin_id, "admin")]:
         body = json.dumps({"user_id": uid})
         _mm_post(f"/api/v4/channels/{mm_channel_id}/members", body, admin_token)
@@ -1491,7 +1491,7 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
 
     Returns the response message or None on timeout.
     """
-    # Build the JSON script — must be the ENTIRE message for test-tool-caller to parse
+    # Build the JSON script - must be the ENTIRE message for test-tool-caller to parse
     script = [{"name": "step1", "tool": tool_name, "arguments": tool_args or {}}]
     script_json = json.dumps(script)
     user_msg = script_json  # Must be pure JSON array for test-tool-caller _parse_script
@@ -1517,7 +1517,7 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
     # Determine validation keyword
     keyword = expected_keyword if expected_keyword is not None else tool_name
 
-    # Poll for response — fast interval since tools respond locally
+    # Poll for response - fast interval since tools respond locally
     poll_start = time.time()
     timeout = poll_timeout
     while time.time() - poll_start < timeout:
@@ -1536,11 +1536,11 @@ def _test_tool_via_mattermost(mm_channel_id, testuser_token, tool_name, tool_arg
                             continue
                         if msg:
                             if expect_error:
-                                # Tool should be restricted/disabled — any error message is fine
+                                # Tool should be restricted/disabled - any error message is fine
                                 if _is_error_response(msg):
                                     return msg
                             else:
-                                # Tool should have executed — validate output
+                                # Tool should have executed - validate output
                                 if validate_fn:
                                     if validate_fn(msg):
                                         return msg
@@ -1755,7 +1755,7 @@ TOOL_VALIDATORS = {
 def _print_result(name, status, detail=""):
     """Print a formatted test result."""
     icon = "✅" if status == "PASS" else "❌" if status == "FAIL" else "⏭️"
-    print(f"  {icon} {name}: {status}" + (f" — {detail[:120]}" if detail else ""))
+    print(f"  {icon} {name}: {status}" + (f" - {detail[:120]}" if detail else ""))
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -1924,11 +1924,11 @@ def clean_plugin_residue():
     directory. During test runs the container writes plugins into the
     bind-mounted omni-stack plugins/ dir:
 
-      - `plugins/<type>/.remote/`  — git clones from install-git (gitignored)
+      - `plugins/<type>/.remote/`  - git clones from install-git (gitignored)
       - bundled test tools (test-python, test-js-tool, ...) copied by tests.py
 
     These MUST be removed when the run finishes (the seed rule: test artifacts
-    are temporary, not gitignored — a fork adding its own plugins should never
+    are temporary, not gitignored - a fork adding its own plugins should never
     be silently ignored). `git clean -fdX` removes ONLY gitignored files
     (`.remote/` clones); `git clean -fd` removes untracked-but-not-ignored
     files (test tools). Running both under plugins/ removes exactly the test
@@ -1939,7 +1939,7 @@ def clean_plugin_residue():
     stack_dir = s.omni_stack_dir
     plugins_dir = os.path.join(stack_dir, "plugins")
     if not os.path.isdir(plugins_dir):
-        print("  [plugin residue: no plugins/ dir — nothing to clean]")
+        print("  [plugin residue: no plugins/ dir - nothing to clean]")
         return
     # Residue is container-created (root-owned), so use sudo for the sweep.
     # git clean -fdX: ignored only (.remote clones). git clean -fd: untracked
@@ -1963,7 +1963,7 @@ def clean_plugin_residue():
     leftover = [ln for ln in r.stdout.splitlines()
                 if ln.strip() and ln.startswith(("??", "!!"))]
     if leftover:
-        print(f"  [plugin residue: WARNING — untracked/ignored files remain: {leftover[:2]}]")
+        print(f"  [plugin residue: WARNING - untracked/ignored files remain: {leftover[:2]}]")
     else:
         print("  [plugin residue: cleaned (test tools + .remote clones removed)]")
 
@@ -1995,12 +1995,12 @@ def _container_project_dir(stack_dir):
 def run_tests():
     """Run all tool tests with automatic profile backup/restore.
 
-    This is the main test entry point — called by omnidev.py test, omnistable.py test,
+    This is the main test entry point - called by omnidev.py test, omnistable.py test,
     and deploy.py before integration tests.
     """
     s = sett()
     # The docker_compose tool test runs `ps` against the stack's data-dir
-    # checkout (compose project dir) — follow the active omni_stack_dir
+    # checkout (compose project dir) - follow the active omni_stack_dir
     # (omni-root for omnidev/omnistable, omni-stack for deploy/omnideploy).
     # The tool EXECUTES INSIDE the omniagent container, so project_dir must
     # be the container-side path (/opt/workspace/...), not the host path.
@@ -2068,7 +2068,7 @@ def run_tests():
 
     # 0d. Ensure noop provider is installed and enabled, sourced from
     # omni-plugins (noop/noop-full are TEST providers that live ONLY in the
-    # omni-plugins repo — they must not come from the omniagent image's
+    # omni-plugins repo - they must not come from the omniagent image's
     # built-in/bundled copies). Install via install-git from omni-plugins;
     # file:// (offline, bind-mounted) first, HTTPS github as fallback.
     print("\n[Ensuring noop provider (omni-plugins source)...]")
@@ -2191,7 +2191,7 @@ def run_tests():
         elif result.get("is_error"):
             # A tool that returns is_error in the enabled+activated state is
             # BROKEN, not passing. (This leniency once let the query_database
-            # operation-contract regression sail through Phase 1 — it was only
+            # operation-contract regression sail through Phase 1 - it was only
             # caught by Phase 2's MCP pre-check.)
             content = result.get("content", "")
             _print_result(f"{tool_name} (enabled)", "FAIL", f"Tool returned an error: {content[:200]}")
@@ -2225,7 +2225,7 @@ def run_tests():
         elif tool_name == "filesystem_read" and result.get("is_error"):
             total_assertions += 1
             _print_result(f"{tool_name} (content check)", "INFO",
-                         "Tool responded (is_error=True) — env vars not propagated to MCP subprocess; tool registered correctly")
+                         "Tool responded (is_error=True) - env vars not propagated to MCP subprocess; tool registered correctly")
             passed += 1
 
         # Test 2: Disable plugin, verify tool is unavailable
@@ -2261,7 +2261,7 @@ def run_tests():
         total_assertions += 1
         if result_restricted.get("success"):
             _print_result(f"{tool_name} (restricted via profile)", "INFO",
-                         "MCP execute bypasses profile check — restriction is agent-side only")
+                         "MCP execute bypasses profile check - restriction is agent-side only")
             passed += 1
         else:
             _print_result(f"{tool_name} (restricted via profile)", "PASS", "Correctly restricted")
@@ -2287,7 +2287,7 @@ def run_tests():
         print("  PHASE 2: Agent Integration Tests (via Mattermost + test-tool-caller)")
         print("=" * 50)
 
-        # Start with empty profile — no tools allowed
+        # Start with empty profile - no tools allowed
         profile = _read_profile()
         profile["allowed_tools"] = []
         _write_profile(profile)
@@ -2367,7 +2367,7 @@ def run_tests():
 
             pre_check = _mcp_execute(tool_name, TOOL_DEFS.get(tool_name, {}).get("mcp_test_args", tool_args))
             if pre_check.get("is_error"):
-                print(f"  [FAIL: {tool_name} failed MCP pre-check — Phase 2 tests failing]")
+                print(f"  [FAIL: {tool_name} failed MCP pre-check - Phase 2 tests failing]")
                 _print_result(f"{tool_name} (all states)", "FAIL", f"MCP error: {str(pre_check.get('content', ''))[:100]}")
                 failed += 3
                 continue

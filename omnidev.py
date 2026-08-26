@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OmniStack dev launcher — thin wrapper around shared.py.
+OmniStack dev launcher - thin wrapper around shared.py.
 
 Usage:
   python3 omnidev.py setup

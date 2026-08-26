@@ -39,7 +39,7 @@ The `prompt_generate` tool (in `plugins/tools/prompt/src/main.rs`) produces:
 The executor sends this JSON as a single user message to the LLM provider.
 When the channel is configured as noop/test-tool-caller, the noop provider
 receives messages=[system_msg, user_msg] where user_msg.content is the
-entire prompt_generate JSON — not the raw `[{"name":"step1",...}]` array.
+entire prompt_generate JSON - not the raw `[{"name":"step1",...}]` array.
 
 The noop's `_parse_script` function only tries `json.loads(content)` on the
 bare content. It fails because the content is now `{"system":..., "user":...}`
@@ -55,7 +55,7 @@ with a `"user"` field, try parsing that field as a script array.
 Group 16's assertion checks for `"test-python_lorem"` in ANY Mattermost post.
 When the real LLM processes the message (because test-tool-caller returns a
 plan-text response instead of tool calls), the response may happen to contain
-the tool name "test-python_lorem". This is a false positive — no actual tool
+the tool name "test-python_lorem". This is a false positive - no actual tool
 calls were executed.
 
 ---
@@ -76,7 +76,7 @@ tool_registry: Arc<tokio::sync::RwLock<McpRegistry>>,
 
 **Problem**: Any operation in the system can mutate these globals. For example,
 `handle_remove_by_source` (DELETE handler) calls `remove_server_config` and
-`clear_server_pools` for the given plugin name — but previously it did so
+`clear_server_pools` for the given plugin name - but previously it did so
 **unconditionally**, even for plugins that didn't exist. This killed MCP
 subprocesses for other operations that happened to share the same server name.
 
@@ -162,7 +162,7 @@ pub struct PluginManager {
 1. **`_parse_script` fix**: Only affects the noop provider's test-tool-caller
    model. Other models don't parse JSON scripts and won't enter this code path.
 
-2. **DELETE guard**: Already validated — all DELETE tests in Groups 1-2 pass.
+2. **DELETE guard**: Already validated - all DELETE tests in Groups 1-2 pass.
    The `if removed` guard prevents killing MCP subprocesses for plugins that
    the operation didn't actually touch.
 

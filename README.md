@@ -20,7 +20,7 @@ test harness), `omnidev.py` / `omnistable.py` (dev/stable stack lifecycle),
 python3 deploy.py dev
 
 # CI mode: uses pre-built images (OMNIAGENT_IMAGE, DASHBOARD_IMAGE, TOOLBOX_IMAGE must be set)
-# Pretests are skipped — the production Dockerfile builder already ran fmt/check/clippy/unit during the image build.
+# Pretests are skipped - the production Dockerfile builder already ran fmt/check/clippy/unit during the image build.
 WORKSPACE_DIR=/path/to/workspace python3 deploy.py ci
 
 # Hybrid mode: builds the production Dockerfile (its builder stage runs the quality gates)
@@ -32,7 +32,7 @@ python3 deploy.py test
 
 The script generates `omni.env` with random passwords, starts services, runs
 migrations, and executes the integration test suite (`scripts/tests.py`) twice
-(single pass in `ci` mode — the GitHub-hosted runner's 1h budget can't fit
+(single pass in `ci` mode - the GitHub-hosted runner's 1h budget can't fit
 the double pass; dev/hybrid keep 2 passes for extra confidence).
 
 ## Dev vs Stable stacks
@@ -41,7 +41,7 @@ the double pass; dev/hybrid keep 2 passes for extra confidence).
   (`omnidev`, `omnistable`). `omnidev.py setup` / `omnistable.py setup` call
   `shared.setup()`, the ONLY caller that writes real LLM key refs
   (`$secret:DEEPSEEK_API_KEY` etc. into `plugins.yml`) from `secrets.env`.
-- **`deploy.py` is a self-contained test harness** that must NEVER use real LLM keys —
+- **`deploy.py` is a self-contained test harness** that must NEVER use real LLM keys -
   see AGENTS.md for the hard rule. It calls only `shared.init()` + `shared.run_tests()`.
 
 ## Development (docker-compose.dev.yml / omnidev)
@@ -57,7 +57,7 @@ The overlay adds:
 - **Local image builds** instead of pulling from GHCR (`omniagent-dev:latest` from `Dockerfile.dev`)
 - **Mounted source directories** for live development (`/opt/workspace/omniagent:/app`, `/opt/workspace/omni-dashboard:/opt/repo`)
 - **Dev-only host ports** (never in the base compose): dashboard `12345:3001`, mattermost `12346:8065`, paperclip `3101:3100`
-- `SQLX_OFFLINE=false` — dev builds validate queries against the live DB so code + migrations can change without a stale `.sqlx` cache
+- `SQLX_OFFLINE=false` - dev builds validate queries against the live DB so code + migrations can change without a stale `.sqlx` cache
 
 The `omnidev` compose project is the development environment for the kanban dev workflows
 (`dev-executor`, `omniagent-dev`): tasks on the `omnidev` board resolve to the
@@ -75,11 +75,11 @@ and the kanban-workflow feature groups:
 | 40 | Workflow role mode (`agent`/`action`) + `auto_approve` + `review_on_fail` |
 | 41 | Fail-thread routing (`review_on_fail`) + double-normalization fix |
 | 42 | Plugins `omni_dir` config field (no hardcoded `/opt/omni` fallbacks) |
-| 43 | Sub-prompts — pending user prompts appended to running thread |
+| 43 | Sub-prompts - pending user prompts appended to running thread |
 | 44 | Builtin `omniagent-api` via test-tool-caller + fetch method gating |
 | 45 | Wiki data source skill (Karpathy + Obsidian + filesystem examples) |
 | 46 | models.yml provider/model overrides (CRUD API + plugin-less + absent-file + refresh upsert) |
-| 47 | Resolve fallback fields ONCE at load — kanban task defaults (task → board → channel → global) |
+| 47 | Resolve fallback fields ONCE at load - kanban task defaults (task → board → channel → global) |
 | 48 | Single-instance advisory lock + CLI arg handling |
 | 49 | omni-dashboard UI/UX fixes regression (DB page, custom selects, workflow defaults, hooks, templates, red cancel, plugin remove, git box) |
 
@@ -99,7 +99,7 @@ Then:
 1. Runs unit tests + lint
 2. Runs integration tests via `deploy.py ci`
 3. Tags git repos (omni-stack, omniagent, omni-dashboard) with the release version
-4. Pushes + tags **nexuslbs/omni-plugins** — its root `models.yml` provides the
+4. Pushes + tags **nexuslbs/omni-plugins** - its root `models.yml` provides the
    plugin-less provider definitions used by the release (the noop test provider is
    sourced from omni-plugins, not the omniagent image)
 5. Publishes all three images to GHCR

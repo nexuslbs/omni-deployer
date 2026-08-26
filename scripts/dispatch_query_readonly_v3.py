@@ -30,7 +30,7 @@ settings = shared.Settings(
 shared.init(settings)
 s = shared.sett()
 
-TASK = """TASK: Apply these EXACT code changes. Do NOT read any files first — the exact edits are below. Do NOT restart the container. Do NOT create roles. Do NOT explore. Apply, build, commit, push.
+TASK = """TASK: Apply these EXACT code changes. Do NOT read any files first - the exact edits are below. Do NOT restart the container. Do NOT create roles. Do NOT explore. Apply, build, commit, push.
 
 ═══ EDIT 1: /opt/workspace/omniagent/plugins/tools/query/src/main.rs ═══
 Use python to apply these string replacements (exact match):
@@ -39,7 +39,7 @@ Use python to apply these string replacements (exact match):
 """
 TASK += """/// Rewrites a PostgreSQL connection URL so it authenticates as the dedicated
 /// `omniagent_readonly` role instead of the full-privilege `omniagent` user.
-/// The password comes from the existing DATABASE_URL / plugin config — only the
+/// The password comes from the existing DATABASE_URL / plugin config - only the
 /// username is substituted, so no credentials are hardcoded in source code.
 fn readonly_database_url(url: &str) -> String {
     const FULL: &str = "://omniagent:";

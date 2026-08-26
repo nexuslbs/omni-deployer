@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-prepare.py — Generate offline sqlx query cache for the omniagent workspace.
+prepare.py - Generate offline sqlx query cache for the omniagent workspace.
 
 Lives in the omni-deployer repo (deploy tooling), runs inside the omniagent
 container where cargo + sqlx-cli + DATABASE_URL are available.
@@ -17,7 +17,7 @@ What it does:
        directory so production builds (which compile each plugin as -p <name>)
        can resolve queries with SQLX_OFFLINE=true. The extra `-- --tests`
        forwards `--tests` to cargo so queries inside test modules are ALSO
-       captured — without it, `cargo sqlx prepare` (lib-only build) drops
+       captured - without it, `cargo sqlx prepare` (lib-only build) drops
        test-target queries and the cache silently loses entries that
        `cargo test --offline` needs (observed: prompt plugin's
        continuation-block test query deleted on every run, leaving a dirty
@@ -69,13 +69,13 @@ def needs_offline_cache(dir_path: Path) -> bool:
     """Check if a plugin crate uses sql_forge!() or sqlx::query!() macros.
 
     These macros resolve SQL at compile time and require the offline cache.
-    Plain sqlx::query("...") does NOT need offline data — the inline SQL
+    Plain sqlx::query("...") does NOT need offline data - the inline SQL
     string is parsed directly.
     """
     src_dir = dir_path / "src"
     if not src_dir.is_dir():
         return False
-    # Only check .rs files — skip target/, .sqlx/ etc.
+    # Only check .rs files - skip target/, .sqlx/ etc.
     for rs_file in src_dir.rglob("*.rs"):
         try:
             text = rs_file.read_text(encoding="utf-8", errors="replace")
@@ -101,7 +101,7 @@ def main() -> None:
     PLUGINS_DIR = REPO_ROOT / "plugins" / "tools"
 
     if not os.environ.get("DATABASE_URL"):
-        print("❌ DATABASE_URL not set — run inside the omniagent container", file=sys.stderr)
+        print("❌ DATABASE_URL not set - run inside the omniagent container", file=sys.stderr)
         sys.exit(1)
 
     print(f"Workspace root: {REPO_ROOT}")

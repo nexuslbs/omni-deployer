@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch the deploy-runner container using the EXISTING `omniagent` service
-# from the omni-stack root docker-compose.yml — NO separate compose file
+# from the omni-stack root docker-compose.yml - NO separate compose file
 # (user rule 2026-08-22: omni-deployer has no compose files, and the runner
 # should reuse the stack's own service definition).
 #
@@ -39,7 +39,7 @@ fi
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
   echo "runner already up: $NAME"
 else
-  # --no-deps: never start postgres/qdrant — the runner only needs the image
+  # --no-deps: never start postgres/qdrant - the runner only needs the image
   # + mounts (docker.sock, /opt/workspace). --entrypoint tail keeps it alive
   # for `docker exec` (the kanban executor + manual runs use it).
   "${COMPOSE[@]}" run -d --no-deps --name "$NAME" --entrypoint tail omniagent -f /dev/null

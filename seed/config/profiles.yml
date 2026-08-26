@@ -1,7 +1,7 @@
-# profiles.yml — single source of truth for profile definitions.
+# profiles.yml - single source of truth for profile definitions.
 #
 # Profiles are DECLARED by presence in this file (mirroring how channels.yml
-# defines channels). The map KEY is the profile NAME — the stable identifier
+# defines channels). The map KEY is the profile NAME - the stable identifier
 # used in threads.profile, channels.yml `profile:`, kanban boards/tasks
 # `profile:` and the dashboard profile selects.
 #

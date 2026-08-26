@@ -1,4 +1,4 @@
-# Provider/model overrides — pure definition file (NO plugin code).
+# Provider/model overrides - pure definition file (NO plugin code).
 # Loaded from {OMNI_DIR}/config/models.yml at startup. Absent/empty = zero
 # behavior change. Malformed = startup fails with a clear error.
 #
@@ -10,7 +10,7 @@
 #   Provider-level fields (api_mode, supports_reasoning, default_base_url,
 #     refresh_url, default_model, api_key, token_budget_*, max_tokens*) override
 #     the plugin config.
-#   model_config.<model>     per-model overrides — highest precedence.
+#   model_config.<model>     per-model overrides - highest precedence.
 #
 # Precedence for EACH of soft/hard token budget INDEPENDENTLY:
 #   model_config.<model> > providers.<name> > global settings
@@ -21,13 +21,13 @@
 
 providers:
   # Override the deepseek provider plugin: fix the (wrong) hardcoded model list
-  # without touching the plugin — selectors now show the real models.
+  # without touching the plugin - selectors now show the real models.
   deepseek:
     plugin: true
     models: ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "deepseek-v4-pro"]
 
   # Plugin-less provider: works via builtin chat_completions/anthropic support.
-  # No plugin needed — appears in provider selects and can be used on threads.
+  # No plugin needed - appears in provider selects and can be used on threads.
   # my_provider_01:
   #   plugin: false
   #   api_mode: "chat_completions"
