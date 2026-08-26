@@ -372,7 +372,11 @@ def _remove_data_volumes(project_name):
         suffix = vol[len(project_name) + 1:]
         if suffix not in DATA_VOLUMES:
             continue
-        subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
+        r = subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"Could not remove data volume {vol}: {(r.stderr or r.stdout).strip()[:200]}"
+            )
         removed.append(vol)
     if removed:
         print(f"  Removed data volumes: {', '.join(removed)}")
