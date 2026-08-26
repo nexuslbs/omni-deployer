@@ -662,11 +662,9 @@ def _deploy(mode):
     # the exact names omni.env references (local/omniagent:latest,
     # local/omni-dashboard:latest, local/omni-toolbox:latest). The base
     # compose is image-only - services consume pre-built images by tag, so
-    # the images MUST exist before `up`. For services that carry a build
-    # section in the base compose (toolbox), `docker compose build` tags
-    # them per the service `image:`; for image-only services (omniagent,
-    # dashboard) we fall back to `docker build -t <tag>` - the goal is the
-    # tagged image on disk for the services to use. The omniagent build is
+    # the images MUST exist before `up`. All three are built with plain
+    # `docker build -t <tag>` (no compose build sections in the base
+    # compose; source builds live in the dev overlay). The omniagent build is
     # the production Dockerfile whose builder stage runs fmt/check/clippy/
     # test offline against the committed .sqlx cache (the hybrid pretest
     # gate).
@@ -695,8 +693,7 @@ def _deploy(mode):
         build_image("local/omni-dashboard:latest",
                     context=os.path.join(WORKSPACE_DIR, "omni-dashboard"))
         build_image("local/omni-toolbox:latest",
-                    context=os.path.join(OMNI_STACK_DIR, "services", "toolbox"),
-                    service="toolbox")
+                    context=os.path.join(OMNI_STACK_DIR, "services", "toolbox"))
 
     # Step 2 (dev): Build images
     if mode == "dev":
