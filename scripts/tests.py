@@ -1458,8 +1458,6 @@ DASH_API_ENDPOINTS = [
     ("GET", "/api/threads/filters", 200),
     ("GET", "/api/fs/list?path=/", 200),
     # Static assets
-    ("GET", "/assets/index-CUcbyEWO.js", 200),
-    ("GET", "/assets/index-ZqNeTqN7.css", 200),
     ("GET", "/favicon.svg", 200),
 ]
 
@@ -1474,10 +1472,17 @@ def test_dashboard_pages():
     for path in DASH_PAGES:
         code, text, js = _dash_get(path)
         assert code == 200, f"GET {path} returned {code}, expected 200"
-        assert "index-CUcbyEWO.js" in text or "<!DOCTYPE html>" in text, \
+        assert re.search(r"assets/index-[A-Za-z0-9_.-]+\.js", text) is not None or \
+            "<!doctype html>" in text.lower(), \
             f"GET {path} did not return SPA HTML (missing JS bundle reference)"
         assert '"error":"Not found"' not in text, \
             f"GET {path} returned 'Not found' error"
+
+    # Static assets referenced by the served SPA (derived from the HTML, not
+    # hardcoded: bundle hashes change on every dashboard rebuild).
+    for m in re.finditer(r"assets/index-[A-Za-z0-9_.-]+\.(?:js|css)", text):
+        a_code, _, _ = _dash_get("/" + m.group(0))
+        assert a_code == 200, f"GET /{m.group(0)} returned {a_code}"
 
     # ── 2. API endpoints ──
     for method, path, expected_code in DASH_API_ENDPOINTS:
@@ -1578,12 +1583,12 @@ def test_dashboard_plugin_filters():
         # Basic page load
         code, text, js = _dash_get(page)
         assert code == 200, f"GET {page} returned {code}"
-        assert "<!DOCTYPE html>" in text, f"GET {page} did not return SPA HTML"
+        assert "<!doctype html>" in text.lower(), f"GET {page} did not return SPA HTML"
 
         # With single filter param: source
         code, text, js = _dash_get(f"{page}?source=built-in")
         assert code == 200, f"GET {page}?source=built-in returned {code}"
-        assert "<!DOCTYPE html>" in text, f"GET {page} with source filter did not return SPA HTML"
+        assert "<!doctype html>" in text.lower(), f"GET {page} with source filter did not return SPA HTML"
 
         # With single filter param: status
         code, text, js = _dash_get(f"{page}?status=disabled")
@@ -1616,7 +1621,7 @@ def test_dashboard_plugin_filters():
     ]:
         code, text, js = _dash_get(f"/threads{qs}")
         assert code == 200, f"GET /threads{qs} returned {code}"
-        assert "<!DOCTYPE html>" in text, f"GET /threads{qs} did not return SPA HTML"
+        assert "<!doctype html>" in text.lower(), f"GET /threads{qs} did not return SPA HTML"
 
     # Messages filters
     for qs in [
@@ -1628,7 +1633,7 @@ def test_dashboard_plugin_filters():
     ]:
         code, text, js = _dash_get(f"/messages{qs}")
         assert code == 200, f"GET /messages{qs} returned {code}"
-        assert "<!DOCTYPE html>" in text, f"GET /messages{qs} did not return SPA HTML"
+        assert "<!doctype html>" in text.lower(), f"GET /messages{qs} did not return SPA HTML"
 
     # Channels filters
     for qs in [
@@ -1639,7 +1644,7 @@ def test_dashboard_plugin_filters():
     ]:
         code, text, js = _dash_get(f"/channels{qs}")
         assert code == 200, f"GET /channels{qs} returned {code}"
-        assert "<!DOCTYPE html>" in text, f"GET /channels{qs} did not return SPA HTML"
+        assert "<!doctype html>" in text.lower(), f"GET /channels{qs} did not return SPA HTML"
 
     # ── 3. Verify filter-related API endpoints return valid data ──
     _, _, plugin_js = _dash_get("/api/plugins")
@@ -12067,7 +12072,7 @@ def test_43_source_audit():
     assert "pub async fn list_appendable_pending_threads" in thr
     assert "t.cause = 'user'" in thr and "t.status = 'pending'" in thr \
         and "NOT t.terminal" in thr
-    assert "IS NOT DISTINCT FROM" in thr and \
+    assert "t.parent_id = (SELECT parent_id FROM threads WHERE id = :running_thread_id)" in thr and \
         "t.parent_id = :running_thread_id" in thr
     assert "pub async fn mark_thread_skipped_for_sub_prompt" in thr
     assert 'mark_thread_terminal(pool, pending_id, "skipped")' in thr, \
