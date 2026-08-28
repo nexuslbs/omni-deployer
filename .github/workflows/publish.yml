@@ -50,6 +50,13 @@ jobs:
           load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # RELEASE build: bake OMNIAGENT_BUILD_MODE=release so db-migrations
+          # auto-applies the idempotent schema on container start against the
+          # live DB (version upgrades need NO manual env vars). The Dockerfile
+          # ARG default is dev (fail closed): any image built without this arg
+          # stays fully guarded against non-dev databases.
+          build-args: |
+            OMNIAGENT_BUILD_MODE=release
   
       - name: Save image
         run: docker save $(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' ') | gzip > /tmp/omniagent.tar.gz

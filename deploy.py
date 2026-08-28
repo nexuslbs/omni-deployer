@@ -411,10 +411,13 @@ def generate_env(mode):
         f.write(f"HOST_OMNI_DIR={OMNI_STACK_DIR}\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
-        # DB-write guard: production deploys explicitly allow schema
-        # writes (db-migrations refuses non-dev DBs by default). Dev
-        # stacks (omnidev) never set this - their migrations only run
-        # against the dev-only postgres alias `omnidev-postgres`.
+        # DB-write guard ESCAPE HATCH: db-migrations refuses non-dev DB hosts
+        # for DEV-built images. Release-built images (OMNIAGENT_BUILD_MODE=
+        # release, publish pipeline) auto-apply migrations without this var;
+        # this deploy harness runs dev-built binaries against its own isolated
+        # project DB (host `postgres`), so it opts in explicitly. Dev stacks
+        # (omnidev) never set this - their migrations only run against the
+        # dev-only postgres alias `omnidev-postgres`.
         f.write("OMNIAGENT_ALLOW_DB_WRITE=true\n")
         # Local S3 (MinIO) service + S3 client creds (docker-compose.minio.yml
         # in omni-deployer and the toolbox rclone config both interpolate these).
@@ -672,7 +675,10 @@ def _deploy(mode):
     # compose; source builds live in the dev overlay). The omniagent build is
     # the production Dockerfile whose builder stage runs fmt/check/clippy/
     # test offline against the committed .sqlx cache (the hybrid pretest
-    # gate).
+    # gate). The Dockerfile's OMNIAGENT_BUILD_MODE ARG defaults to dev (fail
+    # closed), so this local hybrid image is DEV-marked and stays fully
+    # guarded; the deploy env's OMNIAGENT_ALLOW_DB_WRITE=true (generate_env)
+    # is the explicit escape hatch for the harness's own project DB.
     if mode == "hybrid":
         def build_image(tag, dockerfile=None, context=None, service=None):
             if service is not None:
