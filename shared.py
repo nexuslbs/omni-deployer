@@ -483,6 +483,11 @@ def generate_env(mode="dev"):
             f.write(f"OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent:latest\n")
             f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard:latest\n")
             f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox:latest\n")
+            # DB-write guard: stable/prod-like stacks explicitly allow
+            # schema writes (db-migrations refuses non-dev DBs by default).
+            # omnidev (mode="dev") leaves this unset - migrations only run
+            # against its own postgres via the `omnidev-postgres` alias.
+            f.write(f"OMNIAGENT_ALLOW_DB_WRITE=true\n")
         f.write("\n")
         f.write(f"# Database passwords (randomly generated)\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")

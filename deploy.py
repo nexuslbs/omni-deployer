@@ -411,6 +411,11 @@ def generate_env(mode):
         f.write(f"HOST_OMNI_DIR={OMNI_STACK_DIR}\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
+        # DB-write guard: production deploys explicitly allow schema
+        # writes (db-migrations refuses non-dev DBs by default). Dev
+        # stacks (omnidev) never set this - their migrations only run
+        # against the dev-only postgres alias `omnidev-postgres`.
+        f.write("OMNIAGENT_ALLOW_DB_WRITE=true\n")
         # Local S3 (MinIO) service + S3 client creds (docker-compose.minio.yml
         # in omni-deployer and the toolbox rclone config both interpolate these).
         f.write(f"MINIO_ROOT_USER={minio_user}\n")
