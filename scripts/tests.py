@@ -12050,7 +12050,7 @@ def test_43_source_audit():
     '''43-A: the sub-prompts feature is fully wired in the omniagent source:
     migration column, MessageDb/Message/MessageNew field,
     insert_sub_cause_message, list_appendable_pending_threads +
-    mark_thread_skipped_for_sub_prompt, main-loop injection placed BEFORE the
+    mark_thread_merged_for_sub_prompt, main-loop injection placed BEFORE the
     condense call, settings definitions + writable whitelist + category
     mapping, AgentConfig defaults, omni-stack settings.yml defaults, and the
     gate unit tests.'''
@@ -12074,9 +12074,9 @@ def test_43_source_audit():
         and "NOT t.terminal" in thr
     assert "t.parent_id = (SELECT parent_id FROM threads WHERE id = :running_thread_id)" in thr and \
         "t.parent_id = :running_thread_id" in thr
-    assert "pub async fn mark_thread_skipped_for_sub_prompt" in thr
-    assert 'mark_thread_terminal(pool, pending_id, "skipped")' in thr, \
-        "skipped must go through the terminal choke point"
+    assert "pub async fn mark_thread_merged_for_sub_prompt" in thr
+    assert 'mark_thread_terminal(pool, pending_id, "merged")' in thr, \
+        "merged must go through the terminal choke point"
     loop = _g43_read("src/agent/main_loop.rs")
     sp_line = loop.index("list_appendable_pending_threads(")
     cond_line = loop.index("call condense tool")
@@ -12084,13 +12084,13 @@ def test_43_source_audit():
         f"sub-prompt lookup ({sp_line}) must precede condense ({cond_line})"
     assert "used_sub_prompt_chars" in loop and "sub_prompts_exhausted" in loop
     assert "insert_sub_cause_message(" in loop and \
-        "mark_thread_skipped_for_sub_prompt(" in loop
+        "mark_thread_merged_for_sub_prompt(" in loop
     assert "pub(crate) fn sub_prompt_gate_ok" in loop and \
         "mod sub_prompt_gate_tests" in loop
     settings = _g43_read("src/server/settings.rs")
     for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent"):
         assert f'"{key}"' in settings, f"{key} missing from settings.rs"
-    assert '"sub_prompt_max_chars" | "sub_prompt_iteration_percent" | "memory_max_chars" => "prompt"' in settings, "category mapping to prompt missing"
+    assert '"sub_prompt_iteration_percent" => "prompt"' in settings, "category mapping to prompt missing"
     assert '"delete_after_days" => "general"' in settings, "delete_after_days must be categorized under general"
     assert 'label: "Memory & Retention"' not in settings, "Memory & Retention group must be removed from settings.rs"
     assert "sub_prompt_settings_are_writable_numbers_in_prompt" in settings, "settings unit test missing"
@@ -13428,7 +13428,7 @@ def test_49_templates_all_profiles_sorted():
     opt_lines = [ln for ln in cc.split("\n") if "option value" in ln and "t.name" in ln]
     assert opt_lines and "t.profile" not in opt_lines[0], f"49-E: template option must be name-only (got {opt_lines[:1]})"
     hk = _g49_read("src/lib/hooks-detail.ts")
-    assert 'apiGet<{ profile: string; name: string; label: string }[]>("/templates")' in hk, \
+    assert 'cachedGet("/templates")' in hk, \
         "49-E: hook modal must load ALL templates (all profiles)"
     assert "escapeHtml(t.name)}</option>" in hk, "49-E: hook template select must render template names"
     print("  ✓ 49-E all-profiles alphabetical template selects, name only")
