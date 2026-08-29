@@ -32,9 +32,22 @@ prompt:
   prompt_tool_excerpt_chars: 800
   prompt_total_excerpt_cap: 4000
   prompt_read_excerpt_chars: 2000
-
-memory:
+  sub_prompt_iteration_percent: 50
+  sub_prompt_max_chars: 4000
   memory_max_chars: 5000
+
+channels:
+  default_schedule_channel: cron
+  default_hook_channel: ''
+  default_kanban_channel: kanban
+
+unsorted:
+  max_pool_connections: 5
+  old_message_token_budget: 100000
+  prompt_token_budget_hard: 500000
+  prompt_token_budget_soft: 100000
+  prompt_token_safety_factor: 15.0
+  watchdog_default: ''
   messages_vectorization_api_key: ''
   messages_vectorization_api_model: ''
   messages_vectorization_api_url: ''
@@ -49,19 +62,3 @@ memory:
   wiki_vectorization_interval: 3600
   wiki_vectorization_method: local
   wiki_vectorization_protocol: openai
-
-channels:
-  default_schedule_channel: cron
-  default_hook_channel: ''
-  default_kanban_channel: kanban
-
-unsorted:
-  max_pool_connections: 5
-  old_message_token_budget: 100000
-  prompt_token_budget_hard: 500000
-  prompt_token_budget_soft: 100000
-  prompt_token_safety_factor: 15.0
-  sub_prompt_iteration_percent: 50
-  sub_prompt_max_chars: 4000
-  watchdog_default: ''
-

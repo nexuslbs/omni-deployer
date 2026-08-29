@@ -12090,17 +12090,25 @@ def test_43_source_audit():
     settings = _g43_read("src/server/settings.rs")
     for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent"):
         assert f'"{key}"' in settings, f"{key} missing from settings.rs"
-    assert '"sub_prompt_max_chars" | "sub_prompt_iteration_percent" => "general"' \
-        in settings, "category mapping to general missing"
-    assert "sub_prompt_settings_are_writable_numbers_in_general" in settings, \
-        "settings unit test missing"
+    assert '"sub_prompt_max_chars" | "sub_prompt_iteration_percent" | "memory_max_chars" => "prompt"' in settings, "category mapping to prompt missing"
+    assert '"delete_after_days" => "general"' in settings, "delete_after_days must be categorized under general"
+    assert 'label: "Memory & Retention"' not in settings, "Memory & Retention group must be removed from settings.rs"
+    assert "sub_prompt_settings_are_writable_numbers_in_prompt" in settings, "settings unit test missing"
+    assert "default_profile_is_a_select" in settings, "default_profile select unit test missing"
+    assert "enrich_profile_options" in settings, "default_profile options enrichment missing"
     cfg = _g43_read("src/agent/config.rs")
     assert "sub_prompt_max_chars" in cfg and "sub_prompt_iteration_percent" in cfg
     assert '"4000"' in cfg and '"50"' in cfg, "AgentConfig defaults 4000/50"
     with open("/opt/workspace/omni-stack/config/settings.yml", encoding="utf-8") as f:
         sy = f.read()
-    assert "sub_prompt_max_chars" in sy and "sub_prompt_iteration_percent" in sy, \
-        "omni-stack settings.yml defaults missing"
+    assert "sub_prompt_max_chars" in sy and "sub_prompt_iteration_percent" in sy, "omni-stack settings.yml defaults missing"
+    with open("/opt/workspace/omni-deployer/seed/config/settings.yml", encoding="utf-8") as f:
+        sy_seed = f.read()
+    seed_prompt = sy_seed.split("prompt:", 1)[1].split("\n\n", 1)[0] if "prompt:" in sy_seed else ""
+    for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent", "memory_max_chars"):
+        assert key in seed_prompt, f"seed settings.yml prompt group missing {key}"
+    assert "\nmemory:" not in sy_seed, "seed settings.yml must not keep a memory (Memory & Retention) section"
+    assert "\n  delete_after_days: 30\n" in sy_seed, "seed settings.yml must keep delete_after_days under general"
     print("PASS: 43-A source audit - migration, DB helpers, pre-condense "
           "injection, settings wiring + defaults all present")
 
@@ -12246,10 +12254,44 @@ def test_43_appendable_pending_sql():
 
 
 print("GROUP 43: Sub-prompts - append pending user prompts to running thread")
+def test_43_settings_regroup():
+    '''43-F: GET /settings reflects the regroup - prompt group carries
+    sub_prompt_max_chars + sub_prompt_iteration_percent + memory_max_chars,
+    general carries delete_after_days, the Memory & Retention group is gone,
+    and default_profile is a select with options from profiles.yml.'''
+    sr = get_json("/settings")
+    sdata = sr.get("data", sr) if isinstance(sr, dict) else sr
+    cats = sdata.get("categories", []) if isinstance(sdata, dict) else []
+    cat_by_name = {c.get("name"): c for c in cats if isinstance(c, dict)}
+    assert "memory" not in cat_by_name, f"Memory & Retention category must be gone: {sorted(cat_by_name)}"
+    prompt = cat_by_name.get("prompt")
+    assert prompt, "prompt category missing"
+    pnames = [s.get("name") for s in prompt.get("settings", [])]
+    for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent", "memory_max_chars"):
+        assert key in pnames, f"{key} must be under prompt: {pnames}"
+    general = cat_by_name.get("general")
+    assert general, "general category missing"
+    gnames = [s.get("name") for s in general.get("settings", [])]
+    assert "delete_after_days" in gnames, f"delete_after_days must be under general: {gnames}"
+    dp = None
+    for c in cats:
+        for s in c.get("settings", []):
+            if s.get("name") == "default_profile":
+                dp = s
+                break
+    assert dp, "default_profile setting missing from /settings"
+    md = dp.get("metadata") or {}
+    assert md.get("type") == "select", f"default_profile must be a select, got {md.get('type')}"
+    opts = md.get("options") or []
+    assert opts, "default_profile select must be populated from profiles.yml"
+    print("PASS: 43-F settings regroup - prompt/general grouping, no Memory & Retention, default_profile select")
+
+
 test(test_43_source_audit)
 test(test_43_settings_api)
 test(test_43_db_schema)
 test(test_43_appendable_pending_sql)
+test(test_43_settings_regroup)
 
 
 # ── GROUP 44: builtin omniagent-api via test-tool-caller + fetch method gating ──
