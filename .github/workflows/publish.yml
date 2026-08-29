@@ -17,6 +17,7 @@ jobs:
     outputs:
       tag: ${{ steps.image-tag.outputs.tag }}
       labels: ${{ steps.meta.outputs.labels }}
+      sha: ${{ steps.sha.outputs.sha }}
   
     steps:
       - name: Checkout omniagent
@@ -24,6 +25,10 @@ jobs:
         with:
           repository: nexuslbs/omniagent
           path: omniagent
+
+      - name: Record checkout SHA
+        id: sha
+        run: echo \"sha=$(git -C omniagent rev-parse HEAD)\" >> \"$GITHUB_OUTPUT\"
   
       - name: Docker metadata
         id: meta
@@ -77,6 +82,7 @@ jobs:
     outputs:
       tag: ${{ steps.image-tag.outputs.tag }}
       labels: ${{ steps.meta.outputs.labels }}
+      sha: ${{ steps.sha.outputs.sha }}
   
     steps:
       - name: Checkout omni-dashboard
@@ -84,6 +90,10 @@ jobs:
         with:
           repository: nexuslbs/omni-dashboard
           path: omni-dashboard
+
+      - name: Record checkout SHA
+        id: sha
+        run: echo \"sha=$(git -C omni-dashboard rev-parse HEAD)\" >> \"$GITHUB_OUTPUT\"
   
       - name: Docker metadata
         id: meta
@@ -137,6 +147,7 @@ jobs:
     outputs:
       tag: ${{ steps.image-tag.outputs.tag }}
       labels: ${{ steps.meta.outputs.labels }}
+      sha: ${{ steps.sha.outputs.sha }}
   
     steps:
       - name: Checkout omni-stack
@@ -144,6 +155,10 @@ jobs:
         with:
           repository: nexuslbs/omni-stack
           path: omni-stack
+
+      - name: Record checkout SHA
+        id: sha
+        run: echo \"sha=$(git -C omni-stack rev-parse HEAD)\" >> \"$GITHUB_OUTPUT\"
   
       - name: Docker metadata
         id: meta
@@ -180,6 +195,17 @@ jobs:
           name: toolbox-image
           path: /tmp/toolbox.tar.gz
           retention-days: 1
+  # CONSISTENCY CONTRACT (hybrid == CI):
+  # The integration job must test EXACTLY the code the images were built from:
+  # each dependent repo is checked out at the SHA its image job built (recorded
+  # in the build jobs' `sha` outputs), so source-audit tests (GROUP 43/49) read
+  # the same omniagent/omni-dashboard/omni-stack state the running containers
+  # come from. Hybrid is bound to the same origin/main contract by the
+  # deploy.py hybrid preflight (Step 0.4): local checkouts must be clean and at
+  # origin/main, or hybrid refuses to run. A test failure therefore appears in
+  # hybrid AND CI or in neither; a stale source audit (e.g. 49-E) cannot pass
+  # in one and fail in the other.
+
   
   integration-test:
     name: Integration tests
@@ -199,18 +225,21 @@ jobs:
         with:
           repository: nexuslbs/omni-stack
           path: omni-stack
+          ref: ${{ needs.build-toolbox.outputs.sha }}
   
       - name: Checkout omniagent
         uses: actions/checkout@v4
         with:
           repository: nexuslbs/omniagent
           path: omniagent
+          ref: ${{ needs.build-omniagent.outputs.sha }}
   
       - name: Checkout omni-dashboard
         uses: actions/checkout@v4
         with:
           repository: nexuslbs/omni-dashboard
           path: omni-dashboard
+          ref: ${{ needs.build-omni-dashboard.outputs.sha }}
   
       - name: Checkout omni-plugins
         uses: actions/checkout@v4

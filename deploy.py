@@ -545,6 +545,37 @@ def _deploy(mode):
     restore runs in a finally on BOTH success and failure paths."""
     if not os.path.isdir(OMNI_STACK_DIR):
         raise RuntimeError(f"omni-stack not found at {OMNI_STACK_DIR}")
+    # Step 0.4 (hybrid): CI-consistency preflight. Hybrid must test EXACTLY the
+    # repo state CI (publish.yml) checks out: origin/main HEAD of omni-stack,
+    # omniagent, omni-dashboard, omni-plugins. If local checkouts differ
+    # (unpushed commits, uncommitted changes), hybrid tests different code than
+    # CI and a test can pass in one but fail in the other (the 49-E source
+    # audit drift). Fail fast: commit/push first, then verify.
+    if mode == "hybrid":
+        for _repo_dir in (OMNI_STACK_DIR, OMNIAGENT_DIR,
+                          os.path.join(WORKSPACE_DIR, "omni-dashboard"),
+                          REMOTE_REPO):
+            _repo = os.path.basename(_repo_dir.rstrip("/"))
+            subprocess.run(["git", "-C", _repo_dir, "fetch", "origin", "main"],
+                           capture_output=True, text=True)
+            _head = subprocess.run(["git", "-C", _repo_dir, "rev-parse", "HEAD"],
+                                   capture_output=True, text=True).stdout.strip()
+            _origin = subprocess.run(["git", "-C", _repo_dir, "rev-parse", "origin/main"],
+                                     capture_output=True, text=True).stdout.strip()
+            _dirty = subprocess.run(["git", "-C", _repo_dir, "status", "--porcelain"],
+                                    capture_output=True, text=True).stdout.strip()
+            if _head != _origin:
+                raise RuntimeError(
+                    f"[hybrid] {_repo} local HEAD {_head[:10]} != origin/main {_origin[:10]}: "
+                    f"hybrid must test the same repo state as CI. Push {_repo} to origin/main first."
+                )
+            if _dirty:
+                raise RuntimeError(
+                    f"[hybrid] {_repo} working tree not clean (git status --porcelain non-empty): "
+                    f"hybrid must test the same repo state as CI. Commit or stash the changes first."
+                )
+            print(f"  [hybrid] preflight ok: {_repo} @ origin/main {_origin[:10]} (clean)")
+
 
     # Step 0.5: Verify omni-stack is clean BEFORE touching anything ──
     # The stack dir is bind-mounted into the container, so state persists
