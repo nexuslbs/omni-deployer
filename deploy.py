@@ -254,14 +254,18 @@ def run_pretests(mode):
     print("=" * 60)
 
     if mode in ("ci", "hybrid"):
-        # Hybrid + CI: no separate pretests - the production Dockerfile's
+        # Hybrid + CI: no separate host pretests - the production Dockerfile's
         # builder stage runs the identical gates (fmt --check, check -D
         # warnings, clippy -D warnings, cargo test --release) during
-        # `docker build`. CI's build job already ran them (warm layered
-        # cache); re-running the same four cargo commands on the host with
-        # a cold cargo cache on the 2-core runner ballooned as the
-        # workspace grew (spill/compact/goal/cost/code-exec/prompt-sections)
-        # and pushed the job past the runner's time budget (>1h).
+        # `docker build`. In hybrid the omniagent image is built with
+        # --no-cache (Step 0b) so those builder RUN gates ALWAYS re-execute
+        # fresh, matching CI's cold builder on a fresh runner - a warm local
+        # layer cache used to mask a flaky test that CI then hit. Re-running
+        # the same four cargo commands on the host as well, with a cold cargo
+        # cache on the 2-core runner, ballooned as the workspace grew
+        # (spill/compact/goal/cost/code-exec/prompt-sections) and pushed the
+        # job past the runner's time budget (>1h), so the builder-stage run is
+        # the single gate in both modes.
         print("\n[pretests] Skipping (run via production Dockerfile build)...")
         return
 
@@ -704,6 +708,9 @@ def _deploy(mode):
     # the images MUST exist before `up`. All three are built with plain
     # `docker build -t <tag>` (no compose build sections in the base
     # compose; source builds live in the dev overlay). The omniagent build is
+    # done with --no-cache (see build_image): its builder-stage RUN gates must
+    # re-execute fresh, exactly like CI's cold builder - a warm cached builder
+    # layer would mask a flaky test that CI then hits (2026-08-30 incident).
     # the production Dockerfile whose builder stage runs fmt/check/clippy/
     # test offline against the committed .sqlx cache (the hybrid pretest
     # gate). The Dockerfile's OMNIAGENT_BUILD_MODE ARG defaults to dev (fail
@@ -711,7 +718,7 @@ def _deploy(mode):
     # guarded; the deploy env's OMNIAGENT_ALLOW_DB_WRITE=true (generate_env)
     # is the explicit escape hatch for the harness's own project DB.
     if mode == "hybrid":
-        def build_image(tag, dockerfile=None, context=None, service=None):
+        def build_image(tag, dockerfile=None, context=None, service=None, no_cache=False):
             if service is not None:
                 # Service has a build section in the compose file - let
                 # compose build it and tag per the service image:.
@@ -719,6 +726,18 @@ def _deploy(mode):
                 run_compose_check(compose, "build", service, label=f"{service} image build")
                 return
             cmd = ["docker", "build", "-t", tag]
+            if no_cache:
+                # HYBRID/CI CONSISTENCY (fix 2026-08-30): CI builds on a fresh
+                # runner with a COLD builder cache, so the builder stage's gates
+                # (fmt --check, check -D warnings, clippy -D warnings, cargo
+                # test --workspace --release) ALWAYS re-execute there. Hybrid
+                # previously reused the warm local layer cache: unchanged source
+                # hit the cached builder RUN layer and the tests did NOT re-run,
+                # so a flaky/timing-dependent test could pass in hybrid and fail
+                # in CI. --no-cache makes hybrid exercise EXACTLY the same
+                # fresh-builder gates as CI - a failure now appears in BOTH
+                # hybrid and CI, or in NEITHER.
+                cmd += ["--no-cache"]
             if dockerfile:
                 cmd += ["-f", dockerfile]
             cmd.append(context)
@@ -731,7 +750,8 @@ def _deploy(mode):
 
         build_image("local/omniagent:latest",
                     dockerfile=os.path.join(OMNIAGENT_DIR, "Dockerfile"),
-                    context=OMNIAGENT_DIR)
+                    context=OMNIAGENT_DIR,
+                    no_cache=True)
         build_image("local/omni-dashboard:latest",
                     context=os.path.join(WORKSPACE_DIR, "omni-dashboard"))
         build_image("local/omni-toolbox:latest",
