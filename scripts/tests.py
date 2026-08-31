@@ -13479,3 +13479,153 @@ test(test_49_explorer_git_box_bottom)
 print("GROUP 49: omni-dashboard UI/UX fixes - DB 502, custom selects, workflow options, hooks, templates, red cancel, plugin remove, explorer git box (task_18cd65247cfc4d9e)")
 
 sys.exit(0 if tests_fail == 0 else 1)
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GROUP 50: release push-tag version verification + dashboard Connected version
+#  (task_omnidev_dashboard_bottom_left_version_near)
+#  Covers the fail-fast contract of scripts/push-tag.py (omniagent Cargo.toml and
+#  omni-dashboard package.json must equal the tag, verified BEFORE any tag/push),
+#  the dashboard /api/health fallback fix (repo-root package.json, no stale "1.0.0"),
+#  and the "Connected · <version>" rendering sourced from /api/health.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import tempfile
+
+DEPLOYER_REPO = "/opt/workspace/omni-deployer"
+PUSH_TAG = os.path.join(DEPLOYER_REPO, "scripts", "push-tag.py")
+
+
+def _make_fixture_workspace(version):
+    """Create a throwaway workspace with fixture omniagent/Cargo.toml +
+    omni-dashboard/package.json (the layout push-tag.py expects)."""
+    ws = tempfile.mkdtemp(prefix="push-tag-test-")
+    agent_dir = os.path.join(ws, "omniagent")
+    dash_dir = os.path.join(ws, "omni-dashboard")
+    os.makedirs(agent_dir)
+    os.makedirs(dash_dir)
+    with open(os.path.join(agent_dir, "Cargo.toml"), "w", encoding="utf-8") as f:
+        f.write(f"""[package]
+name = "omniagent"
+version = "{version}"
+""")
+    with open(os.path.join(dash_dir, "package.json"), "w", encoding="utf-8") as f:
+        f.write(f"""{{
+  "name": "omni-dashboard",
+  "version": "{version}",
+  "private": true
+}}
+""")
+    return ws
+
+
+def test_50_push_tag_matching():
+    """50-A: push-tag with a matching tag verifies both versions and exits 0
+    (dry-run: no tags created or pushed)."""
+    ws = _make_fixture_workspace("0.1.3")
+    try:
+        r = sh(f"python3 {PUSH_TAG} 0.1.3 --dry-run --workspace {ws}")
+        assert r.returncode == 0, f"50-A: expected rc=0, got {r.returncode}: {r.stdout}{r.stderr}"
+        assert "OK: omniagent 0.1.3 == omni-dashboard 0.1.3 == tag 0.1.3" in r.stdout, \
+            f"50-A: OK line missing: {r.stdout}"
+        assert "dry-run" in r.stdout, f"50-A: dry-run marker missing: {r.stdout}"
+        print("  ✓ 50-A matching tag passes verification (rc=0)")
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+    print("PASS: 50-A push-tag matching versions")
+
+
+def test_50_push_tag_mismatch_aborts():
+    """50-B: a tag that does not match the versions aborts with a clear error
+    and non-zero exit (fail fast, before any tag/push)."""
+    ws = _make_fixture_workspace("0.1.3")
+    try:
+        r = sh(f"python3 {PUSH_TAG} 9.9.9 --dry-run --workspace {ws}")
+        assert r.returncode != 0, f"50-B: expected non-zero rc, got {r.returncode}: {r.stdout}"
+        err = r.stdout + r.stderr
+        assert "ERROR: push-tag aborted, version mismatch" in err, \
+            f"50-B: abort error missing: {err}"
+        assert "omniagent Cargo.toml version '0.1.3' != tag version '9.9.9'" in err, \
+            f"50-B: Cargo mismatch line missing: {err}"
+        assert "omni-dashboard package.json version '0.1.3' != tag version '9.9.9'" in err, \
+            f"50-B: package.json mismatch line missing: {err}"
+        print(f"  ✓ 50-B mismatched tag aborts with clear error (rc={r.returncode})")
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+    print("PASS: 50-B push-tag mismatch aborts")
+
+
+def test_50_push_tag_verify_before_any_git_op():
+    """50-C: the version verification runs BEFORE any git tag/push call
+    (fail-fast ordering inside main())."""
+    with open(PUSH_TAG, encoding="utf-8") as f:
+        src = f.read()
+    main_body = src.split("def main():", 1)[1].split('if __name__ == "__main__":', 1)[0]
+    i_verify = main_body.index("verify_versions(workspace, tag_version)")
+    i_tag = main_body.index('["git", "-C", repo_dir, "tag"')
+    i_push = main_body.index('["git", "-C", repo_dir, "push"')
+    assert i_verify < i_tag < i_push, \
+        f"50-C: verify (idx {i_verify}) must precede tag ({i_tag}) and push ({i_push}) in main()"
+    print("  ✓ 50-C verification precedes tag/push in push-tag.py main()")
+    print("PASS: 50-C fail-fast ordering")
+
+
+def test_50_dashboard_health_fallback():
+    """50-D: dashboard /api/health fallback reads the repo-root package.json
+    (defect fix a23f1ad) and never falls back to a hardcoded '1.0.0'."""
+    with open(os.path.join(DASHBOARD_REPO, "server", "routes", "health.ts"), encoding="utf-8") as f:
+        h = f.read()
+    assert 'join(__dirname, "..", "..", "package.json")' in h, \
+        "50-D: fallback must read repo-root package.json (two levels up)"
+    assert '"1.0.0"' not in h, "50-D: stale hardcoded '1.0.0' must not remain in health.ts"
+    assert '"unknown"' in h, "50-D: fallback must be 'unknown', not a stale version"
+    assert "/health" in h and "OMNIAGENT" in h, "50-D: must consume the omniagent /health endpoint"
+    print("  ✓ 50-D health.ts fallback reads repo-root package.json (no 1.0.0)")
+    print("PASS: 50-D dashboard health fallback (defect regression)")
+
+
+def test_50_dashboard_connected_version_renders():
+    """50-E: the bottom-left 'Connected' status renders the version returned
+    by /api/health ('Connected · <version>')."""
+    with open(os.path.join(DASHBOARD_REPO, "src", "index.ts"), encoding="utf-8") as f:
+        idx = f.read()
+    assert "fetch(`${API_BASE}/health`)" in idx, "50-E: version must be fetched from /api/health"
+    assert "Connected · ${data.version}" in idx, \
+        "50-E: status text must render 'Connected · <version>'"
+    print("  ✓ 50-E Connected status renders the health-endpoint version")
+    print("PASS: 50-E Connected · version rendering")
+
+
+def test_50_real_repos_versions_agree():
+    """50-F: the real omniagent Cargo.toml and omni-dashboard package.json
+    declare the SAME version (release contract), and a push-tag dry-run against
+    the real workspace passes with that version."""
+    with open(os.path.join("/opt/workspace/omniagent", "Cargo.toml"), encoding="utf-8") as f:
+        cargo = f.read()
+    m = re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.MULTILINE)
+    assert m, "50-F: version missing from omniagent Cargo.toml"
+    agent_ver = m.group(1)
+    with open(os.path.join("/opt/workspace/omni-dashboard", "package.json"), encoding="utf-8") as f:
+        pkg = json.load(f)
+    dash_ver = pkg.get("version")
+    assert dash_ver, "50-F: version missing from omni-dashboard package.json"
+    assert agent_ver == dash_ver, \
+        f"50-F: omniagent {agent_ver!r} != omni-dashboard {dash_ver!r}"
+    r = sh(f"python3 {PUSH_TAG} {agent_ver} --dry-run --workspace /opt/workspace")
+    assert r.returncode == 0, f"50-F: real push-tag dry-run failed: {r.stdout}{r.stderr}"
+    print(f"  ✓ 50-F real repos agree on {agent_ver} and push-tag dry-run passes")
+    print("PASS: 50-F real-repo version agreement")
+
+
+test(test_50_push_tag_matching)
+test(test_50_push_tag_mismatch_aborts)
+test(test_50_push_tag_verify_before_any_git_op)
+test(test_50_dashboard_health_fallback)
+test(test_50_dashboard_connected_version_renders)
+test(test_50_real_repos_versions_agree)
+print("GROUP 50: release push-tag version verification + dashboard Connected version (task_omnidev_dashboard_bottom_left_version_near)")
