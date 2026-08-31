@@ -2306,7 +2306,7 @@ def run_tests():
             ("cron_list-cron-jobs", {}, "cron"),
             ("docker_compose", {"command": "ps", "project_dir": _container_project_dir(s.omni_stack_dir)}, "NAME"),
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
-            ("filesystem_read", {"path": "/opt/workspace/omniagent/README.md"}, "OmniAgent"),
+            ("filesystem_read", {"path": "/opt/workspace/omniagent/Cargo.toml"}, "OmniAgent"),
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),
             ("git_run-command", {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]}, "git"),
             ("kanban_list-kanban-tasks", {}, "kanban"),
