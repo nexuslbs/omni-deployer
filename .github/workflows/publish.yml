@@ -304,6 +304,44 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "IS_TAG=$IS_TAG" >> $GITHUB_OUTPUT
 
+
+      # ── Fail-fast: release tag must match repo versions ──────────────
+      # Before ANY push or tag, verify omniagent Cargo.toml and
+      # omni-dashboard package.json versions equal the tag (v-stripped).
+      # Any mismatch aborts the publish job before anything is pushed.
+      - name: Checkout omniagent for version check
+        if: steps.version.outputs.IS_TAG == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: nexuslbs/omniagent
+          path: version-check-omniagent
+          ref: ${{ needs.build-omniagent.outputs.sha }}
+
+      - name: Checkout omni-dashboard for version check
+        if: steps.version.outputs.IS_TAG == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: nexuslbs/omni-dashboard
+          path: version-check-omni-dashboard
+          ref: ${{ needs.build-omni-dashboard.outputs.sha }}
+
+      - name: Verify release versions match tag
+        if: steps.version.outputs.IS_TAG == 'true'
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          AGENT_VER="$(grep -m1 '^version' version-check-omniagent/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          DASH_VER="$(python3 -c 'import json;print(json.load(open("version-check-omni-dashboard/package.json"))["version"])')"
+          if [ "$AGENT_VER" != "$TAG_VERSION" ]; then
+            echo "::error::omniagent Cargo.toml version ${AGENT_VER} != tag version ${TAG_VERSION}" >&2
+            exit 1
+          fi
+          if [ "$DASH_VER" != "$TAG_VERSION" ]; then
+            echo "::error::omni-dashboard package.json version ${DASH_VER} != tag version ${TAG_VERSION}" >&2
+            exit 1
+          fi
+          echo "OK: omniagent ${AGENT_VER} == omni-dashboard ${DASH_VER} == tag ${TAG_VERSION}"
       # ── Update omni-stack ───────────────────────────────────
       - name: Checkout omni-stack
         uses: actions/checkout@v4
