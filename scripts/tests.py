@@ -13778,4 +13778,100 @@ def test_51_redaction_tool():
 
 test(test_51_redaction_tool)
 
+
+
+# ---- GROUP 52: Platform-level env isolation (no ambient env leak to children) ----
+def test_52_env_leak_marker():
+    # 52: the agent's ambient env (including the /opt/omni/.env vars it loads
+    # for its own configuration) must NEVER reach spawned plugin/tool child
+    # processes. A marker var is put into the env file, the agent's env is
+    # hot-reloaded (which also respawns plugins as FRESH children), and every
+    # descendant process environment is asserted to NOT contain the marker.
+    # If the platform-level fix is missing, the respawned children inherit the
+    # marker and this test FAILS (deploy aborts).
+    import json as _json
+    import urllib.request as _urlreq
+    marker = "OMNIAGENT_ENV_LEAK_MARKER"
+    env_path = "/opt/omni/.env"
+    line = marker + "=leak"
+    prev = ""
+    if os.path.exists(env_path):
+        with open(env_path, encoding="utf-8") as _f:
+            prev = _f.read()
+    if line not in prev:
+        with open(env_path, "a", encoding="utf-8") as _f:
+            _f.write(os.linesep + line + os.linesep)
+    try:
+        # Hot-reload .env into the agent process env + respawn plugins so the
+        # children checked below are FRESH spawns made while the marker is in
+        # the agent's ambient env.
+        _req = _urlreq.Request(BASE + "/api/reload", data=b"", method="POST")
+        with _urlreq.urlopen(_req, timeout=30) as _resp:
+            _body = _json.loads(_resp.read().decode("utf-8", errors="replace"))
+        assert _body.get("success"), "52: /api/reload failed: " + str(_body)
+        _data = _body.get("data", {})
+        assert _data.get("env_vars_refreshed", 0) >= 1, (
+            "52: marker var not picked up by the env reload: " + str(_body))
+        _pl = _data.get("plugins", {})
+        assert _pl.get("started", 0) + _pl.get("stopped", 0) >= 1, (
+            "52: reload did not respawn any plugin: " + str(_body))
+        # Give the respawned children a moment to appear.
+        time.sleep(5)
+        # Enumerate every descendant of the agent process (pid 1) and assert
+        # its environment has NO marker var.
+        _children = {}
+        for _d in os.listdir("/proc"):
+            if not _d.isdigit():
+                continue
+            try:
+                with open("/proc/" + _d + "/stat", encoding="utf-8") as _f:
+                    _rest = _f.read().rsplit(")", 1)[1]
+                _ppid = int(_rest.split()[1])
+                _children.setdefault(_ppid, []).append(int(_d))
+            except Exception:
+                pass
+        _seen = set()
+        _queue = [1]
+        while _queue:
+            _p = _queue.pop(0)
+            if _p in _seen:
+                continue
+            _seen.add(_p)
+            for _c in _children.get(_p, []):
+                _queue.append(_c)
+        _desc = sorted(_seen - {1})
+        _leaked = []
+        _checked = 0
+        for _pid in _desc:
+            try:
+                with open("/proc/" + str(_pid) + "/environ", "rb") as _f:
+                    _env = _f.read().decode("utf-8", errors="replace")
+                _checked += 1
+                if marker + "=" in _env:
+                    _leaked.append(_pid)
+            except Exception:
+                pass
+        assert _checked >= 1, (
+            "52: no spawned child processes found to check (platform/MCP/"
+            "provider plugins must be running)")
+        assert not _leaked, (
+            "52: ENV LEAK - marker found in the environment of spawned child "
+            "process(es) pid " + str(_leaked) + ": the agent passes its ambient "
+            "env to tool/plugin children")
+        print("  ✓ checked " + str(_checked) + " spawned child processes; "
+              "none carries the marker var")
+    finally:
+        if prev:
+            with open(env_path, "w", encoding="utf-8") as _f:
+                _f.write(prev)
+        elif os.path.exists(env_path):
+            with open(env_path, encoding="utf-8") as _f:
+                _cur = _f.read()
+            _cur = _cur.replace(os.linesep + line + os.linesep, os.linesep)
+            _cur = _cur.replace(line + os.linesep, "")
+            with open(env_path, "w", encoding="utf-8") as _f:
+                _f.write(_cur)
+
+
+test(test_52_env_leak_marker)
 sys.exit(0 if tests_fail == 0 else 1)
