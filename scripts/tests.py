@@ -13478,7 +13478,7 @@ test(test_49_plugin_remove_non_builtin)
 test(test_49_explorer_git_box_bottom)
 print("GROUP 49: omni-dashboard UI/UX fixes - DB 502, custom selects, workflow options, hooks, templates, red cancel, plugin remove, explorer git box (task_18cd65247cfc4d9e)")
 
-sys.exit(0 if tests_fail == 0 else 1)
+
 
 
 
@@ -13777,3 +13777,5 @@ def test_51_redaction_tool():
 
 
 test(test_51_redaction_tool)
+
+sys.exit(0 if tests_fail == 0 else 1)
