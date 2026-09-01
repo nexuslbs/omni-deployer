@@ -13629,148 +13629,151 @@ test(test_50_dashboard_health_fallback)
 test(test_50_dashboard_connected_version_renders)
 test(test_50_real_repos_versions_agree)
 print("GROUP 50: release push-tag version verification + dashboard Connected version (task_omnidev_dashboard_bottom_left_version_near)")
-
-    # ── GROUP 51: Secret redaction via omni-plugins redaction tool ────────────
-    print("GROUP 51: Secret redaction - global redaction_tool setting + omni-plugins redaction plugin")
-
-
-    def _g51_put_setting(name, value):
-        """Write a global setting via PUT /settings and assert success."""
-        req = urllib.request.Request(
-            f"{BASE}/settings",
-            data=json.dumps({"updates": [{"name": name, "value": value}]}).encode(),
-            method="PUT",
-            headers={"Content-Type": "application/json"},
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
-        assert resp["status"] == "ok", f"PUT /settings {name}={value} failed: {resp}"
-        return resp
+# ── GROUP 51: Secret redaction via omni-plugins redaction tool ────────────
+print("GROUP 51: Secret redaction - global redaction_tool setting + omni-plugins redaction plugin")
 
 
-    def _g51_get_setting(name):
-        """Read a global setting value via GET /settings."""
-        r = urllib.request.urlopen(f"{BASE}/settings", timeout=10)
-        for cat in json.loads(r.read())["categories"]:
-            for s in cat["settings"]:
-                if s["name"] == name:
-                    return s["value"]
-        return None
+def _g51_put_setting(name, value):
+    """Write a global setting via PUT /settings and assert success."""
+    req = urllib.request.Request(
+        f"{BASE}/settings",
+        data=json.dumps({"updates": [{"name": name, "value": value}]}).encode(),
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    assert resp["status"] == "ok", f"PUT /settings {name}={value} failed: {resp}"
+    return resp
 
 
-    def _g51_mm_channel():
-        """Resolve the Mattermost 'setup' channel (the same channel every other
-        noop/test-tool-caller test uses) and return (channel_id, admin_token)."""
-        MM = "http://mattermost:8065"
-        admin_data = json.dumps({"login_id": "lucasbasquerotto",
-                                 "password": "Mattermost_Fresh_Start_1"}).encode()
-        admin_req = urllib.request.Request(
-            f"{MM}/api/v4/users/login", data=admin_data, method="POST",
-            headers={"Content-Type": "application/json"})
-        admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
-        team_resp = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{MM}/api/v4/users/me/teams",
+def _g51_get_setting(name):
+    """Read a global setting value via GET /settings."""
+    r = urllib.request.urlopen(f"{BASE}/settings", timeout=10)
+    for cat in json.loads(r.read())["categories"]:
+        for s in cat["settings"]:
+            if s["name"] == name:
+                return s["value"]
+    return None
+
+
+def _g51_mm_channel():
+    """Resolve the Mattermost 'setup' channel (the same channel every other
+    noop/test-tool-caller test uses) and return (channel_id, admin_token)."""
+    MM = "http://mattermost:8065"
+    admin_data = json.dumps({"login_id": "lucasbasquerotto",
+                             "password": "Mattermost_Fresh_Start_1"}).encode()
+    admin_req = urllib.request.Request(
+        f"{MM}/api/v4/users/login", data=admin_data, method="POST",
+        headers={"Content-Type": "application/json"})
+    admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
+    team_resp = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/users/me/teams",
+                               headers={"Authorization": f"Bearer {admin_token}"}),
+        timeout=10).read())
+    team_id = next((t["id"] for t in team_resp if t["name"] == "omni"), None)
+    assert team_id, "Cannot find 'omni' team"
+    channels = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels",
+                               headers={"Authorization": f"Bearer {admin_token}"}),
+        timeout=10).read())
+    ch = next((c["id"] for c in channels if c["name"] == "setup"), None)
+    assert ch, "Cannot find 'setup' channel"
+    return ch, admin_token
+
+
+def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=45):
+    """Post `text` to the channel and collect all NEW agent replies.
+
+    Returns the list of new post messages (excluding the post we just sent).
+    """
+    MM = "http://mattermost:8065"
+    before = json.loads(urllib.request.urlopen(
+        urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=10",
+                               headers={"Authorization": f"Bearer {admin_token}"}),
+        timeout=10).read())
+    max_create = max((p.get("create_at", 0) for p in before.get("posts", {}).values()), default=0)
+    post_body = json.dumps({"channel_id": mm_channel_id, "message": text}).encode()
+    urllib.request.urlopen(urllib.request.Request(
+        f"{MM}/api/v4/posts", data=post_body, method="POST",
+        headers={"Authorization": f"Bearer {admin_token}",
+                 "Content-Type": "application/json"}), timeout=10)
+    replies = []
+    deadline = time.time() + poll_timeout
+    while time.time() < deadline:
+        r = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=20",
                                    headers={"Authorization": f"Bearer {admin_token}"}),
             timeout=10).read())
-        team_id = next((t["id"] for t in team_resp if t["name"] == "omni"), None)
-        assert team_id, "Cannot find 'omni' team"
-        channels = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels",
-                                   headers={"Authorization": f"Bearer {admin_token}"}),
-            timeout=10).read())
-        ch = next((c["id"] for c in channels if c["name"] == "setup"), None)
-        assert ch, "Cannot find 'setup' channel"
-        return ch, admin_token
+        for p in r.get("posts", {}).values():
+            if p.get("create_at", 0) > max_create:
+                msg = p.get("message", "")
+                if msg and msg.strip() != text.strip() and msg not in replies:
+                    replies.append(msg)
+        if replies:
+            break
+        time.sleep(2)
+    return replies
 
 
-    def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=45):
-        """Post `text` to the channel and collect all NEW agent replies.
+def test_51_redaction_tool():
+    """Secret redaction: without a redaction tool the string is unchanged;
+    with redaction_redact configured the secret is replaced.
 
-        Returns the list of new post messages (excluding the post we just sent).
-        """
-        MM = "http://mattermost:8065"
-        before = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=10",
-                                   headers={"Authorization": f"Bearer {admin_token}"}),
-            timeout=10).read())
-        max_create = max((p.get("create_at", 0) for p in before.get("posts", {}).values()), default=0)
-        post_body = json.dumps({"channel_id": mm_channel_id, "message": text}).encode()
-        urllib.request.urlopen(urllib.request.Request(
-            f"{MM}/api/v4/posts", data=post_body, method="POST",
-            headers={"Authorization": f"Bearer {admin_token}",
-                     "Content-Type": "application/json"}), timeout=10)
-        replies = []
-        deadline = time.time() + poll_timeout
-        while time.time() < deadline:
-            r = json.loads(urllib.request.urlopen(
-                urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=20",
-                                       headers={"Authorization": f"Bearer {admin_token}"}),
-                timeout=10).read())
-            for p in r.get("posts", {}).values():
-                if p.get("create_at", 0) > max_create:
-                    msg = p.get("message", "")
-                    if msg and msg.strip() != text.strip() and msg not in replies:
-                        replies.append(msg)
-            if replies:
+    Uses the omni-plugins redaction plugin (python, tools/redaction) and the
+    noop/test-tool-caller channel: the provider echoes the posted message, so
+    the delivered reply carries the fake secret and the delivery-path
+    redaction (enqueue_delivery -> configured redaction tool) is observable.
+    """
+    import shutil
+    FAKE_SECRET = "sk-test1234567890abcdefgh1234567890"
+    TOOL = "redaction_redact"
+    MM_DELAY = 2  # seconds between polls
+
+    # 1. Install the redaction plugin (bundled) from omni-plugins and enable it.
+    ensure_bundled_plugin("redaction", "tools")
+    yaml_set("tools", "redaction", {"enabled": False, "source": "bundled", "config": {}})
+    resp = api_post_body("/plugins/tools/bundled/redaction/enable", {}, timeout=60)
+    assert resp.get("success"), f"enable redaction plugin failed: {resp}"
+    registered = False
+    for _ in range(15):
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
+            tools_data = json.loads(r.read())
+            tools = tools_data if isinstance(tools_data, list) else \
+                (tools_data.get("tools") or tools_data.get("data") or [])
+            if any(TOOL in (t.get("full_name") or t.get("name") or "") for t in tools):
+                registered = True
                 break
-            time.sleep(2)
-        return replies
+        except Exception:
+            pass
+        time.sleep(MM_DELAY)
+    assert registered, "redaction_redact tool did not register after enable"
+
+    mm_channel_id, admin_token = _g51_mm_channel()
+
+    # 2. Case A: redaction_tool empty (default) -> no redaction (unchanged).
+    _g51_put_setting("redaction_tool", "")
+    assert _g51_get_setting("redaction_tool") == "", \
+        "redaction_tool must default to empty"
+    replies_a = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET)
+    assert replies_a, "case A: no agent reply received"
+    assert any(FAKE_SECRET in r for r in replies_a), \
+        f"case A: secret must be unchanged when no redaction tool is set, replies={replies_a!r}"
+    print(f"  [case A OK: no redaction tool -> secret unchanged ({len(replies_a)} reply(es))]")
+
+    # 3. Case B: redaction_tool set -> redaction applied by the plugin.
+    _g51_put_setting("redaction_tool", TOOL)
+    replies_b = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET)
+    assert replies_b, "case B: no agent reply received"
+    assert not any(FAKE_SECRET in r for r in replies_b), \
+        f"case B: secret must be redacted when redaction tool is set, replies={replies_b!r}"
+    assert any("[REDACTED" in r for r in replies_b), \
+        f"case B: redaction mask missing from delivered reply, replies={replies_b!r}"
+    print(f"  [case B OK: redaction_redact -> secret replaced by [REDACTED ...] ({len(replies_b)} reply(es))]")
+
+    # 4. Restore the default (empty = no redaction).
+    _g51_put_setting("redaction_tool", "")
+    print("PASS: redaction - no tool = unchanged; redaction_redact = redacted; setting restored")
 
 
-    def test_51_redaction_tool():
-        """Secret redaction: without a redaction tool the string is unchanged;
-        with redaction_redact configured the secret is replaced.
-
-        Uses the omni-plugins redaction plugin (python, tools/redaction) and the
-        noop/test-tool-caller channel: the provider echoes the posted message, so
-        the delivered reply carries the fake secret and the delivery-path
-        redaction (enqueue_delivery -> configured redaction tool) is observable.
-        """
-        import shutil
-        FAKE_SECRET = "sk-test1234567890abcdefgh1234567890"
-        TOOL = "redaction_redact"
-        MM_DELAY = 2  # seconds between polls
-
-        # 1. Install the redaction plugin (bundled) from omni-plugins and enable it.
-        ensure_bundled_plugin("redaction", "tools")
-        yaml_set("tools", "redaction", {"enabled": False, "source": "bundled", "config": {}})
-        resp = api_post_body("/plugins/tools/bundled/redaction/enable", {}, timeout=60)
-        assert resp.get("success"), f"enable redaction plugin failed: {resp}"
-        registered = False
-        for _ in range(15):
-            try:
-                r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
-                tools_data = json.loads(r.read())
-                tools = tools_data if isinstance(tools_data, list) else                     (tools_data.get("tools") or tools_data.get("data") or [])
-                if any(TOOL in (t.get("full_name") or t.get("name") or "") for t in tools):
-                    registered = True
-                    break
-            except Exception:
-                pass
-            time.sleep(MM_DELAY)
-        assert registered, "redaction_redact tool did not register after enable"
-
-        mm_channel_id, admin_token = _g51_mm_channel()
-
-        # 2. Case A: redaction_tool empty (default) -> no redaction (unchanged).
-        _g51_put_setting("redaction_tool", "")
-        assert _g51_get_setting("redaction_tool") == "",             "redaction_tool must default to empty"
-        replies_a = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET)
-        assert replies_a, "case A: no agent reply received"
-        assert any(FAKE_SECRET in r for r in replies_a),             f"case A: secret must be unchanged when no redaction tool is set, replies={replies_a!r}"
-        print(f"  [case A OK: no redaction tool -> secret unchanged ({len(replies_a)} reply(es))]")
-
-        # 3. Case B: redaction_tool set -> redaction applied by the plugin.
-        _g51_put_setting("redaction_tool", TOOL)
-        replies_b = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET)
-        assert replies_b, "case B: no agent reply received"
-        assert not any(FAKE_SECRET in r for r in replies_b),             f"case B: secret must be redacted when redaction tool is set, replies={replies_b!r}"
-        assert any("[REDACTED" in r for r in replies_b),             f"case B: redaction mask missing from delivered reply, replies={replies_b!r}"
-        print(f"  [case B OK: redaction_redact -> secret replaced by [REDACTED ...] ({len(replies_b)} reply(es))]")
-
-        # 4. Restore the default (empty = no redaction).
-        _g51_put_setting("redaction_tool", "")
-        print("PASS: redaction - no tool = unchanged; redaction_redact = redacted; setting restored")
-
-
-    test(test_51_redaction_tool)
-    
+test(test_51_redaction_tool)
