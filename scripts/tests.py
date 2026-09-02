@@ -54,6 +54,13 @@ test_timings = []
 BASE = "http://localhost:8080"
 DASHBOARD = "http://dashboard:3001"
 WORKSPACE = "/opt/workspace/omni-stack"
+
+# The agent's runtime data dir. tests.py runs INSIDE the omniagent container;
+# direct file/YAML assertions must target the agent's OWN tree ($OMNI_DIR),
+# which in dev deploys is /opt/omni-stack - NOT the checkout mount
+# (/opt/workspace/omni-stack is mounted at /opt/omni in the container). Fall
+# back to WORKSPACE for environments where OMNI_DIR is unset.
+DATA_DIR = os.environ.get("OMNI_DIR", WORKSPACE)
 REMOTE_REPO = "/opt/workspace/omni-plugins"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -209,7 +216,7 @@ def put_json(path, body=None):
 # ═══════════════════════════════════════════════════════════════════════
 
 def read_plugins_yml():
-    with open(f"{WORKSPACE}/config/plugins.yml") as f:
+    with open(f"{DATA_DIR}/config/plugins.yml") as f:
         content = f.read()
     lines = content.split("\n")
     sections, section, name, entry = {}, None, None, None
@@ -284,7 +291,7 @@ def write_plugins_yml(data):
                     lines.append(f"    {k}: {v}")
         lines.append("")
     content = "\n".join(lines)
-    with open(f"{WORKSPACE}/config/plugins.yml", "w") as f:
+    with open(f"{DATA_DIR}/config/plugins.yml", "w") as f:
         f.write(content)
 
 def yaml_get(entry_type, name):
@@ -308,7 +315,7 @@ def yaml_has(entry_type, name):
     return yaml_get(entry_type, name) is not None
 
 def read_remote_yml():
-    r = sh(f"cat {WORKSPACE}/config/remote.yml")
+    r = sh(f"cat {DATA_DIR}/config/remote.yml")
     data = {"tools": {}, "platforms": {}, "providers": {}}
     section = None
     for line in r.stdout.split("\n"):
@@ -360,21 +367,21 @@ def mkdir_p(path):
 # The .bak file is the per-test contract: do not nest backup/restore.
 
 def backup_plugins_yml():
-    shutil.copy2(f"{WORKSPACE}/config/plugins.yml", f"{WORKSPACE}/config/plugins.yml.bak")
+    shutil.copy2(f"{DATA_DIR}/config/plugins.yml", f"{DATA_DIR}/config/plugins.yml.bak")
 
 def restore_plugins_yml():
-    bak = f"{WORKSPACE}/config/plugins.yml.bak"
+    bak = f"{DATA_DIR}/config/plugins.yml.bak"
     if os.path.exists(bak):
-        shutil.copy2(bak, f"{WORKSPACE}/config/plugins.yml")
+        shutil.copy2(bak, f"{DATA_DIR}/config/plugins.yml")
         os.remove(bak)
 
 def backup_remote_yml():
-    shutil.copy2(f"{WORKSPACE}/config/remote.yml", f"{WORKSPACE}/config/remote.yml.bak")
+    shutil.copy2(f"{DATA_DIR}/config/remote.yml", f"{DATA_DIR}/config/remote.yml.bak")
 
 def restore_remote_yml():
-    bak = f"{WORKSPACE}/config/remote.yml.bak"
+    bak = f"{DATA_DIR}/config/remote.yml.bak"
     if os.path.exists(bak):
-        shutil.copy2(bak, f"{WORKSPACE}/config/remote.yml")
+        shutil.copy2(bak, f"{DATA_DIR}/config/remote.yml")
         os.remove(bak)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -393,12 +400,12 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
     NOTE: there is NO omni-stack git fallback - omni-stack is a seed repo and
     tracks zero plugins, so there is nothing to restore from its git history.
     """
-    target = f"{WORKSPACE}/plugins/{plugin_type}/{name}"
+    target = f"{DATA_DIR}/plugins/{plugin_type}/{name}"
     if exists(target):
         return  # already exists
 
     # Try .remote/ source (remote→bundled collision tests)
-    remote_src = f"{WORKSPACE}/plugins/{plugin_type}/.remote/{name}/{plugin_type}/{name}"
+    remote_src = f"{DATA_DIR}/plugins/{plugin_type}/.remote/{name}/{plugin_type}/{name}"
     if exists(remote_src):
         shutil.copytree(remote_src, target, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("target"))
@@ -407,7 +414,7 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
     # Try local omni-plugins repo (used for remote plugin installs)
     repo_src = f"{REMOTE_REPO}/{plugin_type}/{name}"
     if exists(repo_src):
-        mkdir_p(f"{WORKSPACE}/plugins/{plugin_type}")
+        mkdir_p(f"{DATA_DIR}/plugins/{plugin_type}")
         cp(repo_src, target, recursive=True)
         return
 
@@ -418,7 +425,7 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
 
 def remove_bundled_plugin(name, plugin_type="tools"):
     """Remove a bundled plugin directory we created temporarily."""
-    target = f"{WORKSPACE}/plugins/{plugin_type}/{name}"
+    target = f"{DATA_DIR}/plugins/{plugin_type}/{name}"
     if exists(target):
         rm_rf(target)
 
@@ -737,7 +744,7 @@ def test_a1():
 def test_a2():
     """Bundled plugin with NO YAML entry → succeed, YAML unchanged, disk removed"""
     plugin, ptype = "cosmos-rust-tool", "tools"
-    plugin_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
+    plugin_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
 
     backup_plugins_yml()
     try:
@@ -760,7 +767,7 @@ def test_a2():
 def test_a3():
     """Remote plugin with NO YAML entry → succeed, YAML unchanged, .remote/ removed"""
     plugin, ptype = "test-rust-tool", "tools"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
 
     backup_plugins_yml()
     backup_remote_yml()
@@ -804,7 +811,7 @@ def test_b1():
 def test_b2():
     """Bundled plugin WITH YAML entry → succeed, YAML + disk removed"""
     plugin, ptype = "test-b2", "tools"
-    plugin_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
+    plugin_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
     plugin_json_path = f"{plugin_dir}/plugin.json"
 
     # Create a self-contained test plugin (not tracked in git)
@@ -837,7 +844,7 @@ def test_b2():
 def test_b3():
     """Remote plugin WITH YAML entry → succeed, YAML + .remote/ removed"""
     plugin, ptype = "test-python", "tools"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
 
     ensure_remote_plugin(plugin, ptype)
 
@@ -871,7 +878,7 @@ def test_c1():
 
     # Safety check: plugin must not exist anywhere (just check omni-stack paths)
     for t in ["tools", "platforms", "providers"]:
-        p = f"{WORKSPACE}/plugins/{t}/{plugin}"
+        p = f"{DATA_DIR}/plugins/{t}/{plugin}"
         assert not os.path.exists(p), f"Plugin '{plugin}' exists at {p}: test would fail!"
 
     backup_plugins_yml()
@@ -892,7 +899,7 @@ def test_c1():
 def test_d1():
     """Bundled provider WITH YAML entry → succeed, YAML + disk removed"""
     plugin, ptype = "noop-full", "providers"
-    plugin_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
+    plugin_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
 
     ensure_bundled_plugin(plugin, ptype)
 
@@ -916,7 +923,7 @@ def test_d1():
 def test_d2():
     """Bundled provider with NO YAML entry → succeed, YAML unchanged, disk removed"""
     plugin, ptype = "noop-full", "providers"
-    plugin_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
+    plugin_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
 
     backup_plugins_yml()
     try:
@@ -940,7 +947,7 @@ def test_d2():
 def test_e1():
     """Bundled platform WITH YAML entry → succeed, YAML + disk removed"""
     plugin, ptype = "test-rust", "platforms"
-    plugin_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
+    plugin_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
 
     ensure_bundled_plugin(plugin, ptype)
 
@@ -963,7 +970,7 @@ def test_e1():
 def test_e2():
     """Bundled platform with NO YAML entry → succeed, YAML unchanged, disk removed"""
     plugin, ptype = "test-rust", "platforms"
-    plugin_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
+    plugin_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
 
     backup_plugins_yml()
     try:
@@ -986,8 +993,8 @@ def test_e2():
 def test_f1():
     """Same name bundled+remote, YAML source=bundled → removes bundled only"""
     plugin, ptype = "test-rust-tool", "tools"
-    bundled_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    bundled_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
 
     ensure_remote_plugin(plugin, ptype)
     ensure_bundled_plugin(plugin, ptype)
@@ -1019,8 +1026,8 @@ def test_f1():
 def test_f2():
     """Same name bundled+remote, YAML source=remote → removes remote only"""
     plugin, ptype = "test-python", "tools"
-    bundled_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    bundled_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
 
     ensure_remote_plugin(plugin, ptype)
     ensure_bundled_plugin(plugin, ptype)
@@ -2672,7 +2679,7 @@ def test_m9_cleanup():
 def test_t8_add_remote_new():
     """Add a new remote plugin (not in remote.yml) -> adds to remote.yml + .remote/ dir"""
     plugin, ptype = "test-add-new", "tools"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
     backup_remote_yml()
     try:
         if os.path.exists(remote_dir): shutil.rmtree(remote_dir)
@@ -2696,7 +2703,7 @@ def test_t8_add_remote_new():
 def test_t8_add_remote_duplicate():
     """Add a remote plugin already in remote.yml -> succeeds (overwrite)"""
     plugin, ptype = "test-add-dup", "tools"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
     backup_remote_yml()
     try:
         if os.path.exists(remote_dir): shutil.rmtree(remote_dir)
@@ -2717,8 +2724,8 @@ def test_t8_add_remote_duplicate():
 def test_t8_remove_bundled_remote_yml_unchanged():
     """Remove a bundled plugin -> remote.yml UNCHANGED even with same-name remote exists"""
     plugin, ptype = "test-rust-tool", "tools"
-    bundled_dir = f"{WORKSPACE}/plugins/{ptype}/{plugin}"
-    remote_dir = f"{WORKSPACE}/plugins/{ptype}/.remote/{plugin}"
+    bundled_dir = f"{DATA_DIR}/plugins/{ptype}/{plugin}"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{plugin}"
     backup_plugins_yml()
     backup_remote_yml()
     try:
@@ -13812,10 +13819,22 @@ def test_52_env_leak_marker():
         _data = _body.get("data", {})
         assert _data.get("env_vars_refreshed", 0) >= 1, (
             "52: marker var not picked up by the env reload: " + str(_body))
-        _pl = _data.get("plugins", {})
-        assert _pl.get("started", 0) + _pl.get("stopped", 0) >= 1, (
-            "52: reload did not respawn any plugin: " + str(_body))
-        # Give the respawned children a moment to appear.
+        # Tool plugins hot-reload WITHOUT respawning their subprocess, so the
+        # reload alone may start/stop 0 plugin processes. Force the agent to
+        # spawn a FRESH child while the marker is in its ambient env: install
+        # the test-rust-tool remote plugin - the install flow spawns its MCP
+        # server subprocess as a new child. With the platform fix (children
+        # spawned with an EMPTY environment) the fresh child cannot carry the
+        # marker; without it the child inherits the marker and the test FAILS.
+        _setup = api_post_json(
+            "/plugins/install-git",
+            {"url": "https://github.com/nexuslbs/omni-plugins.git",
+             "path": "tools/test-rust-tool", "name": "test-rust-tool"},
+        )
+        assert _setup.get("success"), "52: install-git failed: " + str(_setup)
+        _inst = api_post("/plugins/tools/remote/test-rust-tool/install")
+        assert _inst.get("success"), "52: install failed: " + str(_inst)
+        # Give the freshly spawned child a moment to appear.
         time.sleep(5)
         # Enumerate every descendant of the agent process (pid 1) and assert
         # its environment has NO marker var.
