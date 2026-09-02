@@ -4998,6 +4998,101 @@ services:
         except Exception:
             pass
         print("[G17b cleaned up]")
+def test_fn_17c_parallel_filesystem():
+    """Hammer the filesystem MCP tools (read/list/search/info/grep) in parallel.
+
+    Regression test for the Sep 2026 filesystem tool timeouts: every
+    filesystem handler is synchronous std::fs work (whole-file reads before
+    slicing, read_dir listings, glob and recursive grep walks of any tree),
+    and the filesystem plugin's local `soft_error` wrapper used to run that
+    work INLINE on a tokio worker thread. A slow call (large file, deep tree
+    walk, slow/hung mount) held a worker hostage - it could NOT be
+    interrupted by dropping the handler future on client timeout/cancellation
+    - and enough concurrent slow calls saturated every worker, wedging the
+    whole plugin so every filesystem MCP call timed out. The fix routes each
+    sync handler body through tokio::task::spawn_blocking (the blocking
+    pool), keeping the async runtime responsive and calls parallel.
+
+    Assertions: N mixed parallel filesystem calls (including paged reads of a
+    ~650KB file and recursive searches) ALL complete successfully, and the
+    wall time stays well under serial-execution time - a serial/blocking
+    plugin queues or times out instead.
+    """
+    import urllib.request, urllib.error, time, json, concurrent.futures, os
+
+    def execute(name, arguments, timeout=60):
+        d = json.dumps({"name": name, "arguments": arguments}).encode()
+        req = urllib.request.Request(f"{BASE}/mcp/execute", data=d, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        t0 = time.time()
+        try:
+            resp = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+            elapsed = time.time() - t0
+            ok = bool(resp.get("success")) and not resp.get("is_error", False)
+            return (elapsed, ok, str(resp)[:150])
+        except Exception as e:
+            return (time.time() - t0, False, str(e))
+
+    BIG_FILE = "/opt/workspace/omni-deployer/scripts/tests.py"
+    assert os.path.exists(BIG_FILE), f"test fixture missing: {BIG_FILE}"
+
+    # Warmup: one call per tool, each must return promptly and succeed.
+    warmups = [
+        ("filesystem_read", {"path": BIG_FILE, "limit": 5000}),
+        ("filesystem_list", {"path": "/opt/workspace/omni-deployer"}),
+        ("filesystem_info", {"path": BIG_FILE}),
+        ("filesystem_search", {"path": "/opt/workspace/omni-deployer/scripts", "pattern": "tests.py"}),
+        ("filesystem_grep", {"path": "/opt/workspace/omni-deployer/scripts",
+                             "pattern": "def test_fn_17", "glob": "tests.py", "max_results": 20}),
+    ]
+    for name, args in warmups:
+        elapsed, ok, detail = execute(name, args)
+        assert ok, f"warmup {name} failed: {detail}"
+        print(f"  [warmup {name}: {elapsed:.2f}s]")
+
+    # Parallel phase: 3 rounds of mixed calls; each round interleaves paged
+    # whole-file reads (652KB file) with listings/info and adds a recursive
+    # search + regex grep. Catches a plugin that wedges after N concurrent
+    # requests or serializes long calls.
+    calls = []
+    for _ in range(3):
+        for _ in range(5):
+            calls.append(("filesystem_read", {"path": BIG_FILE, "limit": 20000}))
+            calls.append(("filesystem_list", {"path": "/opt/workspace/omni-deployer"}))
+            calls.append(("filesystem_info", {"path": BIG_FILE}))
+        calls.append(("filesystem_search", {"path": "/opt/workspace/omniagent",
+                                            "pattern": "**/*.rs"}))
+        calls.append(("filesystem_grep", {"path": "/opt/workspace/omni-deployer/scripts",
+                                          "pattern": "test_fn_", "glob": "tests.py",
+                                          "max_results": 50}))
+    N = len(calls)
+
+    def do_call(item):
+        name, args = item
+        elapsed, ok, detail = execute(name, args)
+        return (name, elapsed, ok, detail)
+
+    total_start = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=N) as executor:
+        futures = [executor.submit(do_call, c) for c in calls]
+        done, not_done = concurrent.futures.wait(futures, timeout=90)
+    total_elapsed = time.time() - total_start
+
+    failed = [f.result() for f in done if not f.result()[2]]
+    print(f"[G17c: {len(done)}/{N} done, {len(not_done)} not done, "
+          f"{len(failed)} failed, duration {total_elapsed:.1f}s]")
+    assert not not_done, \
+        f"{len(not_done)} of {N} parallel filesystem calls did not complete (timed out)"
+    assert not failed, f"{len(failed)} parallel filesystem calls failed: {failed[:3]}"
+    # 45 fast calls + 6 recursive searches run concurrently; a blocking/serial
+    # plugin would queue them (or time out). Bound is generous for a loaded host.
+    assert total_elapsed < 60, (
+        f"Duration {total_elapsed:.1f}s >= 60s for {N} parallel filesystem calls - "
+        f"plugin server is serial/blocking (calls queued or timed out)"
+    )
+    print(f"[G17c PASSED: {N} parallel filesystem calls completed in {total_elapsed:.1f}s]")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════════
@@ -5726,6 +5821,12 @@ print("GROUP 17B: Parallel docker_compose exec 50 x 30s (concurrent, <60s)")
 print(f"{'=' * 60}")
 
 test(test_fn_17b_parallel_docker_compose)
+
+print(f"\n{'=' * 60}")
+print("GROUP 17C: Parallel filesystem MCP calls (read/list/search/info/grep)")
+print(f"{'=' * 60}")
+
+test(test_fn_17c_parallel_filesystem)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 18: Multi-source Platform Plugin Tests (Python, JS, Rust)
