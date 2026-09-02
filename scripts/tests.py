@@ -13792,7 +13792,7 @@ def test_52_env_leak_marker():
     import json as _json
     import urllib.request as _urlreq
     marker = "OMNIAGENT_ENV_LEAK_MARKER"
-    env_path = "/opt/omni/.env"
+    env_path = os.path.join(os.environ.get("OMNI_DIR", "/opt/omni"), ".env")
     line = marker + "=leak"
     prev = ""
     if os.path.exists(env_path):
