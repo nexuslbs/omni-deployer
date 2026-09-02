@@ -6196,6 +6196,70 @@ def test_23_4_remove_remote_plugins():
 
 test(test_23_4_remove_remote_plugins)
 
+def test_23_5_ci_foreign_owner_mirror_clone():
+    """CI parity regression (v0.1.7): install-git from a file:// repo owned
+    by a NON-root uid must succeed.
+
+    CI checkouts (actions/checkout on a GitHub runner) are owned by the
+    runner uid (1001) while the omniagent container runs git as root. The
+    installer's mirror-clone step (git clone --mirror file://...) must
+    tolerate that ownership delta (git 2.35+ dubious-ownership guard) via
+    the image's system gitconfig safe.directory=*. Hybrid (/opt/workspace
+    owned by root) never exercises this delta, so this test simulates CI:
+    copy the source repo, chown the copy to uid 1001, and install-git from
+    the file:// copy. Pre-fix this fails in hybrid AND CI (exit 128);
+    post-fix it passes in both.
+    """
+    import subprocess, tempfile
+    if os.geteuid() != 0:
+        print("  [SKIP test_23_5: not running as root]")
+        return
+    if not os.path.isdir("/opt/workspace/omni-plugins"):
+        print("  [SKIP test_23_5: no local omni-plugins checkout]")
+        return
+    tmpdir = tempfile.mkdtemp(prefix="g235-")
+    name, ptype = "test-owner-parity", "tools"
+    remote_dir = f"{DATA_DIR}/plugins/{ptype}/.remote/{name}"
+    try:
+        # Minimal standalone git repo with a tools plugin (self-contained;
+        # content is irrelevant - the parity condition is the OWNERSHIP of
+        # the source repo, exactly like the CI checkout).
+        repo = os.path.join(tmpdir, "repo")
+        os.makedirs(f"{repo}/tools/test-js-tool")
+        with open(f"{repo}/tools/test-js-tool/plugin.json", "w") as f:
+            f.write('{"name":"test-js-tool","version":"1.0.0","type":"mcp",'
+                    '"description":"parity","entrypoint":{"command":"echo",'
+                    '"args":["hi"],"transport":"stdio"},"config_schema":[]}')
+        sh(f"cd {repo} && git init -q -b main && "
+           "git config user.email omni@test && git config user.name omni && "
+           "git add -A && git commit -qm init")
+        subprocess.run(["chown", "-R", "1001:1001", repo], check=True)
+
+        backup_remote_yml()
+        backup_plugins_yml()
+        if os.path.exists(remote_dir):
+            shutil.rmtree(remote_dir)
+        if remote_yml_has(name, ptype):
+            remove_remote_plugin(name, ptype)
+        api_post_body("/plugins/install-git", {
+            "url": f"file://{repo}",
+            "name": name,
+            "path": "tools/test-js-tool",
+        }, timeout=120)
+        assert os.path.exists(remote_dir), f".remote dir not created: {remote_dir}"
+        assert remote_yml_has(name, ptype), "remote.yml missing parity plugin"
+        print("  [test_23_5: file:// mirror clone from uid-1001-owned repo OK]")
+    finally:
+        remove_remote_plugin(name, ptype)
+        restore_remote_yml()
+        restore_plugins_yml()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        restart_agent()
+
+
+test(test_23_5_ci_foreign_owner_mirror_clone)
+
+
 # ===========================================================================
 # GROUP 24: regression tests for (1) prompt compaction keeping a content
 # excerpt of drained tool results, and (2) filesystem_read offset/limit

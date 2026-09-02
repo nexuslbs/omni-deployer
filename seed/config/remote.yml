@@ -30,7 +30,7 @@ tools:
     url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/paperclip
   test-rust-tool:
-    url: file:///opt/workspace/omni-plugins
+    url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/test-rust-tool
 platforms:
   telegram:
