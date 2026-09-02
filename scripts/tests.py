@@ -53,7 +53,12 @@ test_timings = []
 
 BASE = "http://localhost:8080"
 DASHBOARD = "http://dashboard:3001"
-WORKSPACE = "/opt/workspace/omni-stack"
+WORKSPACE = os.environ.get("OMNI_DIR", "/opt/workspace/omni-stack")
+
+# The source checkout (host repo mounted in the container). Used only for
+# source-audit reads (docker-compose files) and git hygiene - never for the
+# agent's runtime state.
+CHECKOUT = "/opt/workspace/omni-stack"
 
 # The agent's runtime data dir. tests.py runs INSIDE the omniagent container;
 # direct file/YAML assertions must target the agent's OWN tree ($OMNI_DIR),
@@ -1703,7 +1708,7 @@ def test_dashboard_plugin_filters():
 #  Git hygiene
 # ═══════════════════════════════════════════════════════════════════════
 
-OMNI_STACK_DIR = WORKSPACE
+OMNI_STACK_DIR = CHECKOUT
 
 def _git_status(repo_dir):
     """Return unstaged changes as a string, or empty string if clean."""
@@ -10217,7 +10222,7 @@ def _g34_prepare():
     # Scratch dir for the SSH harness. NEVER pollute the workspace root:
     # WORKSPACE/.. (=/opt/workspace) accumulates g34-tmp-* dirs on every run.
     # Use the sanctioned scratch area /opt/workspace/tmp/ instead.
-    _g34_BASE = f"{WORKSPACE}/../tmp/g34-tmp-{uuid.uuid4().hex[:8]}"
+    _g34_BASE = f"{CHECKOUT}/../tmp/g34-tmp-{uuid.uuid4().hex[:8]}"
     os.makedirs(_g34_BASE, exist_ok=True)
     _g34_SSHD = _g34_ensure_sshd()
     if _g34_SSHD is not None and _g34_devnull_usable():
@@ -10597,7 +10602,7 @@ def test_36_compose_service():
     """36-A: docker-compose.yml defines the paperclip service: image pinned
     to sha-e55d702 (NOT latest), profiles ['paperclip','all'], expose 3100,
     volume paperclip-data:/paperclip, required env vars."""
-    with open(f"{WORKSPACE}/docker-compose.yml", encoding="utf-8") as f:
+    with open(f"{CHECKOUT}/docker-compose.yml", encoding="utf-8") as f:
         txt = f.read()
     assert "paperclip:" in txt, "paperclip service missing from docker-compose.yml"
     assert "ghcr.io/paperclipai/paperclip:sha-e55d702" in txt, \
@@ -10621,7 +10626,7 @@ def test_36_compose_service():
 def test_36_dev_overlay():
     """36-B: docker-compose.dev.yml publishes paperclip UI host port
     3101 -> container 3100 (mattermost-style dev host port)."""
-    with open(f"{WORKSPACE}/docker-compose.dev.yml", encoding="utf-8") as f:
+    with open(f"{CHECKOUT}/docker-compose.dev.yml", encoding="utf-8") as f:
         txt = f.read()
     assert "paperclip:" in txt, "paperclip missing from dev overlay"
     assert "3101:3100" in txt, "dev overlay must map 3101:3100"
@@ -13826,7 +13831,7 @@ def test_52_env_leak_marker():
         # server subprocess as a new child. With the platform fix (children
         # spawned with an EMPTY environment) the fresh child cannot carry the
         # marker; without it the child inherits the marker and the test FAILS.
-        _setup = api_post_json(
+        _setup = api_post_body(
             "/plugins/install-git",
             {"url": "https://github.com/nexuslbs/omni-plugins.git",
              "path": "tools/test-rust-tool", "name": "test-rust-tool"},
