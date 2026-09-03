@@ -1,0 +1,342 @@
+# Vector test suite for the remap_logs transform (services/vector/transforms.toml).
+#
+# This file is a FRAGMENT: run_tests.sh concatenates it AFTER the real
+# transforms.toml into one combined config, so the suite always exercises the
+# shipped pipeline (no copy, no drift). It is NOT copied by the Dockerfile
+# (which copies only sources/transforms/sinks.toml), so it never ships in the
+# image.
+#
+# Covers the fix: for non-JSON container log lines, _my_level/_stream/_stream_path
+# are derived from the level token in the message (regex \b(DEBUG|INFO|WARN|ERROR|CRITICAL)\b)
+# instead of blindly trusting journald PRIORITY. JSON lines stay unchanged; lines
+# without a level token fall back to the PRIORITY-based behavior.
+#
+# Notes on the harness (vector 0.55 test mode):
+#   - sources/sinks are stripped and replaced by per-transform test sources, so
+#     insert_at/extract_from must target the transform name (remap_logs).
+#   - input type "raw" only sets the message (log_fields are ignored);
+#     use type "log" with log_fields to inject journald/GELF fields (message
+#     must be given as one of the log_fields).
+#   - Fallback expectations below document the CURRENT (pre-fix) behavior:
+#     VRL int() does not coerce "6"/"3" so the section-3 normalization is
+#     skipped and the raw PRIORITY string stays in .level; streams still come
+#     from to_int(PRIORITY). The fix must not change these cases.
+
+# --- Non-JSON journald container log: ERROR token must override PRIORITY=6 ---
+[[tests]]
+name = "non-json container ERROR token overrides PRIORITY=6"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 ERROR something went wrong"
+CONTAINER_NAME = "web-1"
+IMAGE_NAME = "myapp/web:latest"
+PRIORITY = "6"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "ERROR"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stderr"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "error"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.container == "web-1"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.service == "web"'
+
+# --- Non-JSON GELF container log: INFO token ---
+[[tests]]
+name = "non-json GELF container INFO token"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 INFO started listening"
+_container_name = "api-1"
+_service_name = "api"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "INFO"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stdout"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "out"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.container == "api-1"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.service == "api"'
+
+# --- No level token: falls back to PRIORITY behavior (info: raw "6") ---
+[[tests]]
+name = "no level token falls back to PRIORITY info"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 hello from worker"
+CONTAINER_NAME = "worker-1"
+IMAGE_NAME = "myapp/worker:latest"
+PRIORITY = "6"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "6"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stdout"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "out"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.container == "worker-1"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.service == "worker"'
+
+# --- No level token: falls back to PRIORITY behavior (error: raw "3") ---
+[[tests]]
+name = "no level token falls back to PRIORITY error"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "some raw line"
+CONTAINER_NAME = "db-1"
+IMAGE_NAME = "myapp/db:latest"
+PRIORITY = "3"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "3"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stderr"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "error"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.container == "db-1"'
+
+# --- WARN token (journald) ---
+[[tests]]
+name = "WARN token maps to stdout/out"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 WARN disk at 90%"
+CONTAINER_NAME = "db-1"
+IMAGE_NAME = "myapp/db:latest"
+PRIORITY = "6"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "WARN"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stdout"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "out"'
+
+# --- CRITICAL token (journald) ---
+[[tests]]
+name = "CRITICAL token maps to stderr/error"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 CRITICAL kernel panic"
+CONTAINER_NAME = "core-1"
+IMAGE_NAME = "myapp/core:latest"
+PRIORITY = "6"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "CRITICAL"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stderr"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "error"'
+
+# --- DEBUG token (GELF) ---
+[[tests]]
+name = "DEBUG token maps to stdout/out"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 DEBUG cache miss"
+_container_name = "api-1"
+_service_name = "api"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "DEBUG"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stdout"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "out"'
+
+# --- Word boundary: ERRORED must NOT match the ERROR token (falls back) ---
+[[tests]]
+name = "partial word ERRORED does not match ERROR token"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 ERRORED request handled"
+CONTAINER_NAME = "web-1"
+IMAGE_NAME = "myapp/web:latest"
+PRIORITY = "6"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "6"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stdout"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "out"'
+
+# --- No level token AND no PRIORITY: pre-existing fallback unchanged ---
+# (unknown-level -> to_int yields 0 -> stderr/error stream, level defaulted to
+# INFO by the pre-existing 3.5 block; the fix must not touch this case)
+[[tests]]
+name = "no token no PRIORITY keeps pre-existing fallback"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = "2026-08-31 10:00:00 plain line without level"
+_container_name = "api-1"
+_service_name = "api"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "INFO"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stderr"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "error"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.container == "api-1"'
+
+# --- JSON container log: unchanged (level/message kept from JSON) ---
+[[tests]]
+name = "JSON container log stays unchanged"
+
+[[tests.inputs]]
+insert_at = "remap_logs"
+type = "log"
+[tests.inputs.log_fields]
+message = '{"level":"error","message":"boom"}'
+CONTAINER_NAME = "web-1"
+IMAGE_NAME = "myapp/web:latest"
+PRIORITY = "6"
+
+[[tests.outputs]]
+extract_from = "remap_logs"
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.level == "error"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.message == "boom"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream == "stdout"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.stream_path == "out"'
+
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '.container == "web-1"'
