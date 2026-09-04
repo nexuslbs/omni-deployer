@@ -8,9 +8,67 @@ on:
       - 'v*'
 
 jobs:
+  # ── Fail-fast: release tag must match repo versions ──────────────
+  # FIRST job: before ANY image build or test runs, verify omniagent
+  # Cargo.toml and omni-dashboard package.json versions equal the pushed
+  # tag (v-stripped). A mismatched release tag therefore aborts the whole
+  # workflow immediately, instead of after the entire CI has run.
+  # On stable-branch pushes (not a tag) this job is a fast no-op pass.
+  verify-release-tag:
+    name: Verify release versions match tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          IS_TAG=false
+          VERSION=""
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            IS_TAG=true
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "IS_TAG=$IS_TAG" >> $GITHUB_OUTPUT
+
+      - name: Checkout omniagent for version check
+        if: steps.version.outputs.IS_TAG == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: nexuslbs/omniagent
+          path: version-check-omniagent
+
+      - name: Checkout omni-dashboard for version check
+        if: steps.version.outputs.IS_TAG == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: nexuslbs/omni-dashboard
+          path: version-check-omni-dashboard
+
+      - name: Verify release versions match tag
+        if: steps.version.outputs.IS_TAG == 'true'
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          AGENT_VER="$(grep -m1 '^version' version-check-omniagent/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          DASH_VER="$(python3 -c 'import json;print(json.load(open("version-check-omni-dashboard/package.json"))["version"])')"
+          if [ "$AGENT_VER" != "$TAG_VERSION" ]; then
+            echo "::error::omniagent Cargo.toml version ${AGENT_VER} != tag version ${TAG_VERSION}" >&2
+            exit 1
+          fi
+          if [ "$DASH_VER" != "$TAG_VERSION" ]; then
+            echo "::error::omni-dashboard package.json version ${DASH_VER} != tag version ${TAG_VERSION}" >&2
+            exit 1
+          fi
+          echo "OK: omniagent ${AGENT_VER} == omni-dashboard ${DASH_VER} == tag ${TAG_VERSION}"
+
   build-omniagent:
     name: Build omniagent
     runs-on: ubuntu-latest
+    needs: [verify-release-tag]
     permissions:
       contents: read
   
@@ -76,6 +134,7 @@ jobs:
   build-omni-dashboard:
     name: Build omni-dashboard
     runs-on: ubuntu-latest
+    needs: [verify-release-tag]
     permissions:
       contents: read
   
@@ -141,6 +200,7 @@ jobs:
   build-toolbox:
     name: Build toolbox
     runs-on: ubuntu-latest
+    needs: [verify-release-tag]
     permissions:
       contents: read
   
@@ -305,10 +365,12 @@ jobs:
           echo "IS_TAG=$IS_TAG" >> $GITHUB_OUTPUT
 
 
-      # ── Fail-fast: release tag must match repo versions ──────────────
-      # Before ANY push or tag, verify omniagent Cargo.toml and
-      # omni-dashboard package.json versions equal the tag (v-stripped).
-      # Any mismatch aborts the publish job before anything is pushed.
+      # ── Fail-fast backstop: tag must match the BUILT code ──────────
+      # The verify-release-tag job already failed fast up front against the
+      # default-branch HEADs. Here, before ANY push or tag, re-verify the
+      # omniagent/omni-dashboard code that was ACTUALLY built (built-SHA
+      # checkouts) matches the tag, so a version bump landing between the
+      # early check and the builds can never ship a mismatched release.
       - name: Checkout omniagent for version check
         if: steps.version.outputs.IS_TAG == 'true'
         uses: actions/checkout@v4
