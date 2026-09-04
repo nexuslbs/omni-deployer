@@ -5113,9 +5113,24 @@ def test_fn_17d_filesystem_walk_bounded():
     (scripts/sim_filesystem_mcp_wedge.py) as the single source of truth.
     """
     import os as _os, subprocess as _sp, sys as _sys
-    script_dir = _os.path.dirname(_os.path.abspath(__file__))
-    sim = _os.path.join(script_dir, "sim_filesystem_mcp_wedge.py")
-    assert _os.path.exists(sim), f"sim script missing: {sim}"
+
+    # tests.py is normally executed from its real path, but the deploy/CI
+    # pipeline pipes it into the omniagent container via stdin
+    # (`exec -T omniagent python3 -u -`), so __file__ == "<stdin>" and
+    # dirname(abspath(__file__)) resolves to the container workdir (/app).
+    # Resolve the sim script from the known absolute workspace mount too: the
+    # omni-deployer repo is bind-mounted at /opt/workspace/omni-deployer both
+    # on the host and inside the omniagent container.
+    sim_candidates = []
+    if __file__ != "<stdin>":
+        sim_candidates.append(
+            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                          "sim_filesystem_mcp_wedge.py"))
+    sim_candidates.append(
+        "/opt/workspace/omni-deployer/scripts/sim_filesystem_mcp_wedge.py")
+    sim = next((c for c in sim_candidates if _os.path.exists(c)), None)
+    assert sim is not None, (
+        "sim script missing; tried: " + ", ".join(sim_candidates))
     env = dict(_os.environ)
     env["BASE"] = BASE
     r = _sp.run([_sys.executable, sim], env=env, capture_output=True,
