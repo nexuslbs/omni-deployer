@@ -5092,6 +5092,45 @@ def test_fn_17c_parallel_filesystem():
     )
     print(f"[G17c PASSED: {N} parallel filesystem calls completed in {total_elapsed:.1f}s]")
 
+# ═══════════════════════════════════════════════════════════════════════
+#  GROUP 17D: filesystem MCP whole-plugin wedge regression (sim script)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_fn_17d_filesystem_walk_bounded():
+    """Filesystem MCP must never be wedged by one unbounded recursive walk.
+
+    Regression guard for the Sep 2026 outage (threads 884/888): a single
+    filesystem_search/filesystem_grep over a huge tree (e.g. path="/") used
+    to run forever and take the WHOLE filesystem MCP server down - every
+    subsequent read/list/info/write timed out at 60s for entire threads.
+
+    The plugin fix hard-bounds every walk (dirs visited, files checked,
+    per-file size, elapsed time, results). This test replays the exact
+    pathological trigger through the omniagent /mcp/execute endpoint (the
+    same path agent threads use) and asserts the server stays healthy:
+    the pathological call returns promptly (bounded) and a normal call
+    right after still succeeds. Runs the committed sim script
+    (scripts/sim_filesystem_mcp_wedge.py) as the single source of truth.
+    """
+    import os as _os, subprocess as _sp, sys as _sys
+    script_dir = _os.path.dirname(_os.path.abspath(__file__))
+    sim = _os.path.join(script_dir, "sim_filesystem_mcp_wedge.py")
+    assert _os.path.exists(sim), f"sim script missing: {sim}"
+    env = dict(_os.environ)
+    env["BASE"] = BASE
+    r = _sp.run([_sys.executable, sim], env=env, capture_output=True,
+                text=True, timeout=180)
+    print(r.stdout[-1500:])
+    if r.returncode != 0:
+        print(r.stderr[-1000:])
+    assert r.returncode == 0, (
+        f"sim_filesystem_mcp_wedge.py failed (rc={r.returncode}) - "
+        f"filesystem MCP server wedged or tools unhealthy"
+    )
+    print("[G17d PASSED: pathological unbounded walk stays bounded, "
+          "filesystem MCP server healthy]")
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Main
@@ -5827,6 +5866,8 @@ print("GROUP 17C: Parallel filesystem MCP calls (read/list/search/info/grep)")
 print(f"{'=' * 60}")
 
 test(test_fn_17c_parallel_filesystem)
+
+test(test_fn_17d_filesystem_walk_bounded)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 18: Multi-source Platform Plugin Tests (Python, JS, Rust)
