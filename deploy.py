@@ -415,14 +415,6 @@ def generate_env(mode):
         f.write(f"HOST_OMNI_DIR={OMNI_STACK_DIR}\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
-        # DB-write guard ESCAPE HATCH: db-migrations refuses non-dev DB hosts
-        # for DEV-built images. Release-built images (OMNIAGENT_BUILD_MODE=
-        # release, publish pipeline) auto-apply migrations without this var;
-        # this deploy harness runs dev-built binaries against its own isolated
-        # project DB (host `postgres`), so it opts in explicitly. Dev stacks
-        # (omnidev) never set this - their migrations only run against the
-        # dev-only postgres alias `omnidev-postgres`.
-        f.write("OMNIAGENT_ALLOW_DB_WRITE=true\n")
         # Local S3 (MinIO) service + S3 client creds (docker-compose.minio.yml
         # in omni-deployer and the toolbox rclone config both interpolate these).
         f.write(f"MINIO_ROOT_USER={minio_user}\n")
@@ -713,12 +705,12 @@ def _deploy(mode):
     # layer would mask a flaky test that CI then hits (2026-08-30 incident).
     # the production Dockerfile whose builder stage runs fmt/check/clippy/
     # test offline against the committed .sqlx cache (the hybrid pretest
-    # gate). The Dockerfile's OMNIAGENT_BUILD_MODE ARG defaults to dev (fail
-    # closed), so this local hybrid image is DEV-marked and stays fully
-    # guarded; the deploy env's OMNIAGENT_ALLOW_DB_WRITE=true (generate_env)
-    # is the explicit escape hatch for the harness's own project DB.
+    # gate). The image is built with OMNIAGENT_BUILD_MODE=release below,
+    # exactly like CI's publish build, so it auto-applies the idempotent
+    # schema against the harness's own isolated project DB on start.
+    # No env override exists anymore.
     if mode == "hybrid":
-        def build_image(tag, dockerfile=None, context=None, service=None, no_cache=False):
+        def build_image(tag, dockerfile=None, context=None, service=None, no_cache=False, build_args=None):
             if service is not None:
                 # Service has a build section in the compose file - let
                 # compose build it and tag per the service image:.
@@ -740,6 +732,8 @@ def _deploy(mode):
                 cmd += ["--no-cache"]
             if dockerfile:
                 cmd += ["-f", dockerfile]
+            for ba in (build_args or []):
+                cmd += ["--build-arg", ba]
             cmd.append(context)
             print(f"\n[deploy] Building {tag} (docker build)...")
             r = subprocess.run(cmd, capture_output=True, text=True)
@@ -751,7 +745,8 @@ def _deploy(mode):
         build_image("local/omniagent:latest",
                     dockerfile=os.path.join(OMNIAGENT_DIR, "Dockerfile"),
                     context=OMNIAGENT_DIR,
-                    no_cache=True)
+                    no_cache=True,
+                    build_args=["OMNIAGENT_BUILD_MODE=release"])
         build_image("local/omni-dashboard:latest",
                     context=os.path.join(WORKSPACE_DIR, "omni-dashboard"))
         build_image("local/omni-toolbox:latest",

@@ -124,9 +124,6 @@ def generate_ci_env():
         f.write("OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent:latest\n")
         f.write("DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard:latest\n")
         f.write("TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox:latest\n")
-        # Stable images are RELEASE-built (auto-apply migrations at start), but
-        # the harness explicitly opts in for its own project DB like deploy.py.
-        f.write("OMNIAGENT_ALLOW_DB_WRITE=true\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
         f.write(f"MM_POSTGRES_PASSWORD={p2}\n")
         f.write("TUNNEL_TOKEN=\n")
