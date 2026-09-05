@@ -32,7 +32,14 @@ tools:
   docker:
     enabled: true
     source: built-in
-    config: {}
+    config:
+      # allow_omni_dir: true
+      #   Whitelists OMNI_DIR (/opt/omni) as an ADDITIONAL compose sandbox root
+      #   for project_dir / compose_file / env_file (like the filesystem
+      #   plugin's omni_dir configs). Omni-root projects allow only ps/logs/exec;
+      #   destructive verbs (up/down/stop/restart/build/run/pull) stay refused:
+      #   production container changes happen only via the release pipeline.
+      #   Default: false (workspace-only sandbox).
   fetch:
     enabled: true
     source: built-in
