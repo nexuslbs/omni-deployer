@@ -480,9 +480,11 @@ def generate_env(mode="dev"):
         f.write(f"COMPOSE_PROFILES={profiles}\n")
         f.write("\n")
         if mode == "stable":
-            f.write(f"OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent:latest\n")
-            f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard:latest\n")
-            f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox:latest\n")
+            ver = os.environ.get("OMNI_STABLE_VERSION", "").strip()
+            tag = (":v" + ver) if ver else ":latest"
+            f.write(f"OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent{tag}\n")
+            f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard{tag}\n")
+            f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox{tag}\n")
         f.write("\n")
         f.write(f"# Database passwords (randomly generated)\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
@@ -592,7 +594,13 @@ def start_services():
     if s.dev_overlay:
         r = sh(f"docker compose -f {s.compose_file} -f {s.dev_overlay} --env-file {s.env_path} -p {s.project_name} up -d 2>&1")
     else:
-        r = sh(f"docker compose -f {s.compose_file} --env-file {s.env_path} -p {s.project_name} up -d --pull always 2>&1")
+        pull_flag = ""
+        if os.path.exists(s.env_path):
+            for _l in open(s.env_path):
+                if _l.startswith(("OMNIAGENT_IMAGE=", "DASHBOARD_IMAGE=", "TOOLBOX_IMAGE=")) and _l.rstrip("\n").endswith(":latest"):
+                    pull_flag = "--pull always"
+                    break
+        r = sh(f"docker compose -f {s.compose_file} --env-file {s.env_path} -p {s.project_name} up -d {pull_flag} 2>&1")
     output = r.stdout or r.stderr or ""
     clean_lines = [l for l in output.split("\n") if "level=warning" not in l and l.strip()]
     if r.returncode != 0 and "error" in output.lower():
