@@ -481,7 +481,7 @@ def generate_env(mode="dev"):
         f.write("\n")
         if mode == "stable":
             ver = os.environ.get("OMNI_STABLE_VERSION", "").strip()
-            tag = (":v" + ver) if ver else ":latest"
+            tag = (":" + ver.lstrip("v")) if ver else ":latest"
             f.write(f"OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent{tag}\n")
             f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard{tag}\n")
             f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox{tag}\n")
