@@ -1795,6 +1795,35 @@ def api_post_body(path, body=None, timeout=15):
         raw = e.read().decode("utf-8", errors="replace")
         raise AssertionError(f"POST {path} failed (HTTP {e.code}): {raw}")
 
+
+
+def api_post_body_retry(path, body=None, timeout=20, attempts=4, retry_delay=3):
+    """POST with JSON body, retrying transient network timeouts.
+
+    Plugin enable/disable endpoints are idempotent: a request that timed out
+    may or may not have reached the server and re-issuing it is safe. Bounded
+    by `attempts`; raises AssertionError on HTTP errors and the last network
+    error after the final attempt. Prevents a single slow enable under load
+    from failing the whole integration gate (observed in 4 hybrid runs)."""
+    url = f"{BASE}/api{path}"
+    last_exc = None
+    for attempt in range(attempts):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            r = urllib.request.urlopen(req, timeout=timeout)
+            resp = r.read()
+            return json.loads(resp) if resp.strip() else {}
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            raise AssertionError(f"POST {path} failed (HTTP {e.code}): {raw}")
+        except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as exc:
+            last_exc = exc
+            if attempt + 1 < attempts:
+                time.sleep(retry_delay)
+    raise AssertionError(f"POST {path} still failing after {attempts} attempts: {last_exc}")
+
 def find_plugins_by_source(source, plugin_type="tools", status=None):
     """Find plugins of a given source and type from the API list."""
     # The API returns plugin_type as singular ("tool", "platform", "provider"),
@@ -3210,7 +3239,7 @@ def test_fn_9b_provider_source_awareness():
     time.sleep(2)
 
     # Enable bundled noop provider
-    resp = api_post_body("/plugins/providers/bundled/noop/enable", {})
+    resp = api_post_body_retry("/plugins/providers/bundled/noop/enable", {})
     assert resp.get("success"), f"Enable bundled noop failed: {resp}"
     print("  [enabled bundled noop provider]")
 
@@ -4454,7 +4483,7 @@ def test_fn_13_non_blocking():
     # Add test-python as bundled plugin and enable via API
     ensure_bundled_plugin("test-python", "tools")
     yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
-    resp = api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+    resp = api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
     print(f"[enable test-python succeeded]")
     print("[test-python enabled]")
     # Wait for MCP server to register its tools
@@ -4575,7 +4604,7 @@ def test_fn_14_cancel_task():
     # Add test-python as bundled plugin and enable via API
     ensure_bundled_plugin("test-python", "tools")
     yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
-    resp = api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+    resp = api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
     print(f"[enable test-python for cancel test succeeded]")
     print("[test-python enabled for cancel test]")
     for attempt in range(15):
@@ -5432,7 +5461,7 @@ if __name__ == "__main__":
 
     resp = api_post_body("/plugins/platforms/built-in/mattermost/enable", {})
     pass
-    resp = api_post_body("/plugins/providers/bundled/noop/enable", {})
+    resp = api_post_body_retry("/plugins/providers/bundled/noop/enable", {})
     pass
 
     # Run setup (idempotent: may already exist)
@@ -5600,7 +5629,8 @@ services:
             f"{MM}/api/v4/posts", data=msg_data, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {test_token}"},
         )
-        urllib.request.urlopen(msg_req, timeout=10)
+        sent_g13b = json.loads(urllib.request.urlopen(msg_req, timeout=10).read())
+        base_at_g13b = int(sent_g13b.get("create_at") or 0)
         print("[G13b: script sent to Mattermost]")
 
         # Poll for the "All **3** tool call batch(es) completed." summary
@@ -5613,6 +5643,8 @@ services:
                 headers={"Authorization": f"Bearer {admin_token}"}), timeout=10).read())
             for pid, post in posts.get("posts", {}).items():
                 msg = post.get("message", "")
+                if int(post.get("create_at") or 0) < base_at_g13b:
+                    continue
                 if "**3** tool call batch" in msg:
                     found = True
                     break
@@ -5624,8 +5656,17 @@ services:
         # Pre-fix the executor re-sent the call → serial docker plugin ran the
         # command twice → 2 marker lines. Post-fix → 1 line.
         time.sleep(1)
-        cnt = _dc("exec", "-T", "worker", "sh", "-c", f"wc -l < {marker_path} || true")
-        lines = cnt.stdout.strip()
+        # Bounded verify loop: the marker write lands asynchronously after the
+        # completion message. Poll until it reads exactly 1; a value of 2 is the
+        # deterministic re-send-bug signal and fails immediately.
+        lines = ""
+        poll_deadline = time.time() + 45
+        while time.time() < poll_deadline:
+            cnt = _dc("exec", "-T", "worker", "sh", "-c", f"wc -l < {marker_path} || true")
+            lines = (cnt.stdout or "").strip()
+            if lines in ("1", "2"):
+                break
+            time.sleep(2)
         print(f"[G13b: marker line count = {lines!r}]")
         assert lines == "1", (
             f"docker_compose exec executed more than once: marker file has "
@@ -7287,7 +7328,7 @@ def test_21_1_noop_provider_lifecycle():
 
     # Enable
     try:
-        resp = api_post_body("/plugins/providers/bundled/noop/enable", {})
+        resp = api_post_body_retry("/plugins/providers/bundled/noop/enable", {})
         if resp.get("success"):
             print(f"✓ Noop provider enabled")
             started = wait_for_provider_subprocess("noop", timeout=15)
@@ -7433,7 +7474,7 @@ def _wf_ensure_test_python():
     'Unknown tool: test-python_lorem' right after the enable reload."""
     ensure_bundled_plugin("test-python", "tools")
     yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
-    api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+    api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
     for attempt in range(20):
         try:
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
@@ -9338,7 +9379,7 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
             pass
         ensure_bundled_plugin("test-python", "tools")
         yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
-        api_post_body("/plugins/tools/bundled/test-python/enable", {}, timeout=15)
+        api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
         for attempt in range(15):
             try:
                 r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
@@ -10753,10 +10794,18 @@ def test_35_subtasks_plan_mode_lifecycle():
         t = ex[0]
         assert t["status"] == "completed", \
             f"executor thread must be 'completed' (not failed): {t}"
-        # Verify thread_subtasks rows: 2 created, both completed.
-        rows = _h27_sql(
-            "SELECT id, description, status, priority FROM thread_subtasks "
-            "WHERE thread_id = %s ORDER BY id", (t["id"],))
+        # Verify thread_subtasks rows: 2 created, both completed. Rows are
+        # written by the executor thread right before it completes - poll a
+        # bounded window so a slow commit cannot flake the assertion.
+        rows = []
+        rows_deadline = time.time() + 30
+        while time.time() < rows_deadline:
+            rows = _h27_sql(
+                "SELECT id, description, status, priority FROM thread_subtasks "
+                "WHERE thread_id = %s ORDER BY id", (t["id"],))
+            if len(rows) >= 2:
+                break
+            time.sleep(2)
         assert len(rows) == 2, f"expected 2 subtask rows, got {rows}"
         assert all(r[2] == "completed" for r in rows), \
             f"all subtasks must be completed: {rows}"
@@ -12561,23 +12610,27 @@ def test_44_tool_caller_omniagent_api():
     msg_req = urllib.request.Request(f"{MM}/api/v4/posts", data=msg_data, method="POST",
                                      headers={"Content-Type": "application/json",
                                               "Authorization": f"Bearer {test_token}"})
-    urllib.request.urlopen(msg_req, timeout=10).read()
+    sent_g44 = json.loads(urllib.request.urlopen(msg_req, timeout=10).read())
+    base_at_g44 = int(sent_g44.get("create_at") or 0)
     print("  [44-A: JSON script posted to wf-test channel, polling...]")
     http200s = 0
-    deadline = time.time() + 90
+    seen_title = False
+    deadline = time.time() + 120
     while time.time() < deadline:
         time.sleep(4)
         posts_resp = json.loads(urllib.request.urlopen(
             urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts",
             headers={"Authorization": f"Bearer {admin_token}"}), timeout=10).read())
-        msgs = [p.get("message", "") for p in posts_resp.get("posts", {}).values()]
-        http200s = sum(m.count("HTTP 200") for m in msgs)
-        if http200s >= 2 and any(title in m for m in msgs):
+        fresh = [p.get("message", "") for p in posts_resp.get("posts", {}).values()
+                 if int(p.get("create_at") or 0) >= base_at_g44]
+        http200s = sum(m.count("HTTP 200") for m in fresh)
+        seen_title = any(title in m for m in fresh)
+        if http200s >= 2 and seen_title:
             print(f"  [44-A: {http200s}x 'HTTP 200' + created title observed]")
             break
     else:
         assert False, (f"expected >=2 'HTTP 200' and title {title} in wf-test channel "
-                       f"responses; saw {http200s}")
+                       f"fresh responses; saw {http200s}")
     # Cleanup: find the created task via the API and delete it
     try:
         resp = _g24_mcp_execute("builtin_omniagent-api",
@@ -13914,14 +13967,17 @@ def _g51_mm_channel():
     return ch, admin_token
 
 
-def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=45):
+def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=60, must_contain=None):
     """Post `text` to the channel and collect all NEW agent replies.
 
     Returns the list of new post messages (excluding the post we just sent).
+    When `must_contain` is given, keeps polling until a new reply contains the
+    substring (bounded by poll_timeout) so a stale concurrent reply cannot
+    shadow the reply to OUR post.
     """
     MM = "http://mattermost:8065"
     before = json.loads(urllib.request.urlopen(
-        urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=10",
+        urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=20",
                                headers={"Authorization": f"Bearer {admin_token}"}),
         timeout=10).read())
     max_create = max((p.get("create_at", 0) for p in before.get("posts", {}).values()), default=0)
@@ -13934,7 +13990,7 @@ def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=45):
     deadline = time.time() + poll_timeout
     while time.time() < deadline:
         r = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=20",
+            urllib.request.Request(f"{MM}/api/v4/channels/{mm_channel_id}/posts?per_page=30",
                                    headers={"Authorization": f"Bearer {admin_token}"}),
             timeout=10).read())
         for p in r.get("posts", {}).values():
@@ -13942,7 +13998,10 @@ def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=45):
                 msg = p.get("message", "")
                 if msg and msg.strip() != text.strip() and msg not in replies:
                     replies.append(msg)
-        if replies:
+        if must_contain:
+            if any(must_contain in m for m in replies):
+                break
+        elif replies:
             break
         time.sleep(2)
     return replies
@@ -13988,7 +14047,8 @@ def test_51_redaction_tool():
     _g51_put_setting("redaction_tool", "")
     assert _g51_get_setting("redaction_tool") == "", \
         "redaction_tool must default to empty"
-    replies_a = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET)
+    replies_a = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET,
+                                      must_contain=FAKE_SECRET)
     assert replies_a, "case A: no agent reply received"
     assert any(FAKE_SECRET in r for r in replies_a), \
         f"case A: secret must be unchanged when no redaction tool is set, replies={replies_a!r}"
@@ -13996,7 +14056,8 @@ def test_51_redaction_tool():
 
     # 3. Case B: redaction_tool set -> redaction applied by the plugin.
     _g51_put_setting("redaction_tool", TOOL)
-    replies_b = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET)
+    replies_b = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET,
+                                      must_contain="[REDACTED")
     assert replies_b, "case B: no agent reply received"
     assert not any(FAKE_SECRET in r for r in replies_b), \
         f"case B: secret must be redacted when redaction tool is set, replies={replies_b!r}"
