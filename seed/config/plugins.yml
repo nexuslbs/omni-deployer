@@ -16,7 +16,8 @@ platforms:
   telegram:
     enabled: true
     source: remote
-    config: {}
+    config:
+      bot_token: $secret:TELEGRAM_TOKEN
 tools:
   actions:
     enabled: true

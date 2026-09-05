@@ -885,6 +885,147 @@ def seed_config_dir():
     return os.path.join(s.script_dir, "seed", "config")
 
 
+def verify_platform_inbound(stack_dir=None):
+    """Post-deploy/post-restart inbound verification (task 983).
+
+    For every ENABLED platform in the runtime config/plugins.yml:
+      1. every $secret:NAME config reference (and mattermost's
+         access_token_name) must exist in the DB secrets table, and
+      2. the omniagent container logs (last 30m window) must not show the
+         known inbound-disabled markers (telegram 'bot_token is EMPTY',
+         mattermost 'No access_token provided', '$secret:... not found').
+
+    Prints a PASS/FAIL line per platform. Returns 0 when every enabled
+    platform resolves its secrets and shows no inbound-disabled markers,
+    1 otherwise (used as the exit code of `deploy.py verify-inbound`).
+    """
+    s = sett()
+    stack_dir = stack_dir or s.omni_stack_dir
+    plugins_yml = os.path.join(stack_dir, "config", "plugins.yml")
+    if not os.path.isfile(plugins_yml):
+        print("  [verify-inbound] config/plugins.yml missing: nothing to verify")
+        return 0
+
+    # Minimal structural parser (no PyYAML dependency): read the platforms
+    # section (top-level `platforms:` until `tools:`/`providers:`), tracking
+    # each entry's enabled flag and the secret references in its config.
+    platforms = {}
+    cur = None
+    section = None
+    with open(plugins_yml, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if indent == 0 and not line.startswith(" "):
+                section = stripped.rstrip(":")
+                cur = None
+                continue
+            if section != "platforms":
+                continue
+            if indent == 2:
+                cur = stripped.rstrip(":")
+                platforms.setdefault(cur, {"enabled": False, "refs": [], "access_token_name": None})
+                continue
+            if cur is None:
+                continue
+            if indent == 4 and stripped.startswith("enabled:"):
+                platforms[cur]["enabled"] = stripped.split(":", 1)[1].strip().lower() in ("true", "yes", "on")
+            elif indent >= 4 and "$secret:" in stripped:
+                idx = stripped.find("$secret:")
+                platforms[cur]["refs"].append(stripped[idx + len("$secret:"):].strip())
+            elif indent >= 4 and stripped.startswith("access_token_name:"):
+                platforms[cur]["access_token_name"] = stripped.split(":", 1)[1].strip()
+
+    enabled = {n: m for n, m in platforms.items() if m["enabled"]}
+    if not enabled:
+        print("  [verify-inbound] no enabled platforms in config/plugins.yml")
+        return 0
+
+    omniagent_container = s.container
+    # The omniagent's DB is authoritative: the live omnideploy platform points
+    # at the omnidev postgres, not its own project postgres. Derive the
+    # postgres container from DATABASE_URL: host "postgres" ->
+    # {project}-postgres-1, host "omnidev-postgres" -> omnidev-postgres-1, etc.
+    db_url_raw = (sh(f"docker exec {omniagent_container} printenv DATABASE_URL 2>/dev/null").stdout or "").strip()
+    db_user = "omniagent"
+    db_pass = ""
+    db_host = ""
+    db_name = "omniagent"
+    cred_part = db_url_raw.split("@")[0].replace("postgres://", "")
+    if ":" in cred_part:
+        db_user, db_pass = cred_part.split(":", 1)
+    db_part = db_url_raw.split("@")[-1]
+    if ":" in db_part:
+        db_host = db_part.split(":")[0]
+    if "/" in db_part:
+        db_name = db_part.split("/", 1)[1]
+    if db_host == "postgres":
+        pg_container = f"{s.project_name}-postgres-1"
+    elif db_host.endswith("-1"):
+        pg_container = db_host
+    elif db_host:
+        pg_container = db_host + "-1"
+    else:
+        pg_container = f"{s.project_name}-postgres-1"
+    print(f"  [verify-inbound] omniagent DB: {db_user}@{db_host}/{db_name} "
+          f"(checking secrets in {pg_container})")
+    if db_pass:
+        r = sh(f"docker exec -e PGPASSWORD='{db_pass}' {pg_container} psql -U {db_user} "
+               f"-d {db_name} -tAc 'SELECT name FROM secrets' 2>/dev/null")
+    else:
+        r = sh(f"docker exec {pg_container} psql -U {db_user} -d {db_name} -tAc "
+               f"'SELECT name FROM secrets' 2>/dev/null")
+    db_names = set((r.stdout or "").split())
+    if not db_names:
+        print(f"  [verify-inbound] WARNING: could not read secrets from {pg_container} "
+              f"(empty result) - DB secret checks below may be wrong")
+
+    logs = sh(f"docker logs --since 30m {omniagent_container} 2>&1 | grep -cE "
+              f"'bot_token is EMPTY|No access_token provided|not found in secrets table' || true")
+    try:
+        marker_count = int((logs.stdout or "0").strip() or "0")
+    except ValueError:
+        marker_count = -1
+    tg_poll = sh(f"docker logs --since 30m {omniagent_container} 2>&1 | "
+                 f"grep -c 'Inbound polling started' || true")
+    try:
+        tg_poll_count = int((tg_poll.stdout or "0").strip() or "0")
+    except ValueError:
+        tg_poll_count = -1
+
+    fail = False
+    for name in sorted(enabled):
+        meta = enabled[name]
+        refs = list(meta["refs"])
+        if meta["access_token_name"]:
+            refs.append(meta["access_token_name"])
+        missing = sorted({ref for ref in refs if ref and ref not in db_names})
+        if missing:
+            print(f"  [verify-inbound] FAIL platform={name}: secret(s) referenced by config "
+                  f"but missing from the DB secrets table: {', '.join(missing)}")
+            fail = True
+        else:
+            print(f"  [verify-inbound] OK   platform={name}: {len(refs)} secret reference(s) "
+                  f"all present in the secrets table")
+        if name == "telegram" and tg_poll_count > 0:
+            print(f"  [verify-inbound] OK   platform={name}: inbound polling loop is running")
+
+    if marker_count > 0:
+        print(f"  [verify-inbound] FAIL: omniagent logs (last 30m) contain {marker_count} "
+              f"inbound-disabled marker line(s) (bot_token EMPTY / No access_token provided / "
+              f"$secret not found)")
+        fail = True
+    else:
+        print(f"  [verify-inbound] OK   omniagent logs (last 30m): no inbound-disabled markers")
+
+    print(f"  [verify-inbound] {'PASS' if not fail else 'FAIL'}")
+    return 0 if not fail else 1
+
+
+
 def ensure_seed_config(stack_dir=None, overwrite_files=None):
     """Ensure {stack_dir}/config exists with the seed config files.
 

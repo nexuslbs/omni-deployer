@@ -1001,6 +1001,77 @@ def _deploy(mode):
     test_s3_backup_restore(compose)
 
 
+# Live runtime config files whose content (platform secret refs, remote
+# plugin manifest, tool settings) must SURVIVE a dev/hybrid deploy cycle.
+# deploy.py treats the omni-stack dir as a seed checkout and re-seeds config/
+# from omni-deployer/seed/config during the run. Without a backup/restore, a
+# deploy would wipe the live platform's plugins.yml (telegram bot_token
+# $secret ref etc.) and inbound would stay disabled until manual re-entry
+# (incident 2026-09-05: post-deploy restart lost bot_token + $secret refs).
+LIVE_RUNTIME_CONFIG_FILES = [
+    "plugins.yml", "remote.yml", "actions.yml", "settings.yml", "workflows.yml",
+]
+RUNTIME_CONFIG_BACKUP_DIR = os.path.join(tempfile.gettempdir(), "omni-deployer-live-config-backup")
+
+
+def preserve_runtime_config():
+    """Back up existing live runtime config files before a dev/hybrid deploy.
+
+    CI runs against a throwaway checkout and keeps pristine seed semantics, so
+    this is only invoked for dev/hybrid. restore_runtime_config puts the files
+    back after the deploy ends (including after the final cleanup_runtime_state).
+    """
+    src_dir = os.path.join(OMNI_STACK_DIR, "config")
+    if not os.path.isdir(src_dir):
+        print("  [preserve_runtime_config: no existing config/ - nothing to back up]")
+        return
+    sh(f"rm -rf {RUNTIME_CONFIG_BACKUP_DIR}")
+    os.makedirs(RUNTIME_CONFIG_BACKUP_DIR, exist_ok=True)
+    n = 0
+    for name in LIVE_RUNTIME_CONFIG_FILES:
+        src = os.path.join(src_dir, name)
+        if os.path.isfile(src):
+            sh(f"cp -f {src} {os.path.join(RUNTIME_CONFIG_BACKUP_DIR, name)}")
+            n += 1
+    print(f"  [preserve_runtime_config: backed up {n} live config file(s)]")
+
+
+def restore_runtime_config(mode):
+    """Restore the live runtime config files preserved before the deploy.
+
+    Runs in the deploy() finally AFTER cleanup_runtime_state, then restarts the
+    omniagent container so it loads the restored plugins.yml (its secret refs
+    resolve against the DB with no manual re-entry).
+    """
+    if not os.path.isdir(RUNTIME_CONFIG_BACKUP_DIR):
+        return
+    target = os.path.join(OMNI_STACK_DIR, "config")
+    os.makedirs(target, exist_ok=True)
+    restored = []
+    for name in LIVE_RUNTIME_CONFIG_FILES:
+        src = os.path.join(RUNTIME_CONFIG_BACKUP_DIR, name)
+        if os.path.isfile(src):
+            tmp = os.path.join(target, name + ".restore-tmp")
+            sh(f"cp -f {src} {tmp}")
+            sh(f"sudo mv -f {tmp} {os.path.join(target, name)}")
+            restored.append(name)
+    sh(f"rm -rf {RUNTIME_CONFIG_BACKUP_DIR}")
+    if not restored:
+        return
+    print(f"  [restore_runtime_config: restored live config: {', '.join(restored)}]")
+    compose = compose_cmd(mode)
+    print("  [restore_runtime_config: restarting omniagent to load the restored config...]")
+    run_compose(compose, "restart", "omniagent")
+    for i in range(30):
+        r = run_compose(compose, "exec", "-T", "omniagent",
+                        "curl", "-sf", "http://localhost:8080/health")
+        if r.returncode == 0:
+            print("  ✓ omniagent healthy after restart")
+            return
+        time.sleep(2)
+    print("  [WARNING: omniagent did not become healthy after restart]")
+
+
 def restore_seed_config():
     """Revert omni-stack TRACKED files to HEAD after a deploy run.
 
@@ -1044,6 +1115,12 @@ def deploy(mode):
     (SIGKILL/OOM) can still skip this finally; Step 0.5's untracked-residue
     sweep covers that case.
     """
+    # dev/hybrid run against the live data dir: preserve its runtime config so
+    # a deploy cycle never wipes platform secret refs (telegram bot_token,
+    # mattermost $secret refs). ci is a throwaway checkout - seed semantics.
+    preserve_live_config = mode in ("dev", "hybrid")
+    if preserve_live_config:
+        preserve_runtime_config()
     try:
         _deploy(mode)
     finally:
@@ -1061,6 +1138,15 @@ def deploy(mode):
             shared.cleanup_runtime_state(OMNI_STACK_DIR)
         except Exception as e:
             print(f"  [WARNING: runtime-state cleanup failed: {e}]")
+        if preserve_live_config:
+            try:
+                restore_runtime_config(mode)
+            except Exception as e:
+                print(f"  [WARNING: live config restore failed: {e}]")
+            try:
+                shared.verify_platform_inbound()
+            except Exception as e:
+                print(f"  [WARNING: post-deploy inbound verification failed: {e}]")
 
 
 def run_tests(compose=None):
@@ -1250,13 +1336,17 @@ def main():
     parser = argparse.ArgumentParser(description="OmniAgent deployer")
     parser.add_argument(
         "mode",
-        choices=["dev", "ci", "hybrid", "test"],
-        help="dev=build from source + shared tool tests, ci=use pre-built images, hybrid=build images+run like CI, test=run tests only",
+        choices=["dev", "ci", "hybrid", "test", "verify-inbound"],
+        help="dev=build from source + shared tool tests, ci=use pre-built images, hybrid=build images+run like CI, test=run tests only, verify-inbound=check every enabled platform resolves its secrets and inbound is active",
     )
     args = parser.parse_args()
 
     if args.mode == "test":
         run_tests()
+    elif args.mode == "verify-inbound":
+        code = shared.verify_platform_inbound()
+        print(f"[deploy] verify-inbound exit={code}")
+        sys.exit(code)
     else:
         deploy(args.mode)
 
