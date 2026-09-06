@@ -336,20 +336,23 @@ def ensure_toolset(run, verbose=True):
                 f.write(run["toolset_backup"])
     cur = read_plugins_yml() or ""
     want = _toolset_yaml()
-    if cur.strip() == want.strip():
+    if run.get("toolset_restarted"):
+        status = "already-restarted"
+    elif cur.strip() == want.strip():
         status = "already-ok"
     else:
         write_plugins_yml(want, run)
         status = "written"
         if verbose:
             print("  [toolset] plugins.yml %s (backup kept in outdir)" % status)
-        # Providers/plugins are read at startup; restart the dev core so the
-        # corpus runs with the standard toolset + provider config loaded.
+        # Providers/plugins are read at startup; restart the dev core once per
+        # run so the corpus runs with the standard toolset + provider config.
         print("  [toolset] restarting %s to load config" % OMNIAGENT_CONTAINER,
               flush=True)
         r = sh("docker restart %s" % OMNIAGENT_CONTAINER)
         if r.returncode != 0:
             raise RuntimeError("docker restart failed: " + (r.stderr or "")[:300])
+        run["toolset_restarted"] = True
         _wait_healthy(240)
         if verbose:
             print("  [toolset] container healthy after restart")
@@ -496,7 +499,9 @@ def run_task(mm_token, mm_channel_id, task, side_ctx, verbose=True):
         post_task(mm_token, mm_channel_id, side_ctx["prompts"][task["id"]])
     except Exception as exc:
         return {"task": task["id"], "shape": task["shape"], "status": "post-error",
-                "error": str(exc)[:300], "duration_s": round(time.time() - t0)}
+                "error": str(exc)[:300], "duration_s": round(time.time() - t0),
+                "outcome": "FAIL", "thread_id": None, "metrics": {},
+                "detail": {}, "final_excerpt": ""}
     since = latest_thread_id()
     deadline = time.time() + int(task["timeout_min"]) * 60 * side_ctx.get("timeout_scale", 1.0)
     thread = None
@@ -514,13 +519,17 @@ def run_task(mm_token, mm_channel_id, task, side_ctx, verbose=True):
     if thread is None:
         return {"task": task["id"], "shape": task["shape"], "status": "timeout-no-thread",
                 "error": "no thread appeared within timeout",
-                "duration_s": round(time.time() - t0)}
+                "duration_s": round(time.time() - t0),
+                "outcome": "FAIL", "thread_id": None, "metrics": {},
+                "detail": {}, "final_excerpt": ""}
     if tid is None:
         # thread seen but not terminal within deadline
         tid = thread.get("id")
         return {"task": task["id"], "shape": task["shape"], "status": "timeout-running",
                 "thread_id": tid, "error": "thread did not finish within timeout",
-                "duration_s": round(time.time() - t0)}
+                "duration_s": round(time.time() - t0),
+                "outcome": "FAIL", "metrics": {}, "detail": {},
+                "final_excerpt": ""}
     metrics = measure_thread(tid)
     status = metrics.get("status") or "unknown"
     final_text = final_message(tid)
