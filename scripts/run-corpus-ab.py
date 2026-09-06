@@ -885,7 +885,8 @@ def select_tasks(tasks, args):
         tasks = [t for t in tasks if t["id"] != "t06-long-knowledge-index"]
     if args.tasks:
         want = set(x.strip() for x in args.tasks.split(",") if x.strip())
-        tasks = [t for t in tasks if t["id"] in want]
+        tasks = [t for t in tasks
+                 if any(t["id"] == w or t["id"].startswith(w) for w in want)]
     if args.shapes:
         want = set(x.strip() for x in args.shapes.split(",") if x.strip())
         tasks = [t for t in tasks if t["shape"] in want]
