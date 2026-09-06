@@ -498,6 +498,26 @@ def generate_env(mode="dev"):
     print(f"\n=== Generated {s.env_path} ===")
 
 
+def ensure_env():
+    """Generate the stack env file when it is missing (no-op when present).
+
+    omnidev.env and omnistable.env are gitignored and produced by the launcher
+    during setup (generate_env). Their absence means the stack has not been set
+    up on this host yet - NOT that the environment is unavailable or cannot be
+    created. Every launcher command therefore self-heals: it generates the env
+    file with the exact same defaults as setup() would before touching docker
+    compose, so executors never hit a cryptic 'env file missing' error and never
+    mistake a missing env file for a missing dev environment.
+    """
+    s = sett()
+    if os.path.exists(s.env_path):
+        return
+    mode = "stable" if not s.dev_overlay else "dev"
+    print(f"\n=== {os.path.basename(s.env_path)} missing - generating it "
+          f"(run setup to bring the {s.project_name} stack up) ===")
+    generate_env(mode)
+
+
 def stop_stack():
     """Tear down the stack.
 

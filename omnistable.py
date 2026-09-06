@@ -123,6 +123,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Self-heal a missing env file: the stack env (omnidev.env / omnistable.env)
+    # is gitignored and produced by setup (shared.generate_env). Absence means
+    # setup has not run on this host yet - not that the stack cannot run. The
+    # non-setup commands must never fail on a missing env file.
+    if args.command != "setup":
+        shared.ensure_env()
+
     if args.command == "setup":
         shared.setup()
         patch_channel_to_deepseek()
