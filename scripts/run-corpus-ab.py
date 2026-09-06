@@ -764,6 +764,15 @@ def summarize_side(side):
     }
 
 
+def flush_progress(run, side_key, side):
+    try:
+        with open(os.path.join(run["outdir"], "progress.json"), "w") as f:
+            json.dump({"side": side_key, "tasks": side["tasks"]}, f,
+                      indent=1, default=str)
+    except Exception:
+        pass
+
+
 def side_gate_table(side):
     lines = []
     lines.append("| task | shape | status | outcome | iters | dur_s | dup | comp | retr | grounded | in_tok | out_tok |")
@@ -1006,6 +1015,7 @@ def main(argv):
         res = run_task(mm_token, mm_channel_id, t, sa, args.verbose)
         sa["tasks"].append(res)
         sa["by_id"][t["id"]] = res
+        flush_progress(run, "a", sa)
     sa["res_after"] = snapshot_resources()
     sa["probes"] = {}
     sp = probe_search_latency(args.probes)
@@ -1046,6 +1056,7 @@ def main(argv):
         res = run_task(mm_token, mm_channel_id, t, sb, args.verbose)
         sb["tasks"].append(res)
         sb["by_id"][t["id"]] = res
+        flush_progress(run, "b", sb)
     sb["res_after"] = snapshot_resources()
     sb["probes"] = {}
     sp = probe_search_latency(args.probes)
