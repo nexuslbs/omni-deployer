@@ -228,15 +228,15 @@ def validate_corpus(tasks):
 # ---------------------------------------------------------------------------
 # Placeholder fill / expectation evaluation
 # ---------------------------------------------------------------------------
-def fill_prompt(t, side, run, token, witness):
-    """side: 'a'|'b'; run: run id dict; fills {TOKEN} {WITNESS} {TASKS_DIR}."""
+def fill_prompt(t, side, run, token, witness, wit_prefix):
+    """side: 'a'|'b'; fills {TOKEN} {WITNESS} {WITNESS_PREFIX}
+    {TASKS_DIR} {RUN_DIR}."""
     p = t["prompt"]
     p = p.replace("{TOKEN}", token)
     p = p.replace("{WITNESS}", witness)
+    p = p.replace("{WITNESS_PREFIX}", wit_prefix)
     p = p.replace("{TASKS_DIR}", CORPUS_DIR)
     p = p.replace("{RUN_DIR}", run["outdir"])
-    # t08: side-scoped witness prefix so cross-side recall cannot collide.
-    p = p.replace("w7-", "w7-%s-" % side)
     return p
 
 
@@ -295,7 +295,16 @@ def _toolset_yaml():
         lines.append("    enabled: %s" % str(cfg["enabled"]).lower())
         lines.append("    source: %s" % cfg["source"])
         lines.append("    config: %s" % json.dumps(cfg["config"]))
-    lines.append("providers: null")
+    lines.append("providers:")
+    lines.append("  deepseek:")
+    lines.append("    enabled: true")
+    lines.append("    source: built-in")
+    lines.append("    config:")
+    lines.append("      api_key: $secret:DEEPSEEK_API_KEY")
+    lines.append("  noop:")
+    lines.append("    enabled: true")
+    lines.append("    source: bundled")
+    lines.append("    config: {}")
     return "\n".join(lines) + "\n"
 
 
@@ -334,6 +343,16 @@ def ensure_toolset(run, verbose=True):
         status = "written"
         if verbose:
             print("  [toolset] plugins.yml %s (backup kept in outdir)" % status)
+        # Providers/plugins are read at startup; restart the dev core so the
+        # corpus runs with the standard toolset + provider config loaded.
+        print("  [toolset] restarting %s to load config" % OMNIAGENT_CONTAINER,
+              flush=True)
+        r = sh("docker restart %s" % OMNIAGENT_CONTAINER)
+        if r.returncode != 0:
+            raise RuntimeError("docker restart failed: " + (r.stderr or "")[:300])
+        _wait_healthy(240)
+        if verbose:
+            print("  [toolset] container healthy after restart")
     # Wait for registration by probing each tool via /mcp/execute.
     registered = {}
     for tool in PROBE_TOOL_NAMES:
@@ -901,6 +920,10 @@ def rnd6():
     return os.urandom(3).hex()
 
 
+def rnd4():
+    return os.urandom(2).hex()
+
+
 def main(argv):
     args = parse_args(argv)
     tasks = load_corpus()
@@ -954,13 +977,17 @@ def main(argv):
         print("candidate :", args.candidate, cand_sha[:12])
 
     # --- side a (baseline) ---
-    sa_token = "s3-a-" + rnd6()
-    sa_wit = "w7-a-" + rnd6()
+    sa_tag = rnd6()
+    sa_token = "s3-a-" + sa_tag
+    sa_wit = "w7-a-" + sa_tag + "-" + rnd4()
+    sa_wprefix = "w7-a-" + sa_tag + "-"
     sa = {"key": "a", "label": "main", "binary_sha": base_sha,
-          "token": sa_token, "witness": sa_wit, "prompts": {},
-          "tasks": [], "by_id": {}, "timeout_scale": args.timeout_scale}
+          "token": sa_token, "witness": sa_wit, "wprefix": sa_wprefix,
+          "prompts": {}, "tasks": [], "by_id": {},
+          "timeout_scale": args.timeout_scale}
     for t in tasks:
-        sa["prompts"][t["id"]] = fill_prompt(t, "a", run, sa_token, sa_wit)
+        sa["prompts"][t["id"]] = fill_prompt(t, "a", run, sa_token, sa_wit,
+                                             sa_wprefix)
     ts_a = ensure_toolset(run)
     sa["toolset"] = ts_a
     sa["res_before"] = snapshot_resources()
@@ -988,15 +1015,19 @@ def main(argv):
     if args.candidate:
         print("\n== building candidate for side b ==")
         cand_info = build_and_swap(cand_sha, None, run)
-    sb_token = "s3-b-" + rnd6()
-    sb_wit = "w7-b-" + rnd6()
+    sb_tag = rnd6()
+    sb_token = "s3-b-" + sb_tag
+    sb_wit = "w7-b-" + sb_tag + "-" + rnd4()
+    sb_wprefix = "w7-b-" + sb_tag + "-"
     b_label = args.candidate or "main-identity"
     sb = {"key": "b", "label": b_label,
           "binary_sha": cand_info["verified_in_app"] if cand_info else base_sha,
-          "token": sb_token, "witness": sb_wit, "prompts": {},
-          "tasks": [], "by_id": {}, "timeout_scale": args.timeout_scale}
+          "token": sb_token, "witness": sb_wit, "wprefix": sb_wprefix,
+          "prompts": {}, "tasks": [], "by_id": {},
+          "timeout_scale": args.timeout_scale}
     for t in tasks:
-        sb["prompts"][t["id"]] = fill_prompt(t, "b", run, sb_token, sb_wit)
+        sb["prompts"][t["id"]] = fill_prompt(t, "b", run, sb_token, sb_wit,
+                                             sb_wprefix)
     ts_b = ensure_toolset(run)
     sb["toolset"] = ts_b
     sb["res_before"] = snapshot_resources()

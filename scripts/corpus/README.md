@@ -23,9 +23,9 @@ corpus in the omnidev dev stack and diffing the §3T gates.
   | t08 | fresh-thread follow-up | recall side: fresh thread must retrieve the t07 witness via search |
 
   Each file declares: `id`, `shape`, `title`, `prompt` (may contain the
-  placeholders `{TOKEN}` and `{WITNESS}`, filled per run by the runner),
-  `expected` (substring markers, optional regex, optional token equality),
-  `timeout_min`, `target_iterations` and a `note`.
+  placeholders `{TOKEN}`, `{WITNESS}` and `{WITNESS_PREFIX}`, filled per run
+  and per side by the runner), `expected` (substring markers, optional regex,
+  optional token equality), `timeout_min`, `target_iterations` and a `note`.
 
 - `run-corpus-ab.py` (one directory up, `scripts/`): the runner. Executes the
   corpus against the running omnidev core, measures the §3T gates per task
@@ -49,13 +49,15 @@ python3 /opt/workspace/omni-deployer/scripts/run-corpus-ab.py --list     # valid
   the same outcome on both sides, and the gate table shows the two columns.
 - `--candidate <git-ref>` builds the omnidev `omniagent-dev` image from a git
   worktree of `/opt/workspace/omniagent` at that ref, recreates the omnidev
-  omniagent container, runs side B against the candidate binary, then
+  omniagent container, runs side b against the candidate binary, then
   rebuilds and restores the baseline image. Production stacks are never
   touched; only the omnidev dev project is rebuilt.
-- The runner temporarily ensures the standard tool plugins (filesystem,
-  search, notes, git, memory) are enabled on the omnidev core for the run
-  (`/opt/omni-stack/config/plugins.yml`, in-container and ephemeral) and
-  restores the original file afterwards. Use `--no-toolset` to skip.
+- The runner temporarily enables the standard tool plugins (filesystem,
+  search, notes, git, memory) plus the deepseek provider config on the
+  omnidev core for the run (`/opt/omni-stack/config/plugins.yml`,
+  in-container and ephemeral), restarts the omnidev omniagent container once
+  so the config is loaded, and restores the original file afterwards. Use
+  `--no-toolset` to skip.
 
 ## What the runner emits
 
