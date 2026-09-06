@@ -323,6 +323,55 @@ def write_plugins_yml(content, run):
     os.unlink(tmp)
 
 
+def read_profiles_yml():
+    r = oc(OMNIAGENT_CONTAINER, "cat /opt/omni-stack/config/profiles.yml 2>/dev/null")
+    return r.stdout if r.returncode == 0 else None
+
+
+def write_profiles_yml(content, run):
+    tmp = os.path.join(run["outdir"], "profiles.yml.tmp")
+    with open(tmp, "w") as f:
+        f.write(content)
+    r = sh("docker cp %s %s:/opt/omni-stack/config/profiles.yml" %
+           (tmp, OMNIAGENT_CONTAINER))
+    if r.returncode != 0:
+        raise RuntimeError("could not write profiles.yml into container: " +
+                           r.stderr[:300])
+
+
+def _repo_allowlist():
+    """omni profile allowed_tools from the omni-root repo config (dev mount
+    /opt/omni/config/profiles.yml == host /opt/workspace/omni-root/config/
+    profiles.yml). Corpus threads only get the tools the profile declares
+    (profiles.yml allowed_tools); mirroring the repo allowlist keeps the dev
+    profile identical to production."""
+    for p in ("/opt/omni/config/profiles.yml",
+              "/opt/workspace/omni-root/config/profiles.yml"):
+        try:
+            with open(p) as f:
+                txt = f.read()
+        except Exception:
+            continue
+        m = re.search(r"profiles:\s*\n\s+omni:\s*\n(?P<body>(?:[ \t].*\n|\n)*)", txt)
+        if not m:
+            continue
+        tools = re.findall(r"^\s+-\s+(\S+)\s*$", m.group("body"), re.M)
+        if tools:
+            return tools
+    return None
+
+
+def _profiles_yaml():
+    tools = _repo_allowlist()
+    if not tools:
+        raise RuntimeError("could not read omni allowed_tools from repo "
+                           "config/profiles.yml")
+    lines = ["profiles:", "  omni:", "    allowed_tools:"]
+    for t in tools:
+        lines.append("    - " + t)
+    return "\n".join(lines) + "\n"
+
+
 def ensure_toolset(run, verbose=True):
     """Enable the standard tool plugins on the omnidev core for the run.
     Backs up the original plugins.yml (first call) into run['toolset_backup'].
@@ -334,17 +383,25 @@ def ensure_toolset(run, verbose=True):
         if run["toolset_backup"]:
             with open(os.path.join(run["outdir"], "plugins.yml.original"), "w") as f:
                 f.write(run["toolset_backup"])
+        run["profiles_backup"] = read_profiles_yml()
+        if run["profiles_backup"]:
+            with open(os.path.join(run["outdir"], "profiles.yml.original"), "w") as f:
+                f.write(run["profiles_backup"])
     cur = read_plugins_yml() or ""
     want = _toolset_yaml()
+    pcur = read_profiles_yml() or ""
+    pwant = _profiles_yaml()
     if run.get("toolset_restarted"):
         status = "already-restarted"
-    elif cur.strip() == want.strip():
+    elif cur.strip() == want.strip() and pcur.strip() == pwant.strip():
         status = "already-ok"
     else:
         write_plugins_yml(want, run)
+        write_profiles_yml(pwant, run)
         status = "written"
         if verbose:
-            print("  [toolset] plugins.yml %s (backup kept in outdir)" % status)
+            print("  [toolset] plugins.yml + profiles.yml %s (backups kept "
+                  "in outdir)" % status)
         # Providers/plugins are read at startup; restart the dev core once per
         # run so the corpus runs with the standard toolset + provider config.
         print("  [toolset] restarting %s to load config" % OMNIAGENT_CONTAINER,
@@ -391,6 +448,9 @@ def restore_toolset(run):
     if run.get("toolset_backup"):
         write_plugins_yml(run["toolset_backup"], run)
         print("  [toolset] original plugins.yml restored")
+    if run.get("profiles_backup"):
+        write_profiles_yml(run["profiles_backup"], run)
+        print("  [toolset] original profiles.yml restored")
 
 # ---------------------------------------------------------------------------
 # Metrics (gate SQL) per thread
