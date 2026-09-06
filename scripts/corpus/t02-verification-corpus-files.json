@@ -1,0 +1,17 @@
+{
+  "id": "t02-verification-corpus-files",
+  "shape": "re-read-heavy-verification",
+  "title": "Verify the canonical corpus directory claims",
+  "target_iterations": "20-60",
+  "timeout_min": 30,
+  "prompt": "Canonical corpus task (id t02, shape: re-read-heavy verification). The corpus directory is {TASKS_DIR} (host path /opt/workspace/omni-deployer/scripts/corpus, readable). Verify these four claims about it and report one line per claim with PASS or FAIL:\n1. The directory contains between 5 and 10 .json task files.\n2. Every .json file's 'id' field starts with 't' and matches the file name prefix (the part of the file name before the first '-' and after the leading 'tNN-' is not required to match, only the 't' prefix and a two-digit number).\n3. The README.md in that directory mentions the plan workstream 'T-4'.\n4. A runner script named run-corpus-ab.py exists one directory up (scripts/) and starts with the line '#!/usr/bin/env python3'.\nMethod: list the directory once, then read each .json file ONCE (they are small); keep a running checklist in your working notes with notes_note-write / notes_note-append; never re-read a file, consult your notes if you need a fact again. Do not modify anything.\nExpected final answer: the four claim lines with PASS or FAIL, then a closing line 'verified N of 4' with the number of claims you verified as passing.",
+  "expected": {
+    "substrings": [
+      "run-corpus-ab.py"
+    ],
+    "min_substrings": 1,
+    "regex": "verified (\\d+) of 4",
+    "require_token": null
+  },
+  "note": "Waste shape: re-read-heavy verification (E3). Success = all four claims verified PASS with the count line present; the duplicate-marker gate shows whether the agent used notes instead of re-reading."
+}

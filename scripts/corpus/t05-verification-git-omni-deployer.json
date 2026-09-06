@@ -1,0 +1,19 @@
+{
+  "id": "t05-verification-git-omni-deployer",
+  "shape": "re-read-heavy-verification",
+  "title": "Git-state verification of omni-deployer plus cycle-gates marker",
+  "target_iterations": "15-45",
+  "timeout_min": 30,
+  "prompt": "Canonical corpus task (id t05, shape: re-read-heavy verification, git flavor). Verify the git state of the omni-deployer repo at /opt/workspace/omni-deployer and report four lines:\n1. Local HEAD commit sha and subject (git log -1).\n2. Whether local main equals origin/main after a fetch; report 'synced' or 'diverged', and when diverged include both shas.\n3. Working tree cleanliness: count of changed files per git status --porcelain; report the count.\n4. Whether the file scripts/cycle-gates.sql exists in the working tree and contains a 'G1' gate marker line; report yes or no for each part.\nMethod: run each git check ONCE and record the results in your working notes (notes_note-write); if you need a number again, read your notes, do not re-run git. Use filesystem_search for the G1 marker (one call) instead of reading the whole SQL file. Do not modify anything.\nExpected final answer: four lines, one per check, for example:\n1. <sha> <subject>\n2. synced\n3. changed files: 0\n4. cycle-gates.sql present: yes, G1 marker: yes",
+  "expected": {
+    "substrings": [
+      "cycle-gates.sql",
+      "G1",
+      "origin/main"
+    ],
+    "min_substrings": 3,
+    "regex": null,
+    "require_token": null
+  },
+  "note": "Waste shape: re-read-heavy verification (E3), git flavor. Success = the four claims reported with the real G1 marker found."
+}

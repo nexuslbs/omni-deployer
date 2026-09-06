@@ -1,0 +1,15 @@
+{
+  "id": "t08-fresh-thread-witness-recall",
+  "shape": "fresh-thread-follow-up",
+  "title": "Follow-up pair, recall side: retrieve the witness token from history",
+  "target_iterations": "6-25",
+  "timeout_min": 20,
+  "prompt": "Canonical corpus task (id t08, shape: fresh-thread follow-up, recall side). A previous corpus task (t07) in this same channel posted a final answer containing a witness token of the form w7-[a-z0-9]{6}. This thread starts fresh with no inherited notes: retrieve that token from the channel's message history.\n1. Call search_messages once with query 'w7-' and limit 5.\n2. Identify the exact witness token from t07's final message (the t07 thread in this channel).\nRules: at most 2 search calls total; do not guess the token.\nExpected final answer: a single line containing the exact witness token you retrieved. If you cannot retrieve it, report 'witness=not-found'.",
+  "expected": {
+    "substrings": [],
+    "min_substrings": 0,
+    "regex": null,
+    "require_token": "witness"
+  },
+  "note": "Waste shape: fresh-thread follow-up (E4/M-3). Success = the exact seeded witness is recalled via search across threads; wrong or guessed tokens fail the equality check."
+}

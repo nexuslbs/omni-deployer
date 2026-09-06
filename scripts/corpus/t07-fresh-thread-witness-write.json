@@ -1,0 +1,15 @@
+{
+  "id": "t07-fresh-thread-witness-write",
+  "shape": "fresh-thread-follow-up",
+  "title": "Follow-up pair, write side: post the witness token",
+  "target_iterations": "1-5",
+  "timeout_min": 10,
+  "prompt": "Canonical corpus task (id t07, shape: fresh-thread follow-up, write side). This thread is the first of a follow-up pair. Your only job is to post a final answer that contains exactly the witness token below.\nwitness token: {WITNESS}\nRules: do not search, do not read anything, do not use any tool. Expected final answer: a single line containing the witness token and nothing else.",
+  "expected": {
+    "substrings": [],
+    "min_substrings": 0,
+    "regex": null,
+    "require_token": "witness"
+  },
+  "note": "Waste shape: fresh-thread follow-up (M-3/E4). The witness token is seeded by the runner for this run only and must appear verbatim in the final answer."
+}

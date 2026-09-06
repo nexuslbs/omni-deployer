@@ -1,0 +1,21 @@
+{
+  "id": "t04-layout-deployer-repo",
+  "shape": "project-layout-discovery",
+  "title": "Layout discovery: omni-deployer repo components",
+  "target_iterations": "10-40",
+  "timeout_min": 30,
+  "prompt": "Canonical corpus task (id t04, shape: project-layout discovery). In the omni-deployer repo (host path /opt/workspace/omni-deployer) report the repo-relative path of each of these five items, one numbered line per item:\n1. The main deployment entry script.\n2. The omnidev stack helper script.\n3. The shared helper module imported by most scripts.\n4. The one-shot cycle-gates SQL sheet added by the S12 gates-dashboarding task (lives under scripts/).\n5. The directory that holds this canonical corpus.\nRules: bounded discovery only; use filesystem_search and filesystem_list (a handful of calls); confirm each candidate path exists with filesystem_info before you report it; do not read file contents; do not modify anything.\nExpected final answer: exactly five numbered lines 'N. <repo-relative-path>' using paths relative to the repo root, for example 'scripts/cycle-gates.sql'. If you cannot confirm an item, still give your best path and append '(unverified)'.",
+  "expected": {
+    "substrings": [
+      "deploy.py",
+      "omnidev.py",
+      "shared.py",
+      "cycle-gates.sql",
+      "corpus"
+    ],
+    "min_substrings": 4,
+    "regex": null,
+    "require_token": null
+  },
+  "note": "Waste shape: project-layout discovery (E1/E4), second repo for stability statistics."
+}

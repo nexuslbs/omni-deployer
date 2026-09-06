@@ -1,0 +1,19 @@
+{
+  "id": "t06-long-knowledge-index",
+  "shape": "long-task-150-plus",
+  "title": "Long task: per-file knowledge index of the omniagent Rust sources",
+  "target_iterations": "100-220",
+  "timeout_min": 120,
+  "prompt": "Canonical corpus task (id t06, shape: long >150-iteration knowledge-index build; this task is intentionally long and repetitive). Build a compact per-file knowledge index of the omniagent source tree and post it as your final answer.\nPhase 1: index the core agent module. List /app/src/agent with filesystem_list; for every .rs file directly in that directory (about 20 files): read the file exactly once (use filesystem_read; files larger than the read cap are fine, read the first page only), extract at most three fact lines (file role, key functions, notable constants), append them to your working notes with notes_note-append under a heading '## src/agent', then move on. Never re-read a file: if you need a fact again, consult your notes.\nPhase 2: index plugins/tools/prompt/src (about 7 files) and plugins/tools/search/src (about 2 files) the same way, into the same notes file, under their own headings.\nPhase 3: from your notes only (no re-reads of source files), count the total number of .rs files you indexed and append one summary line to your notes.\nExpected final answer: one section per module with one line per file in the form '<repo-relative-path>: <role>', then a final line 'TOTAL_FILES_INDEXED=<n>' with the total count from phase 3.",
+  "expected": {
+    "substrings": [
+      "TOTAL_FILES_INDEXED=",
+      "src/agent",
+      "main_loop.rs"
+    ],
+    "min_substrings": 3,
+    "regex": "TOTAL_FILES_INDEXED=(\\d+)",
+    "require_token": null
+  },
+  "note": "Waste shape: long >150-iteration task (E2/E3/E6). Success = index completed with the count line; compaction events and duplicate markers on this task are the E6/E3 signal."
+}

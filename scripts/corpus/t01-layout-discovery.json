@@ -1,0 +1,21 @@
+{
+  "id": "t01-layout-discovery",
+  "shape": "project-layout-discovery",
+  "title": "Layout discovery: omniagent repo core components",
+  "target_iterations": "10-40",
+  "timeout_min": 30,
+  "prompt": "Canonical corpus task (id t01, shape: project-layout discovery). In the omniagent repo (container path /app, host path /opt/workspace/omniagent) locate these five components and report the repo-relative file path for each, one numbered line per component:\n1. The core agent main loop module (runs the per-iteration agent cycle).\n2. The Rust prompt plugin (mcp-server-prompt) crate entry module under plugins/tools/prompt.\n3. The search tool plugin entry module (defines handle_search_messages and handle_search_wiki).\n4. The notes tool module (implements note_write, note_append, note_read).\n5. The compaction module (implements the compact-messages null contract).\nRules: bounded discovery only; use filesystem_search and filesystem_list (a handful of calls); confirm each candidate path exists with filesystem_info before you report it; do not read file contents; do not modify anything.\nExpected final answer: exactly five numbered lines 'N. <repo-relative-path>' using paths relative to the repo root, for example 'src/agent/main_loop.rs'. If you cannot confirm a component, still give your best path and append '(unverified)'.",
+  "expected": {
+    "substrings": [
+      "src/agent/main_loop.rs",
+      "plugins/tools/search/src/main.rs",
+      "plugins/tools/prompt/src/main.rs",
+      "plugins/tools/prompt/src/notes.rs",
+      "plugins/tools/prompt/src/compact.rs"
+    ],
+    "min_substrings": 4,
+    "regex": null,
+    "require_token": null
+  },
+  "note": "Waste shape: project-layout discovery (E1/E4). Success = agent names real repo-relative paths, found by bounded search, without reading file bodies."
+}

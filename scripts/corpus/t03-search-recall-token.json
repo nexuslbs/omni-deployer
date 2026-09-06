@@ -1,0 +1,17 @@
+{
+  "id": "t03-search-recall-token",
+  "shape": "search-recall",
+  "title": "Search-recall: retrieve the run token with search_messages",
+  "target_iterations": "6-20",
+  "timeout_min": 20,
+  "prompt": "Canonical corpus task (id t03, shape: search-recall). A unique run token was placed in this channel's message history for this run: {TOKEN}. Your job is to find that token with the search tools and report it.\n1. Call search_messages once with query '{TOKEN}' and limit 5.\n2. Read the results: the token should appear in this run's corpus messages in this same channel (the result set may include this very thread).\n3. Report the name of the channel this task runs in (you can infer it from the search results or from context; make at most 2 search calls in total).\nExpected final answer: one line 'token=<token>' and one line 'channel=<channel-name>'. If the search returns nothing usable, report 'token=not-found'.",
+  "expected": {
+    "substrings": [
+      "dev-channel"
+    ],
+    "min_substrings": 1,
+    "regex": null,
+    "require_token": "token"
+  },
+  "note": "Waste shape: search-recall (E4/E5). The seeded token only exists in the current run's messages, so the task is deterministic across runs and sides. Success = token echoed back exactly and the channel named."
+}
