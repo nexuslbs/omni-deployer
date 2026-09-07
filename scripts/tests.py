@@ -11430,8 +11430,9 @@ def test_38_skills_create_list_view():
 
 def test_38_prompt_renders_skills_block():
     """38-B: prompt_generate renders the created skill with its frontmatter
-    description ("- g38-demo: Use when ...", NOT a raw --- fence) plus the
-    create-skill nudge."""
+    description ("- g38-demo: Use when ...", NOT a raw --- fence) under the
+    skills header; the old create-skill nudge sentence was dropped by the
+    S1 prompt-size trim (omniagent dff4eed), lore lives in the tool description."""
     import tempfile as _g38_tf
     import shutil as _g38_sh
     base = _g38_tf.mkdtemp(prefix="g38-prompt-")
@@ -11459,11 +11460,12 @@ def test_38_prompt_renders_skills_block():
         assert "Available skills" in text, f"no Available skills block: {text[:800]}"
         assert "- g38-demo: Use when run the release pipeline" in text, \
             f"frontmatter description not rendered:\n{text[:1200]}"
-        assert "create a skill with create_skill so future threads reuse it" in text, \
-            f"create-skill nudge missing:\n{text[:1200]}"
+        assert ("Available skills (read one with view_skill before acting "
+                "when it matches the task)") in text, \
+            f"skills block header missing:\n{text[:1200]}"
         assert "- g38-demo: ---" not in text, "raw --- fence leaked into prompt"
         print("PASS: 38-B prompt block - frontmatter description rendered, "
-              "no --- fence, create-skill nudge present")
+              "no --- fence, skills block header intact")
     finally:
         _g34_stop_proc(sk)
         _g34_stop_proc(pk)
