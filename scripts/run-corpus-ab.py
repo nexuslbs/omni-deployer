@@ -69,10 +69,11 @@ TOOLSET_PLUGINS = {
                 "github_installation_id": 138119822}},
     "memory": {"enabled": True, "source": "built-in", "config": {}},
     "prompt": {"enabled": True, "source": "built-in", "config": {}},
+    "subtasks": {"enabled": True, "source": "built-in", "config": {}},
 }
 PROBE_TOOL_NAMES = [
     "filesystem_info", "search_messages", "notes_note-list",
-    "git_status", "memory_list-memories",
+    "git_status", "memory_list-memories", "subtasks_get-subtask-counts",
 ]
 PROMPT_PROBE_TOOL_NAMES = [
     "filesystem_read", "filesystem_search", "filesystem_list",
@@ -441,6 +442,7 @@ def _probe_args(tool):
         "notes_note-list": {},
         "git_status": {"repo_dir": "/opt/workspace/omni-deployer"},
         "memory_list-memories": {},
+        "subtasks_get-subtask-counts": {},
     }.get(tool, {})
 
 
@@ -532,21 +534,23 @@ def latest_thread_id():
     return int(v or 0)
 
 
-def find_thread_after(since_id):
-    """Poll /threads for the corpus thread created after since_id."""
-    try:
-        body = api_get("/threads")
-        threads = (body.get("data") or {}).get("threads", [])
-    except Exception:
+def find_corpus_thread(since_id, task_id):
+    """Poll the omnidev DB for the thread whose cause message carries the task
+    marker '(id <task_id>,' and was created after since_id. Cause matching
+    binds every task to its own thread even when unrelated or leftover
+    threads interleave."""
+    marker = task_id.split("-")[0]
+    sql = ("SELECT t.id, t.status FROM threads t WHERE t.id > %d AND EXISTS ("
+           "SELECT 1 FROM messages m WHERE m.thread_id = t.id AND"
+           " m.role = 'cause' AND m.content LIKE '%%(id %s,%%')"
+           " ORDER BY t.id LIMIT 1" % (since_id, marker))
+    row = psql(sql)
+    if not row:
         return None
-    for t in threads:
-        tid = t.get("id") or 0
-        if tid <= since_id:
-            continue
-        ch = t.get("channel") or t.get("channel_id") or ""
-        if str(ch) == CORE_CHANNEL:
-            return t
-    return None
+    parts = row.split("|")
+    if len(parts) < 2:
+        return None
+    return {"id": int(parts[0]), "status": parts[1]}
 
 
 def run_task(mm_token, mm_channel_id, task, side_ctx, verbose=True):
@@ -555,6 +559,7 @@ def run_task(mm_token, mm_channel_id, task, side_ctx, verbose=True):
     t0 = time.time()
     if verbose:
         print("  [task] %s posting..." % task["id"], flush=True)
+    since = latest_thread_id()
     try:
         post_task(mm_token, mm_channel_id, side_ctx["prompts"][task["id"]])
     except Exception as exc:
@@ -562,12 +567,11 @@ def run_task(mm_token, mm_channel_id, task, side_ctx, verbose=True):
                 "error": str(exc)[:300], "duration_s": round(time.time() - t0),
                 "outcome": "FAIL", "thread_id": None, "metrics": {},
                 "detail": {}, "final_excerpt": ""}
-    since = latest_thread_id()
     deadline = time.time() + int(task["timeout_min"]) * 60 * side_ctx.get("timeout_scale", 1.0)
     thread = None
     while time.time() < deadline:
         time.sleep(5)
-        thread = find_thread_after(since)
+        thread = find_corpus_thread(since, task["id"])
         if thread:
             st = thread.get("status")
             if st in ("completed", "error", "cancelled", "failed"):
