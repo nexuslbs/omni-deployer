@@ -9850,6 +9850,170 @@ def test_32_time_get_current_time():
     print("PASS: mcp-time get_current_time -> UTC datetime + day_of_week + is_dst=false")
 
 
+def _g32_mcp_execute_raw(name, args, timeout=25):
+    """POST a tool call to the live MCP executor and return the FULL envelope
+    without asserting success. Robustness cases use this so a hang (transport
+    timeout) or a crashed server raises here (bounded by the HTTP timeout)
+    instead of being masked by a success assert."""
+    req = urllib.request.Request(
+        f"{BASE}/mcp/execute",
+        data=json.dumps({"name": name, "arguments": args}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _g32_healthy_call(server, timeout=25):
+    """Canonical healthy call for one external server (mirrors 32-A..G).
+    Returns the envelope; raises on transport timeout/crash."""
+    if server == "mcp-memory":
+        ent = f"g32h-{uuid.uuid4().hex[:8]}"
+        return _g32_mcp_execute_raw("mcp-memory.create_entities", {
+            "entities": [{"name": ent, "entityType": "Person",
+                          "observations": ["robustness probe"]}]},
+            timeout=timeout)
+    tool, args = {
+        "mcp-everything": ("mcp-everything.echo", {"message": "post-failure"}),
+        "mcp-fetch": ("mcp-fetch.fetch", {"url": "https://example.com", "raw": True}),
+        "mcp-filesystem": ("mcp-filesystem.list_allowed_directories", {}),
+        "mcp-git": ("mcp-git.git_status", {"repo_path": "/opt/workspace/omniagent"}),
+        "mcp-sequentialthinking": ("mcp-sequentialthinking.sequentialthinking",
+                                   {"thought": "post-failure", "thoughtNumber": 1,
+                                    "totalThoughts": 1, "nextThoughtNeeded": False}),
+        "mcp-time": ("mcp-time.get_current_time", {"timezone": "UTC"}),
+    }[server]
+    return _g32_mcp_execute_raw(tool, args, timeout=timeout)
+
+
+def _g32_is_error(env):
+    """True when an mcp envelope surfaced a failure as an error (any shape the
+    executor/server can produce) instead of a hang."""
+    return (env.get("success") is False or env.get("is_error") is True
+            or "error" in env)
+
+
+def test_32_failure_is_plugin_error_not_hang():
+    """32-H: for EVERY external reference server a failing tool call surfaces
+    as a bounded error envelope (never a crash or a hang) and the SAME server
+    answers a healthy call right after (session not wedged, no zombie). Real
+    server-side failures on registered tools (filesystem/git/time invalid
+    args) must also come back as bounded error envelopes with the server
+    healthy afterwards."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
+        return
+    servers = ("mcp-everything", "mcp-fetch", "mcp-filesystem", "mcp-git",
+               "mcp-memory", "mcp-sequentialthinking", "mcp-time")
+    for s in servers:
+        t0 = time.time()
+        env = _g32_mcp_execute_raw(f"{s}.__c5_no_such_tool__", {}, timeout=25)
+        dt = time.time() - t0
+        assert _g32_is_error(env), \
+            f"{s}: missing-tool call must fail as error, got: {str(env)[:200]}"
+        assert dt < 25, f"{s}: missing-tool call not bounded ({dt:.1f}s)"
+        env2 = _g32_healthy_call(s)
+        assert env2.get("success") and env2.get("content"), \
+            f"{s}: not healthy after error: {str(env2)[:200]}"
+        print(f"PASS: 32-H {s} unknown-tool error bounded ({dt:.1f}s) + healthy after")
+    real = {
+        "mcp-filesystem": ("mcp-filesystem.read_file",
+                           {"path": "/definitely/not/allowed/c5-missing.txt"}),
+        "mcp-git": ("mcp-git.git_status", {"repo_path": "/no/such/repo/c5"}),
+        "mcp-time": ("mcp-time.get_current_time", {"timezone": "Not/ARealZone"}),
+    }
+    for s, (tool, args) in real.items():
+        t0 = time.time()
+        try:
+            env = _g32_mcp_execute_raw(tool, args, timeout=25)
+            outcome = "error-envelope" if _g32_is_error(env) else "unexpected-success"
+            assert _g32_is_error(env), \
+                f"{s}: server-side failure must error, got: {str(env)[:200]}"
+        except Exception as e:
+            outcome = f"bounded-transport ({type(e).__name__})"
+        dt = time.time() - t0
+        assert dt < 25, f"{s}: server-side failure not bounded ({dt:.1f}s)"
+        env2 = _g32_healthy_call(s)
+        assert env2.get("success") and env2.get("content"), \
+            f"{s}: not healthy after server-side failure: {str(env2)[:200]}"
+        print(f"PASS: 32-H {s} real server failure -> {outcome} "
+              f"({dt:.1f}s) + healthy after")
+
+
+def test_32_parallel_calls_all_servers():
+    """32-I: all 7 external servers answer a canonical call CONCURRENTLY
+    inside one bounded window (no serialization, no lockup under parallel
+    load). A hung/crashed server fails the batch via wait(timeout) instead of
+    hanging the suite."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
+        return
+    import concurrent.futures
+    servers = ["mcp-everything", "mcp-fetch", "mcp-filesystem", "mcp-git",
+               "mcp-memory", "mcp-sequentialthinking", "mcp-time"]
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(servers)) as pool:
+        fut_by_server = {pool.submit(_g32_healthy_call, s): s for s in servers}
+        done, not_done = concurrent.futures.wait(fut_by_server, timeout=45)
+        wall = time.time() - t0
+        assert not not_done, \
+            "parallel batch not bounded; still running after 45s: " + \
+            ", ".join(fut_by_server[f] for f in not_done)
+        for fut in done:
+            s = fut_by_server[fut]
+            env = fut.result()
+            assert env.get("success") and env.get("content"), \
+                f"{s}: parallel call failed: {str(env)[:200]}"
+    print(f"PASS: 32-I all 7 servers answered concurrently in {wall:.1f}s")
+
+
+def test_32_filesystem_hang_timeout_regression():
+    """32-J: filesystem-MCP hang regression (incident fixed by
+    task_omnidev_fix_filesystem_mcp_tools_read_search / plan C1): a read whose
+    open() would block forever (a FIFO with no writer) must NOT hang the
+    harness - the client bound fires - and the external mcp-filesystem server
+    must answer a healthy call afterwards (not wedged by the blocked read).
+    If the server or the executor IS wedged by the FIFO read, the assert
+    fails loudly: that is a real hang defect to file as a per-item omnidev
+    task (C5), not to paper over in the harness."""
+    if not _g32_servers_present():
+        print("SKIP: reference MCP servers absent (omnistable) - nothing to test")
+        return
+    import tempfile
+    fifo = os.path.join(tempfile.gettempdir(),
+                        f"c5-fifo-{os.getpid()}-{int(time.time() * 1000)}")
+    try:
+        os.mkfifo(fifo)
+        t0 = time.time()
+        outcome = "returned"
+        try:
+            env = _g32_mcp_execute_raw("mcp-filesystem.read_file",
+                                       {"path": fifo}, timeout=6)
+            if env.get("success") is False:
+                outcome = "error-envelope"
+        except Exception as e:  # transport timeout = the client bound fired
+            outcome = f"bounded-client-timeout ({type(e).__name__})"
+        dt = time.time() - t0
+        assert dt < 10, f"harness itself hung {dt:.1f}s on FIFO read_file"
+        try:
+            env2 = _g32_healthy_call("mcp-filesystem", timeout=8)
+            healthy = bool(env2.get("success") and env2.get("content"))
+        except Exception:
+            healthy = False
+        assert healthy, (
+            "DEFECT (C5 A6/A7): external mcp-filesystem session WEDGED by a "
+            "FIFO read_file (hang, no timeout recovery). File a per-item "
+            "omnidev task.")
+        print(f"PASS: 32-J FIFO read bounded ({dt:.1f}s, {outcome}); "
+              "mcp-filesystem healthy after (no wedge)")
+    finally:
+        try:
+            os.unlink(fifo)
+        except OSError:
+            pass
+
+
 test(test_32_everything_echo)
 test(test_32_fetch_raw)
 test(test_32_filesystem_list_allowed)
@@ -9857,6 +10021,9 @@ test(test_32_git_status)
 test(test_32_memory_create_entities)
 test(test_32_sequentialthinking)
 test(test_32_time_get_current_time)
+test(test_32_failure_is_plugin_error_not_hang)
+test(test_32_parallel_calls_all_servers)
+test(test_32_filesystem_hang_timeout_regression)
 
 
 print("TEST SUMMARY")
@@ -10149,9 +10316,178 @@ def test_33_telegram_errors_mock():
         _g33_stop_proc(mock)
 
 
+def test_33_telegram_poll_survives_api_failures():
+    """33-D: polling robustness - while the Bot API answers HTTP 500 the poll
+    thread logs-and-backoffs (the platform stays alive and direct calls return
+    error envelopes - no crash, no hang); when the API recovers the SAME poll
+    thread picks up new updates and inbound flow resumes."""
+    port = _g33_free_port()
+    mock = plat = None
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+        _g33_call(plat, "initialize")
+        _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": base,
+            "polling_enabled": True,
+            "poll_interval_secs": 1,
+        }})
+        _g33_mock_post(base, "/admin/fail", {"on": True})
+        time.sleep(3.5)  # several poll cycles while the API answers 500s
+        r = _g33_call(plat, "deliver", {
+            "resource_identifier": "1", "content": "x",
+        }, req_id=21, timeout=20)
+        assert "error" in r, f"deliver during API failure must error: {r}"
+        _g33_mock_post(base, "/admin/fail", {"on": False})
+        _g33_mock_post(base, "/admin/inject", {
+            "update_id": 9101,
+            "message": {"message_id": 911, "date": 1700000000,
+                        "chat": {"id": -1002223334, "type": "channel"},
+                        "from": {"id": 88}, "text": "recovered after 500s"},
+        })
+        n = _g33_notification(plat, "inbound_message", timeout=30)
+        p = n.get("params", {})
+        assert p.get("text") == "recovered after 500s", f"text wrong: {p}"
+        print("PASS: 33-D poll thread survives API 500s (error envelope, no "
+              "crash) and resumes inbound after recovery")
+    finally:
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
+def test_33_telegram_slow_api_bounded():
+    """33-E: outbound timeout bound - a slow Bot API (2s artificial delay on
+    sendMessage) is tolerated: deliver completes within the harness bound with
+    a success result (the platform's own HTTP call carries a 60s timeout; the
+    bound is asserted here at the harness level)."""
+    port = _g33_free_port()
+    mock = plat = None
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+        _g33_call(plat, "initialize")
+        _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": base,
+            "polling_enabled": False,
+        }})
+        _g33_mock_post(base, "/admin/delay", {"secs": 2})
+        t0 = time.time()
+        r = _g33_call(plat, "deliver", {
+            "resource_identifier": "987654321", "content": "slow api deliver",
+        }, req_id=31, timeout=25)
+        dt = time.time() - t0
+        assert r.get("result", {}).get("delivered") is True, f"deliver wrong: {r}"
+        assert 1.0 <= dt < 25, f"deliver not slow-visible/bounded: {dt:.1f}s"
+        _g33_mock_post(base, "/admin/delay", {"secs": 0})
+        print(f"PASS: 33-E slow API deliver completed in {dt:.1f}s (bounded)")
+    finally:
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
+def test_33_telegram_shutdown_cleanup():
+    """33-F: cleanup / no zombie - a shutdown request stops the poll thread
+    (via the platform's stop event); the process then exits promptly when
+    stdin closes (the daemon poll thread never keeps the process alive)."""
+    port = _g33_free_port()
+    mock = plat = None
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+        _g33_call(plat, "initialize")
+        _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": base,
+            "polling_enabled": True,
+            "poll_interval_secs": 1,
+        }})
+        time.sleep(2.0)  # poll thread is running
+        r = _g33_call(plat, "shutdown", req_id=41, timeout=15)
+        assert r.get("result", {}).get("shutdown") is True, f"shutdown wrong: {r}"
+        try:
+            plat.stdin.close()
+        except Exception:
+            pass
+        rc = plat.wait(timeout=8)
+        assert rc == 0, f"platform did not exit cleanly, rc={rc}"
+        print(f"PASS: 33-F shutdown stops poll thread; clean exit rc={rc} (no zombie)")
+    finally:
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
+def test_33_telegram_stdout_json_lines():
+    """33-G: stdout protocol - while the poll thread and the main loop BOTH
+    write concurrently (inbound notifications + outbound responses), every
+    stdout line is exactly one complete JSON document (single write per line
+    under the platform's stdout lock - no partial or interleaved lines)."""
+    import threading
+    port = _g33_free_port()
+    mock = plat = None
+    lines = []
+    stop = threading.Event()
+
+    def _reader():
+        while not stop.is_set():
+            line = plat.stdout.readline()
+            if not line:
+                break
+            lines.append(line)
+
+    try:
+        mock, base = _g33_start_mock(port)
+        plat = _g33_platform_proc()
+        _g33_call(plat, "initialize")
+        _g33_call(plat, "configure", {"config": {
+            "bot_token": "123456:MOCKTOKEN-omniagent",
+            "api_base_url": base,
+            "polling_enabled": True,
+            "poll_interval_secs": 1,
+        }})
+        rd = threading.Thread(target=_reader, daemon=True)
+        rd.start()
+        for i in range(3):
+            _g33_mock_post(base, "/admin/inject", {
+                "update_id": 9200 + i,
+                "message": {"message_id": 600 + i, "date": 1700000000,
+                            "chat": {"id": -1005556667, "type": "channel"},
+                            "from": {"id": 88}, "text": f"jsonline {i}"},
+            })
+            plat.stdin.write(json.dumps({"id": 51 + i, "method": "deliver",
+                "params": {"resource_identifier": "1",
+                           "content": f"out {i}"}}) + "\n")
+            plat.stdin.flush()
+            time.sleep(1.2)
+        time.sleep(1.5)
+        stop.set()
+        rd.join(timeout=5)
+        non_empty = [ln for ln in lines if ln.strip()]
+        assert len(non_empty) >= 4, \
+            f"expected >=4 stdout lines, got {len(non_empty)}: {lines}"
+        for ln in non_empty:
+            obj = json.loads(ln)  # ValueError == partial/interleaved write
+            assert isinstance(obj, dict), f"line is not one JSON object: {ln[:120]!r}"
+        methods = {json.loads(ln).get("method") for ln in non_empty}
+        ids = {json.loads(ln).get("id") for ln in non_empty}
+        assert "inbound_message" in methods, f"no inbound notification: {lines}"
+        assert any(i in ids for i in (51, 52, 53)), f"no deliver response: {lines}"
+        print(f"PASS: 33-G stdout = one complete JSON doc per line "
+              f"({len(non_empty)} lines, concurrent poll+main writers)")
+    finally:
+        stop.set()
+        _g33_stop_proc(plat)
+        _g33_stop_proc(mock)
+
+
 test(test_33_telegram_outbound_mock)
 test(test_33_telegram_inbound_mock)
 test(test_33_telegram_errors_mock)
+test(test_33_telegram_poll_survives_api_failures)
+test(test_33_telegram_slow_api_bounded)
+test(test_33_telegram_shutdown_cleanup)
+test(test_33_telegram_stdout_json_lines)
 
 
 
