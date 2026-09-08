@@ -20,6 +20,9 @@ tools:
   mcp-memory:
     url: https://github.com/modelcontextprotocol/servers.git
     path: ''
+  mcp-playwright:
+    url: https://github.com/microsoft/playwright-mcp.git
+    path: ''
   mcp-sequentialthinking:
     url: https://github.com/modelcontextprotocol/servers.git
     path: ''
