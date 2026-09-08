@@ -709,6 +709,20 @@ def _run_mattermost_setup_with_retry(s, attempts=6, delay=30):
     return resp
 
 
+
+# Secrets that must NEVER be seeded into the omnidev DEV DB, even though
+# they stay in the shared secrets.env (other stacks read them). The
+# omnidev dev stack is built without the telegram platform, so its bot
+# token is not part of the dev environment and must not reappear on any
+# dev (re)setup. Production/omnistable setups keep seeding all entries.
+DEV_EXCLUDED_SECRETS = {"TELEGRAM_TOKEN"}
+
+
+def _dev_excluded_secret(name, project_name):
+    """True when this secret must be skipped for this project setup."""
+    return project_name == "omnidev" and name in DEV_EXCLUDED_SECRETS
+
+
 def setup():
     """Full setup: generate env, start stack, configure omniagent.
 
@@ -755,7 +769,16 @@ def setup():
 
     # Create secrets from secrets.env + generated mattermost passwords
     print("\n[Creating secrets...]")
+    # Dev (omnidev) setups skip secrets whose platform is not part of the
+    # dev stack: TELEGRAM_TOKEN stays in the shared secrets.env (production
+    # telegram needs it) but is never seeded into the omnidev DB, so a dev
+    # (re)setup cannot resurrect it after it was cleared (incident
+    # 2026-09-08: the telegram token kept showing in the omnidev secrets
+    # page because every omnidev setup re-seeded it from secrets.env).
     for name, value in load_secrets_env().items():
+        if _dev_excluded_secret(name, s.project_name):
+            print(f"  Secret {name}: skipped (omnidev dev exclusion)")
+            continue
         ensure_secret(name, value)
     ensure_secret("MATTERMOST_ACCESS_TOKEN", "")
     ensure_secret("MATTERMOST_ADMIN_PASSWORD", s.mm_admin_pass)
