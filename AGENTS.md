@@ -83,7 +83,7 @@ task actually changed). A committed scratch script or credential is an automatic
    re-running them on the runner (cold cargo cache, 2-core) would duplicate
    work and blow the time budget.
 4. Starts services, registers the remote noop provider, runs the integration test
-   suite (`scripts/tests.py`, GROUP 1–49), then the shared tool tests
+   suite (`scripts/tests.py`, GROUP 1–50), then the shared tool tests
    (`shared.run_tests()`), twice (single pass in `ci` mode - the hosted runner's
    1h budget can't fit the double pass; dev/hybrid keep 2 passes).
 5. Restores omni-stack tracked config to HEAD.

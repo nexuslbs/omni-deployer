@@ -11,7 +11,7 @@ test harness), `omnidev.py` / `omnistable.py` (dev/stable stack lifecycle),
 | omniagent | `/opt/workspace/omniagent` | Rust agent core (engine, plugins, MCP tools, API) |
 | omni-dashboard | `/opt/workspace/omni-dashboard` | Web dashboard (Vite + TypeScript) |
 | omni-stack | `/opt/workspace/omni-stack` | Docker Compose stack + OMNI_DIR config (`config/*.yml`) |
-| omni-plugins | `/opt/workspace/omni-plugins` | Plugin-less provider definitions (root `models.yml`) |
+| omni-plugins | `/opt/workspace/omni-plugins` | Remote-installable plugins + plugin-less provider definitions (root `models.yml`) |
 
 ## Usage
 
@@ -66,9 +66,9 @@ manages this project's lifecycle (setup, restart, stop).
 
 ## Integration suite (`scripts/tests.py`)
 
-Groups 1–49 cover: dashboard page loading, plugin lifecycle (install/enable/remove/
+Groups 1–50 cover: dashboard page loading, plugin lifecycle (install/enable/remove/
 update), kanban CRUD + dispatch, cron schedules, channel/board/workflow resolution,
-and the kanban-workflow feature groups:
+single-instance lock, and the kanban-workflow feature groups:
 
 | Group | Coverage |
 |-------|----------|
@@ -82,6 +82,7 @@ and the kanban-workflow feature groups:
 | 47 | Resolve fallback fields ONCE at load - kanban task defaults (task → board → channel → global) |
 | 48 | Single-instance advisory lock + CLI arg handling |
 | 49 | omni-dashboard UI/UX fixes regression (DB page, custom selects, workflow defaults, hooks, templates, red cancel, plugin remove, git box) |
+| 50 | Release push-tag version verification + dashboard Connected version |
 
 ## CI/CD
 
