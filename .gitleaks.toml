@@ -1,0 +1,14 @@
+# gitleaks config for omni-deployer (code-plan C9 never-commit guardrail).
+# Mirrors the allowlist in scripts/secret-scan.py: committed workflow/test
+# fixtures that reference secret formats (variable interpolation, fake test
+# keys) but contain NO live secret values. New secrets anywhere else still
+# fail `gitleaks detect`.
+title = "omni-deployer gitleaks config (code-plan C9)"
+
+[allowlist]
+description = "Committed workflow/test fixtures referencing secret formats without real values"
+paths = [
+  '''\.github/workflows/plugins\.yml''',
+  '''\.github/workflows/publish\.yml''',
+  '''scripts/tests\.py''',
+]
