@@ -12632,7 +12632,7 @@ def test_42_custom_omni_dir_config():
                 f"prompt: data_dir not resolved from omni_dir config: {text}"
             print(f"  NOTE: prompt_generate resolved data_dir; downstream error (no DB): {text[:120]}")
         else:
-            assert "Active Hermes profile: omni" in text, \
+            assert "Active profile: omni" in text, \
                 f"prompt output missing profile line: {text[:200]}"
         print("  PASS: 42-C custom omni_dir config - memory promote/list, actions "
               "relevance, prompt generate all operate under the custom path")
