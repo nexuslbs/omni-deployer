@@ -268,7 +268,7 @@ def configure_secret_refs():
         print("  WARNING: Could not find expected git block in plugins.yml")
 
     if changed:
-        sh("sudo tee " + yml_path + " > /dev/null <<'HERMES_EOF'\n" + yml + "\nHERMES_EOF")
+        sh("sudo tee " + yml_path + " > /dev/null <<'OMNI_EOF'\n" + yml + "\nOMNI_EOF")
         print("  Plugins.yml written")
 
 

@@ -20,7 +20,7 @@ shared.init(settings)
 
 BODY = """Implement remaining items from the database-page audit (P1/P2). IMPORTANT RULES:
 - Do NOT restart the omnidev-omniagent-1 container (you run inside it; a restart kills your own thread).
-- Plugin/dashboard changes never need a restart. If an omniagent core/plugin change is required, just BUILD it (docker exec omnidev-omniagent-1 bash -c 'cd /app && cargo build --release -p <pkg>') and report; Hermes will restart + verify after you finish.
+- Plugin/dashboard changes never need a restart. If an omniagent core/plugin change is required, just BUILD it (docker exec omnidev-omniagent-1 bash -c 'cd /app && cargo build --release -p <pkg>') and report; the operator will restart + verify after you finish.
 
 P1 - correctness + hardening:
 1. Query plugin value serialization: plugins/tools/query/src/main.rs handle_query decodes rows via try_get <&str>/i64/f64/bool/Option<String> - timestamps (timestamptz), UUID, JSONB, arrays fall through to NULL. Fix: decode by column type (chrono -> RFC3339 string, UUID -> string, JSONB -> serde_json::Value, bytea -> hex, arrays -> JSON array) so SELECT id, created_at FROM messages shows real timestamps not NULL.

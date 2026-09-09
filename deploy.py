@@ -155,7 +155,7 @@ def sh(cmd):
 def ensure_git_safe_dirs():
     """git refuses to operate on repos owned by another user (dubious
     ownership) - when deploy.py runs under sudo, `git clean`/`git checkout`
-    on the hermes-owned workspace repos fail silently unless the repos are
+    on the host-user-owned workspace repos fail silently unless the repos are
     whitelisted. Register them so the sweep and final restore actually run."""
     for d in [OMNI_STACK_DIR, SCRIPT_DIR, OMNIAGENT_DIR]:
         sh(f"sudo git config --global --add safe.directory {d} 2>/dev/null; true")

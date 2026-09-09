@@ -4394,7 +4394,7 @@ def test_fn_12_file_upload():
     test_pass = "Mattermost_Fresh_Start_1"
     test_user = "testuser"
     test_token = _mm_login(MM, test_user, test_pass)
-    test_content = b"Hello Hermes! Test file content: ABC123XYZ"
+    test_content = b"Hello agent! Test file content: ABC123XYZ"
     boundary = uuid.uuid4().hex
     body = b""
     body += f"--{boundary}\r\n".encode()
@@ -5192,7 +5192,7 @@ if __name__ == "__main__":
     # If a previous run left the repo dirty, fail fast instead of hiding it.
     if not _args.group: check_git_clean()
 
-    # Mark repo as safe for git (container runs as root, host runs as hermes)
+    # Mark repo as safe for git (container runs as root, host runs as the host user)
     import subprocess as _git_sp
     _git_sp.run(["git", "config", "--global", "--add", "safe.directory", "/opt/workspace/omni-stack"],
                  capture_output=True, timeout=10)
@@ -11645,11 +11645,11 @@ test(test_37_live_actions)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 38: Skills plugin lifecycle - task_18cc76881db8a89a
-#  (prompt get_skills frontmatter display fix + Hermes create_skill layout
+#  (prompt get_skills frontmatter display fix + categorized create_skill layout
 #   + prompt nudge). Spawns the built mcp-server-skills / mcp-server-prompt
 #   binaries over MCP stdio (mirroring GROUP 34/37) with a TEMP omni_dir so
 #   the live profile is never touched. Verifies the full loop:
-#     create_skill -> <cat>/<name>/SKILL.md Hermes layout on disk ->
+#     create_skill -> <cat>/<name>/SKILL.md categorized layout on disk ->
 #     list_skills/view_skill resolve it -> prompt_generate renders
 #     "- <name>: Use when ..." (frontmatter description, NOT the raw ---
 #     fence) plus the create-skill nudge; >1024-char and duplicate
@@ -11701,7 +11701,7 @@ def _g38_tool(proc, name, args, profile_name="omni", req_id=None, timeout=30):
     return text, is_error
 
 def _g38_create_demo_skill(proc, base, name="g38-demo"):
-    """Create the demo skill; asserts the Hermes SKILL.md layout on disk."""
+    """Create the demo skill; asserts the categorized SKILL.md layout on disk."""
     text, is_error = _g38_tool(proc, "create_skill", {
         "name": name,
         "description": "run the release pipeline",
@@ -11714,13 +11714,13 @@ def _g38_create_demo_skill(proc, base, name="g38-demo"):
     content = open(skill_file, encoding="utf-8").read()
     for want in ['name: g38-demo', 'description: "Use when run the release pipeline"',
                  "version: 0.1.0", "author: omniagent", "license: MIT",
-                 "metadata:", "hermes:", "tags:", "- build", "- ci",
+                 "metadata:", "omni:", "tags:", "- build", "- ci",
                  "related_skills:", "- git-workflow"]:
         assert want in content, f"SKILL.md missing {want!r}:\n{content}"
     return content
 
 def test_38_skills_create_list_view():
-    """38-A: skills lifecycle over MCP stdio with a temp omni_dir - Hermes
+    """38-A: skills lifecycle over MCP stdio with a temp omni_dir - categorized
     dir layout, enriched frontmatter, list/view resolution, duplicate +
     >1024-char rejection."""
     import tempfile as _g38_tf
@@ -11758,8 +11758,8 @@ def test_38_skills_create_list_view():
         assert is_error, ">1024 description must fail"
         assert "1024" in text, f"long-desc error msg: {text}"
 
-        print(f"PASS: 38-A create/list/view - Hermes SKILL.md layout, license MIT, "
-              f"use-when prefix, metadata.hermes tags/related_skills, dup+>1024 rejected")
+        print(f"PASS: 38-A create/list/view - categorized SKILL.md layout, license MIT, "
+              f"use-when prefix, metadata.omni tags/related_skills, dup+>1024 rejected")
     finally:
         _g34_stop_proc(proc)
         _g38_sh.rmtree(base, ignore_errors=True)

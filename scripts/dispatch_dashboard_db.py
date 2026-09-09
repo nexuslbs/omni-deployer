@@ -49,7 +49,7 @@ STEP 1 - Verify the omniagent plugin compiles and deploy it:
   d) SELECT table_name FROM information_schema.tables LIMIT 3       -> MUST succeed
 
 STEP 2 - Build + test the dashboard:
-- Fix any root-owned files: sudo chown -R hermes:hermes /opt/workspace/omni-dashboard/dist /opt/workspace/omni-dashboard/node_modules/.vite /opt/workspace/omni-dashboard/node_modules/.vite-temp
+- Fix any root-owned files (chown to the host user who owns the checkout): sudo chown -R <host-user>:<host-user> /opt/workspace/omni-dashboard/dist /opt/workspace/omni-dashboard/node_modules/.vite /opt/workspace/omni-dashboard/node_modules/.vite-temp
 - cd /opt/workspace/omni-dashboard && npm run build  (frontend + server, 0 errors)
 - npm run test:unit -> all pass, 0 skipped (58 tests)
 - npm run format:check clean; npm run lint 0 errors (pre-existing warnings ok)
