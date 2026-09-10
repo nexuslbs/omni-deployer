@@ -14770,4 +14770,62 @@ test(test_54_secrets_redaction)
 test(test_54_session_negative_control)
 
 
+
+
+# ---- GROUP 55: external-tool robustness (external plan X6; code plan 6.2-6.4) ----
+# One timeout/hang/failure/parallel/cleanup case per NEW external tool of the
+# external-interaction plan - himalaya (X1 email read), oathtool/pyotp (X3 TOTP),
+# mcp-playwright (X4/X5 web) and the SMS backend (X2, DEFERRED -> the deferral
+# itself is asserted, so a new backend turns this group RED). Plus the TOOL
+# boundary the agent uses to run the toolbox CLIs (the docker plugin).
+# The cases live in scripts/x6_robustness.py, so they also run standalone inside
+# the agent container (fast iteration, no deploy):
+#     docker exec <agent> python3 /opt/omni/data/scripts/x6_robustness.py
+# Checklist (code plan 6.4): a failure surfaces as a bounded tool error (never a
+# panic/crash/hang), every blocking external call has an explicit bound, parallel
+# calls keep the stdout protocol clean, no in-flight work is left behind.
+# Reference: profiles/omni/wiki/Projects/Omniagent/Omniagent-External-Improvement-Plan.md
+#            (candidate X6), Omniagent-Code-Improvement-Plan.md sections 6.2-6.4
+
+
+def _g55():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "x6_robustness.py")
+    spec = importlib.util.spec_from_file_location("x6_robustness", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_55_a_prereqs_and_sms_deferral():
+    _g55().check_prereqs_and_sms_deferral()
+
+
+def test_55_b_himalaya_timeout_hang_failure_parallel_cleanup():
+    _g55().check_himalaya()
+
+
+def test_55_c_totp_vector_failure_parallel_cleanup():
+    _g55().check_totp()
+
+
+def test_55_d_playwright_hang_bounded_and_parallel():
+    _g55().check_playwright()
+
+
+def test_55_e_tool_timeout_bounded_and_cleanup():
+    _g55().check_tool_timeout()
+
+
+def test_55_f_no_leak_and_stack_healthy():
+    _g55().check_no_leak()
+
+
+test(test_55_a_prereqs_and_sms_deferral)
+test(test_55_b_himalaya_timeout_hang_failure_parallel_cleanup)
+test(test_55_c_totp_vector_failure_parallel_cleanup)
+test(test_55_d_playwright_hang_bounded_and_parallel)
+test(test_55_e_tool_timeout_bounded_and_cleanup)
+test(test_55_f_no_leak_and_stack_healthy)
+
 sys.exit(0 if tests_fail == 0 else 1)
