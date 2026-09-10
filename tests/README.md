@@ -19,3 +19,22 @@ repo, falling back to `/opt/workspace/omni-stack`) or an explicit variable.
   Runs against a live dev stack, restores the config it touches.
   Run (host): `python3 tests/test_remote_yml_source_of_truth.py`
   Run (container): `docker exec -i omnidev-omniagent-1 python3 - < tests/test_remote_yml_source_of_truth.py`
+
+## test_omni_stack_repo_hygiene.py (omni-stack repo hygiene, WS4)
+
+Regression guard for the operator rule (2026-09-10, thread 1614): the
+omni-stack repo must contain NO `config/`, `profile(s)/` or `plugin(s)/`
+directories (only transiently during a run, never committed) and those paths
+must NOT be gitignored, so a transient presence stays visible in `git status`.
+
+```sh
+python3 tests/test_omni_stack_repo_hygiene.py                 # inspect /opt/workspace/omni-stack
+python3 tests/test_omni_stack_repo_hygiene.py --repo-dir DIR   # inspect another checkout
+OMNI_STACK_HYGIENE_STRICT=1 python3 tests/test_omni_stack_repo_hygiene.py  # also fail on untracked leftovers
+```
+
+Exit 0 = clean; exit 1 = a forbidden path is tracked, or `.gitignore` hides
+one (also fails, with `--strict`, when such a path is left on disk without
+being tracked). Demonstrated: PASS on the clean omni-stack checkout, FAIL on a
+synthetic repo with tracked `config/`+`plugins/` and a `.gitignore` hiding
+`profiles/`.
