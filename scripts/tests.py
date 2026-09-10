@@ -14688,9 +14688,46 @@ def test_53_failure_bounded_not_hang():
           "browser healthy afterwards")
 
 
+def test_53_docs_and_baseline_recorded():
+    # 53-E: the X4 deliverables that are not runtime-observable - the registration
+    # METHOD is recorded (omni-plugins MCP tool, not the manifest-less
+    # microsoft/playwright-mcp repo), and the D-3 token baseline is recorded in
+    # the plan G4 row AND in the web-interaction skill rules, next to the
+    # fetch-first / accessibility-tree-only rules.
+    if not _g53_present():
+        print("SKIP: mcp-playwright not installed (omnistable) - nothing to test")
+        return
+    skill = f"{WORKSPACE}/profiles/omni/skills/web-interaction/SKILL.md"
+    ref = f"{WORKSPACE}/profiles/omni/wiki/Reference/Omniagent/Playwright-MCP.md"
+    plan = (f"{WORKSPACE}/profiles/omni/wiki/Projects/Omniagent/"
+            "Omniagent-External-Improvement-Plan.md")
+    for p in (skill, ref, plan):
+        assert os.path.exists(p), f"missing X4 deliverable: {p}"
+    sk = open(skill, encoding="utf-8").read()
+    for rule in ("fetch", "Accessibility tree only", "browser-find",
+                 "--timeout-action=10000", "--timeout-navigation=30000"):
+        assert rule in sk, f"web-interaction skill misses rule {rule!r}"
+    assert "0.75" in sk, "web-interaction skill misses the measured token baseline"
+    rf = open(ref, encoding="utf-8").read()
+    assert "tools/playwright-mcp" in rf, "reference page misses the registration method"
+    pl = open(plan, encoding="utf-8").read()
+    assert "measured X4 baseline" in pl, "plan G4 row misses the X4 baseline"
+    assert "## 12. X4 status: COMPLETE" in pl, "plan misses the X4 status section"
+    rl = open(f"{WORKSPACE}/config/remote.yml", encoding="utf-8").read().splitlines()
+    ridx = [k for k, x in enumerate(rl) if x.startswith("  mcp-playwright:")]
+    assert len(ridx) == 1, "remote.yml: no unique mcp-playwright registry entry"
+    rentry = "".join(rl[ridx[0]:ridx[0] + 3])
+    assert "tools/playwright-mcp" in rentry, f"registry entry wrong: {rentry!r}"
+    assert "microsoft/playwright-mcp" not in rentry, \
+        f"registry still points at the manifest-less repo: {rentry!r}"
+    print("PASS: 53-E registration method (omni-plugins tools/playwright-mcp) + "
+          "D-3 token baseline recorded (skill, reference page, plan G4/section 12)")
+
+
 test(test_53_registration)
 test(test_53_navigate_snapshot)
 test(test_53_form_auth_flow_token_baseline)
 test(test_53_failure_bounded_not_hang)
+test(test_53_docs_and_baseline_recorded)
 
 sys.exit(0 if tests_fail == 0 else 1)
