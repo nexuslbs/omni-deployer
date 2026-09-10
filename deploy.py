@@ -407,7 +407,8 @@ def generate_env(mode):
 
     with open(OMNI_ENV_PATH, "w") as f:
         f.write("COMPOSE_PROJECT_NAME=omnideploy\n")
-        f.write("COMPOSE_PROFILES=mattermost,noop,paperclip\n")
+        f.write("COMPOSE_PROFILES=mattermost,noop,paperclip,qdrant\n")
+        f.write("QDRANT_URL=http://qdrant:6333\n")
         # omnideploy (deploy/ci/hybrid) binds the omni-stack checkout at
         # /opt/omni - the compose mount interpolates HOST_OMNI_DIR. This is
         # the ONE launcher that maps to omni-stack; omnidev/omnistable map to
@@ -458,7 +459,8 @@ def generate_env(mode):
     tmp.write(f"S3_PATH={s3_path}\n")
     tmp.write(f"POSTGRES_PASSWORD={p1}\n")
     tmp.write(f"MM_POSTGRES_PASSWORD={p2}\n")
-    tmp.write(f"COMPOSE_PROFILES=mattermost,noop,paperclip\n")
+    tmp.write(f"COMPOSE_PROFILES=mattermost,noop,paperclip,qdrant\n")
+    tmp.write("QDRANT_URL=http://qdrant:6333\n")
     tmp_path = tmp.name
     tmp.close()
     subprocess.run(["sudo", "cp", tmp_path, stack_env], check=True)

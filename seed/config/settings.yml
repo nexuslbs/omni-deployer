@@ -55,10 +55,3 @@ unsorted:
   messages_vectorization_method: local
   messages_vectorization_protocol: openai
   vectorize_messages: true
-  vectorize_wiki: false
-  wiki_vectorization_api_key: ''
-  wiki_vectorization_api_model: ''
-  wiki_vectorization_api_url: ''
-  wiki_vectorization_interval: 3600
-  wiki_vectorization_method: local
-  wiki_vectorization_protocol: openai

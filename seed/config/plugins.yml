@@ -19,6 +19,23 @@ platforms:
     config:
       bot_token: $secret:TELEGRAM_TOKEN
 tools:
+  semantic_search:
+    enabled: true
+    source: remote
+    config:
+      # Endpoint comes from the container env (QDRANT_URL, wired by the compose
+      # files); no literal host/port is committed here.
+      qdrant_url: $env:QDRANT_URL
+      collection: wiki_semantic
+      corpus_roots: profiles/{profile}/wiki
+      corpus_globs: '**/*.md'
+      embedding_backend: hash
+      embedding_model: BAAI/bge-small-en-v1.5
+      chunk_size: 1200
+      chunk_overlap: 200
+      batch_size: 64
+      default_limit: 10
+      timeout_secs: 20
   actions:
     enabled: true
     source: remote
