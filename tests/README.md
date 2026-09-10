@@ -57,3 +57,22 @@ Run it (no container needed, plain python3):
 
 Overrides: `OMNI_ROOT_DIR`, `OMNI_STACK_DIR`, `BRANCH_MAIN` (default
 origin/main), `BRANCH_DEV` (default origin/dev). Exit code 1 on a violation.
+
+## test_twilio_sms_skill.py
+
+Unit guard for the `sms-read-twilio` skill helper
+(`profiles/omni/skills/communication/sms-read-twilio/twilio_sms.py`, omni-root
+profile content shared by both branches): verification-code extraction
+(standalone 4-8 digits, rejects digits embedded in longer numbers),
+OTP/service/plain body classification, newest-inbound selection with its
+confidence marker, and "the shipped helper carries no literal credential".
+Pure logic only - no network, no credentials, stdlib only.
+
+```sh
+python3 tests/test_twilio_sms_skill.py
+TWILIO_SKILL_DIR=/path/to/sms-read-twilio python3 tests/test_twilio_sms_skill.py
+```
+
+Prints `SKIP` and exits 0 when no checkout containing the skill is mounted
+(so a workspace without omni-root does not fail), exit 1 on a behaviour
+regression.
