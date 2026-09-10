@@ -14729,5 +14729,45 @@ test(test_53_navigate_snapshot)
 test(test_53_form_auth_flow_token_baseline)
 test(test_53_failure_bounded_not_hang)
 test(test_53_docs_and_baseline_recorded)
+# ---- GROUP 54: web session/auth recipe (external plan X5, D-2) ----
+# Per-site --storage-state, --secrets redaction, cookie hygiene and the verified
+# login-once/reuse flow. The heavy lifting lives in scripts/x5_session_auth.py, so
+# the recipe can also be verified standalone. It starts the DEPLOYED wrapper
+# (mcp-config.json) as a child process with PW_STATE_FILE / PW_SECRET_* injected,
+# exactly like the plugin env: block, and drives it over stdio JSON-RPC.
+# The group SKIPs when mcp-playwright is not installed (other stacks).
+# Reference: profiles/omni/skills/web-interaction/SKILL.md
+
+
+def _g54():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "x5_session_auth.py")
+    spec = importlib.util.spec_from_file_location("x5_session_auth", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_54_recipe_static():
+    _g54().check_recipe_static()
+
+
+def test_54_storage_state_roundtrip():
+    _g54().check_storage_state_roundtrip()
+
+
+def test_54_secrets_redaction():
+    _g54().check_secrets_redaction()
+
+
+def test_54_session_negative_control():
+    _g54().check_negative_control()
+
+
+test(test_54_recipe_static)
+test(test_54_storage_state_roundtrip)
+test(test_54_secrets_redaction)
+test(test_54_session_negative_control)
+
 
 sys.exit(0 if tests_fail == 0 else 1)
