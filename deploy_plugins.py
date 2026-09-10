@@ -178,6 +178,34 @@ def run_plugin_tests(compose, mode, passes=1):
 #  Deploy flows
 # ═══════════════════════════════════════════════════════════════════════
 
+def run_semantic_search_tests(compose, mode):
+    """Run the semantic_search plugin integration suite against a real Qdrant.
+
+    The suite lives in the omni-plugins checkout on the runner (the stack
+    containers do not mount that checkout), so it is copied into the omniagent
+    container first. Qdrant is part of the dev/CI compose profiles
+    (shared.generate_env and generate_ci_env both request it) and is reachable
+    in-container through $QDRANT_URL. Embeddings are computed locally by the
+    plugin - no LLM and no embedding API is contacted.
+    """
+    src = os.path.join(OMNI_PLUGINS_DIR, "tools", "semantic_search")
+    dest = "/tmp/semantic_search"
+    if not os.path.isdir(src):
+        raise RuntimeError(f"semantic_search plugin source not found: {src}")
+    print("\n[deploy_plugins] Running the semantic_search integration suite (real Qdrant)...")
+    compose_check(compose, mode, "exec", "-T", "omniagent", "rm", "-rf", dest,
+                  label="clean plugin copy")
+    compose_check(compose, mode, "cp", src, f"omniagent:{dest}",
+                  label="copy semantic_search into the container")
+    r = compose_run(compose, mode, "exec", "-T", "omniagent",
+                    "python3", "-u", f"{dest}/tests/test_semantic_search.py")
+    sys.stdout.write(r.stdout or "")
+    sys.stderr.write(r.stderr or "")
+    if r.returncode != 0:
+        raise RuntimeError(f"semantic_search integration suite failed (exit={r.returncode})")
+    print("  semantic_search integration suite PASSED")
+
+
 def _deploy_dev():
     """Dev mode: bring up the omnidev stack with the dev overlay and a local
     omniagent build, then run the plugin test suite.
@@ -210,6 +238,7 @@ def _deploy_dev():
     wait_for_health(compose, mode)
 
     run_plugin_tests(compose, mode)
+    run_semantic_search_tests(compose, mode)
     print(f"\n{'=' * 60}")
     print("  ALL PLUGIN TESTS PASSED (dev)")
     print(f"{'=' * 60}")
@@ -235,6 +264,7 @@ def _deploy_ci():
     wait_for_health(compose, mode)
 
     run_plugin_tests(compose, mode)
+    run_semantic_search_tests(compose, mode)
     print(f"\n{'=' * 60}")
     print("  ALL PLUGIN TESTS PASSED (ci)")
     print(f"{'=' * 60}")
@@ -245,6 +275,7 @@ def _deploy_test():
     mode = "dev" if os.path.exists(OMNIDEV_ENV_PATH) else "ci"
     compose = compose_cmd(mode)
     run_plugin_tests(compose, mode)
+    run_semantic_search_tests(compose, mode)
 
 
 def main():
