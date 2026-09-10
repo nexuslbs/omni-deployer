@@ -34,6 +34,7 @@ BRANCH_MAIN = os.environ.get("BRANCH_MAIN", "origin/main")
 BRANCH_DEV = os.environ.get("BRANCH_DEV", "origin/dev")
 
 FORBIDDEN_STACK_PREFIXES = ("config/", "profile/", "profiles/", "plugin/", "plugins/")
+LOCAL_PLUGINS_URL = "file:///opt/workspace/omni-plugins"
 
 failures = []
 
@@ -167,6 +168,25 @@ def check_branches():
         )
     else:
         print("ok omni-stack tracks no config/profile(s)/plugin(s) paths")
+
+    # 6. remote plugin URLs differ per branch: production (main) must declare
+    #    the omni-plugins plugins with the GitHub URL, never a local directory;
+    #    dev may (and does) keep the workspace checkout URL.
+    main_remote = git(OMNI_ROOT, "show", f"{BRANCH_MAIN}:config/remote.yml").stdout
+    if main_remote:
+        if LOCAL_PLUGINS_URL in main_remote:
+            failures.append(
+                f"{BRANCH_MAIN}: config/remote.yml points at a local directory "
+                f"({LOCAL_PLUGINS_URL}) - production must use the GitHub URLs"
+            )
+        else:
+            print(f"ok {BRANCH_MAIN} config/remote.yml uses remote (GitHub) plugin URLs")
+    dev_remote = git(OMNI_ROOT, "show", f"{BRANCH_DEV}:config/remote.yml").stdout
+    if dev_remote and LOCAL_PLUGINS_URL in dev_remote:
+        print(
+            f"ok {BRANCH_DEV} config/remote.yml keeps local-dir plugin URLs "
+            "(dev may use the workspace checkout)"
+        )
 
 
 def main():
