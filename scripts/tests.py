@@ -14518,4 +14518,179 @@ def test_52_env_leak_marker():
 
 
 test(test_52_env_leak_marker)
+
+# ---- GROUP 53: Playwright MCP remote tool plugin (external plan X4) ----
+# mcp-playwright is registered as a REMOTE MCP tool plugin (remote.yml +
+# plugins.yml, source: remote) from the omni-plugins repo (tools/playwright-mcp)
+# and runs the official mcr.microsoft.com/playwright/mcp image over stdio
+# (docker run -i) in headless mode with bounded action/navigation timeouts.
+# These tests assert the registration, drive a REAL browser task through
+# POST /mcp/execute (navigate -> snapshot -> fill_form -> click -> snapshot on
+# the accessibility tree, no screenshots), bound the token cost of that
+# canonical task, and prove a failing navigation is a bounded error - not a
+# hang. The group SKIPs when the plugin is not installed (other stacks).
+# Reference: profiles/omni/wiki/Reference/Omniagent/Playwright-MCP.md
+
+G53_TOOLS = ("browser-navigate", "browser-snapshot", "browser-find",
+             "browser-click", "browser-type", "browser-fill-form")
+
+
+def _g53_present():
+    return os.path.isdir(f"{WORKSPACE}/plugins/tools/.remote/mcp-playwright")
+
+
+def _g53_chars(env):
+    c = env.get("content") or ""
+    if isinstance(c, list):
+        c = " ".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in c)
+    return c
+
+
+def _g53_ref(snapshot_text, needle):
+    # Accessibility-tree reference for the first line containing needle:
+    #   - textbox "Username" [ref=f2e16]   ->   f2e16
+    for line in snapshot_text.splitlines():
+        if needle in line and "[ref=" in line:
+            return line.split("[ref=", 1)[1].split("]", 1)[0]
+    return None
+
+
+def test_53_registration():
+    # 53-A: static registration (remote.yml + plugins.yml + plugin dir +
+    # headless/timeout flags) and the live tool registry.
+    if not _g53_present():
+        print("SKIP: mcp-playwright not installed (omnistable) - nothing to test")
+        return
+    with open(f"{WORKSPACE}/config/plugins.yml", encoding="utf-8") as f:
+        plugins_yml = f.read()
+    parts = plugins_yml.split("  mcp-playwright:", 1)
+    assert len(parts) == 2, "plugins.yml: no mcp-playwright tool entry"
+    idx = [k for k, l in enumerate(plugins_yml.splitlines()) if l.strip().startswith("mcp-playwright:")]
+    assert len(idx) == 1, "plugins.yml: no unique mcp-playwright tool entry"
+    entry = "".join(plugins_yml.splitlines()[idx[0]:idx[0] + 6])
+    assert "enabled: true" in entry, f"mcp-playwright not enabled: {entry!r}"
+    assert "source: remote" in entry, f"mcp-playwright not remote: {entry!r}"
+    with open(f"{WORKSPACE}/config/remote.yml", encoding="utf-8") as f:
+        remote_yml = f.read()
+    rparts = remote_yml.split("  mcp-playwright:", 1)
+    assert len(rparts) == 2, "remote.yml: no mcp-playwright registry entry"
+    ridx = [k for k, l in enumerate(remote_yml.splitlines()) if l.strip().startswith("mcp-playwright:")]
+    assert len(ridx) == 1, "remote.yml: no unique mcp-playwright registry entry"
+    rentry = "".join(remote_yml.splitlines()[ridx[0]:ridx[0] + 4])
+    assert "tools/playwright-mcp" in rentry, f"remote.yml path wrong: {rentry!r}"
+    cfg_path = (f"{WORKSPACE}/plugins/tools/.remote/mcp-playwright"
+                "/tools/playwright-mcp/mcp-config.json")
+    assert os.path.exists(cfg_path), f"missing {cfg_path}"
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = f.read()
+    for flag in ("--headless", "--timeout-action=", "--timeout-navigation=",
+                 "mcr.microsoft.com/playwright/mcp"):
+        assert flag in cfg, f"mcp-config.json misses {flag}: {cfg[:200]}"
+    assert '"timeout_secs"' in cfg, f"mcp-config.json must bound the timeout: {cfg[:300]}"
+    tools = json.loads(urllib.request.urlopen(f"{BASE}/mcp/tools", timeout=30).read().decode())
+    names = {t["name"] for t in tools}
+    missing = [n for n in G53_TOOLS if f"mcp-playwright_{n}" not in names]
+    assert not missing, f"live registry misses playwright tools: {missing}"
+    pw = [n for n in names if n.startswith("mcp-playwright_")]
+    assert len(pw) >= 20, f"expected >=20 playwright tools, got {len(pw)}: {sorted(pw)}"
+    print(f"PASS: 53-A mcp-playwright registered (remote.yml + plugins.yml, "
+          f"headless, action/navigation timeouts) with {len(pw)} live tools")
+
+
+def test_53_navigate_snapshot():
+    # 53-B: a real headless navigation + accessibility-tree snapshot; the
+    # snapshot must be the yaml tree (no image data) and size-bounded.
+    if not _g53_present():
+        print("SKIP: mcp-playwright not installed (omnistable) - nothing to test")
+        return
+    nav = _g32_mcp_execute_raw("mcp-playwright_browser-navigate",
+                               {"url": "https://example.com"}, timeout=90)
+    assert nav.get("success"), f"navigate failed: {str(nav)[:300]}"
+    assert "example.com" in _g53_chars(nav), f"navigate content: {_g53_chars(nav)[:200]}"
+    snap = _g32_mcp_execute_raw("mcp-playwright_browser-snapshot", {}, timeout=90)
+    body = _g53_chars(snap)
+    assert snap.get("success") and "### Snapshot" in body, f"snapshot failed: {str(snap)[:300]}"
+    assert "Page URL: https://example.com" in body, f"not the example.com tree: {body[:200]}"
+    assert "iVBORw0KGgo" not in body, "snapshot returned a PNG blob, not the tree"
+    assert 200 < len(body) < 40000, f"snapshot size out of bounds: {len(body)} chars"
+    print(f"PASS: 53-B navigate + accessibility-tree snapshot "
+          f"({len(body)} chars, no image data)")
+
+
+def test_53_form_auth_flow_token_baseline():
+    # 53-C: the canonical web task (login + verify) end to end plus the token
+    # baseline guard: targeted snapshots keep it under ~1k tokens (chars/4);
+    # the ceiling only catches a flow that dumps whole pages into context.
+    if not _g53_present():
+        print("SKIP: mcp-playwright not installed (omnistable) - nothing to test")
+        return
+    p = "mcp-playwright_"
+    spent = 0
+    env = _g32_mcp_execute_raw(p + "browser-navigate",
+                               {"url": "https://the-internet.herokuapp.com/login"},
+                               timeout=90)
+    assert env.get("success"), f"navigate failed: {str(env)[:300]}"
+    spent += len(_g53_chars(env))
+    env = _g32_mcp_execute_raw(p + "browser-snapshot", {}, timeout=90)
+    snap = _g53_chars(env)
+    assert env.get("success") and "textbox" in snap, f"login snapshot failed: {snap[:200]}"
+    spent += len(snap)
+    user = _g53_ref(snap, 'textbox "Username"')
+    pwd = _g53_ref(snap, 'textbox "Password"')
+    btn = _g53_ref(snap, 'button "')
+    assert user and pwd and btn, f"login form refs not found: {snap[:400]}"
+    # The demo site prints these credentials on the page itself: public test
+    # values of that site, not secrets of this deployment.
+    env = _g32_mcp_execute_raw(p + "browser-fill-form", {"fields": [
+        {"name": "Username", "type": "textbox", "target": user, "value": "tomsmith"},
+        {"name": "Password", "type": "textbox", "target": pwd,
+         "value": "SuperSecretPassword!"}]}, timeout=90)
+    assert env.get("success"), f"fill-form failed: {str(env)[:300]}"
+    spent += len(_g53_chars(env))
+    env = _g32_mcp_execute_raw(p + "browser-click",
+                               {"element": "Login button", "target": btn}, timeout=90)
+    assert env.get("success"), f"click failed: {str(env)[:300]}"
+    spent += len(_g53_chars(env))
+    env = _g32_mcp_execute_raw(p + "browser-snapshot", {}, timeout=90)
+    post = _g53_chars(env)
+    assert env.get("success") and "You logged into a secure area" in post, \
+        f"login did not succeed: {post[:300]}"
+    spent += len(post)
+    est = spent // 4
+    assert spent < 25000, f"canonical web task used {spent} chars (~{est} tokens)"
+    print(f"PASS: 53-C login flow verified in the browser; canonical task cost "
+          f"{spent} chars (~{est} tokens, chars/4); ceiling 25000 chars")
+
+
+def test_53_failure_bounded_not_hang():
+    # 53-D: a failing navigation is a bounded error and the server stays healthy
+    # afterwards (no wedged session, no stalled thread).
+    if not _g53_present():
+        print("SKIP: mcp-playwright not installed (omnistable) - nothing to test")
+        return
+    p = "mcp-playwright_"
+    t0 = time.time()
+    outcome = "error-envelope"
+    try:
+        env = _g32_mcp_execute_raw(p + "browser-navigate",
+                                   {"url": "https://no-such-host-x4.invalid/"}, timeout=90)
+        assert _g32_is_error(env), f"unresolvable host must fail: {str(env)[:200]}"
+    except Exception as e:
+        outcome = f"bounded-transport ({type(e).__name__})"
+    dt = time.time() - t0
+    assert dt < 60, f"failing navigation not bounded ({dt:.1f}s)"
+    env = _g32_mcp_execute_raw(p + "browser-navigate",
+                               {"url": "https://example.com"}, timeout=90)
+    assert env.get("success"), f"browser unhealthy after failure: {str(env)[:200]}"
+    env = _g32_mcp_execute_raw(p + "browser-snapshot", {}, timeout=90)
+    assert env.get("success") and _g53_chars(env), "snapshot after failure was empty"
+    print(f"PASS: 53-D failing navigation bounded ({dt:.1f}s, {outcome}); "
+          "browser healthy afterwards")
+
+
+test(test_53_registration)
+test(test_53_navigate_snapshot)
+test(test_53_form_auth_flow_token_baseline)
+test(test_53_failure_bounded_not_hang)
+
 sys.exit(0 if tests_fail == 0 else 1)

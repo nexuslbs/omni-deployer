@@ -21,8 +21,8 @@ tools:
     url: https://github.com/modelcontextprotocol/servers.git
     path: ''
   mcp-playwright:
-    url: https://github.com/microsoft/playwright-mcp.git
-    path: ''
+    url: https://github.com/nexuslbs/omni-plugins.git
+    path: tools/playwright-mcp
   mcp-sequentialthinking:
     url: https://github.com/modelcontextprotocol/servers.git
     path: ''
