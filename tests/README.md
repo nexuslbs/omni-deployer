@@ -38,3 +38,22 @@ one (also fails, with `--strict`, when such a path is left on disk without
 being tracked). Demonstrated: PASS on the clean omni-stack checkout, FAIL on a
 synthetic repo with tracked `config/`+`plugins/` and a `.gitignore` hiding
 `profiles/`.
+
+## test_omni_root_branch_sync.py
+
+Enforces the operator's omni-root branch/sync rules (2026-09-10, thread 1614):
+
+- `profiles/` (templates, skills, wikis, MEMORY) is identical on `origin/main`
+  and `origin/dev`;
+- `services/` + compose files are identical on both branches AND with the
+  omni-stack checkout;
+- the `dev` branch carries neither the `telegram` plugin nor `tasks.yml` cron
+  schedules (configs stay independent per branch);
+- the omni-stack checkout tracks no `config/`, `profile(s)/`, `plugin(s)/` path.
+
+Run it (no container needed, plain python3):
+
+    python3 tests/test_omni_root_branch_sync.py
+
+Overrides: `OMNI_ROOT_DIR`, `OMNI_STACK_DIR`, `BRANCH_MAIN` (default
+origin/main), `BRANCH_DEV` (default origin/dev). Exit code 1 on a violation.
