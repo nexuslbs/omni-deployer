@@ -18,7 +18,7 @@ actions:
     description: test-compact
   a3:
     enabled: true
-    tool_name: builtin_read-attached-file
+    tool_name: core__read_attached_file
     params:
       path: /tmp/test.txt
     description: TestReadAttach

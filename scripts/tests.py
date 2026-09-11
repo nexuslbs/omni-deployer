@@ -692,6 +692,16 @@ tests_run = 0
 tests_pass = 0
 tests_fail = 0
 
+def _tn(name):
+    """Normalize an exposed tool name for grammar-agnostic matching.
+
+    The tool-naming grammar flipped from `{plugin}_{tool}` to `{plugin}__{tool}`
+    (omniagent c78e874); /mcp/tools reports the new form, so comparisons against
+    pre-flip literals collapse `__` back to `_` on BOTH sides.
+    """
+    return (name or "").replace("__", "_")
+
+
 def test(fn):
     global tests_run, tests_pass, tests_fail
     # Allow running a subset via TEST_FILTER=substring (matches fn name)
@@ -3012,7 +3022,7 @@ def test_mm9_e2e():
             r = urllib.request.urlopen(f"{BASE}/mcp/tools", timeout=5)
             tools = json.loads(r.read())
             td = tools if isinstance(tools, list) else (tools.get("tools") or tools.get("data") or [])
-            if any("prompt_generate" in (t.get("full_name") or t.get("name") or "") for t in td):
+            if any(_tn("prompt_generate") in _tn(t.get("full_name") or t.get("name") or "") for t in td):
                 print("[prompt plugin enabled and ready]")
                 break
         except:
@@ -4373,10 +4383,10 @@ def _wf_ensure_mm_members(mm_channel_id):
 
 # ── GROUP 12: File Upload via Mattermost + test-tool-caller ──────────
 def test_fn_12_file_upload():
-    """Upload a file, send JSON script to use builtin_read-attached-file, verify content is read.
+    """Upload a file, send JSON script to use core__read_attached_file, verify content is read.
 
     The test-tool-caller model processes the JSON script step by step. Step 1 calls
-    builtin_read_attached_file with the uploaded file's ID. The response should contain
+    core__read_attached_file with the uploaded file's ID. The response should contain
     the file content.
     """
     import urllib.request, urllib.error, time, uuid
@@ -4442,11 +4452,11 @@ def test_fn_12_file_upload():
     assert file_id, f"No file_id: {file_resp}"
     print(f"[file uploaded: {file_id[:16]}...]")
 
-    # Send a JSON script that uses builtin_read_attached_file with the file_id
+    # Send a JSON script that uses core__read_attached_file with the file_id
     script = json.dumps([
         {
             "name": "read_file",
-            "tool": "builtin_read-attached-file",
+            "tool": "core__read_attached_file",
             "arguments": {"file_id": file_id},
         },
     ])
@@ -4519,7 +4529,7 @@ def test_fn_13_non_blocking():
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "") for t in tools):
+            if any(_tn("test-python_lorem") in _tn(t.get("full_name") or t.get("name") or "") for t in tools):
                 print("[test-python_lorem registered]")
                 break
         except Exception as _ex:
@@ -4553,14 +4563,14 @@ def test_fn_13_non_blocking():
 
         # 4-step script (lorem=6s to exceed 5s short_timeout and trigger background mode):
         # 1. test-python_lorem(6) named "long_run" → returns {task_id, status:processing}
-        # 2. builtin_read_task_logs with task_id from step 1
-        # 3. builtin_wait_task with task_id from step 1 (timeout 120s, but returns in ~6s)
-        # 4. builtin_read-task-logs again to verify summary
+        # 2. core__read_task_logs with task_id from step 1
+        # 3. core__wait_task with task_id from step 1 (timeout 120s, but returns in ~6s)
+        # 4. core__read_task_logs again to verify summary
         script = json.dumps([
             {"name": "long_run", "tool": "test-python_lorem", "arguments": {"seconds": 6}},
-            {"name": "logs1", "tool": "builtin_read-task-logs", "arguments": {"task_id": "${long_run.task_id}", "cursor": 0}},
-            {"name": "wait", "tool": "builtin_wait-task", "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 120}},
-            {"name": "logs2", "tool": "builtin_read-task-logs", "arguments": {"task_id": "${long_run.task_id}", "cursor": 0}},
+            {"name": "logs1", "tool": "core__read_task_logs", "arguments": {"task_id": "${long_run.task_id}", "cursor": 0}},
+            {"name": "wait", "tool": "core__wait_task", "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 120}},
+            {"name": "logs2", "tool": "core__read_task_logs", "arguments": {"task_id": "${long_run.task_id}", "cursor": 0}},
         ])
 
         start = time.time()
@@ -4609,8 +4619,8 @@ def test_fn_14_cancel_task():
 
     Adds test-python for lorem, runs a 3-step script:
     1. test-python_lorem(30) named "long_run" → returns {task_id, status:processing}
-    2. builtin_cancel_task with task_id from step 1 → returns {status: cancelled}
-    3. builtin_poll_task with task_id from step 1 → should confirm cancelled
+    2. core__cancel_task with task_id from step 1 → returns {status: cancelled}
+    3. core__poll_task with task_id from step 1 → should confirm cancelled
 
     Cleans up test-python after.
     """
@@ -4639,7 +4649,7 @@ def test_fn_14_cancel_task():
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "") for t in tools):
+            if any(_tn("test-python_lorem") in _tn(t.get("full_name") or t.get("name") or "") for t in tools):
                 print("[test-python_lorem registered for cancel test]")
                 break
         except Exception as _ex:
@@ -4678,9 +4688,9 @@ def test_fn_14_cancel_task():
         # 4. poll_task confirms cancellation status
         script = json.dumps([
             {"name": "long_run", "tool": "test-python_lorem", "arguments": {"seconds": 30}},
-            {"name": "cancel", "tool": "builtin_cancel-task", "arguments": {"task_id": "${long_run.task_id}"}},
-            {"name": "read_logs", "tool": "builtin_read-task-logs", "arguments": {"task_id": "${long_run.task_id}", "cursor": 0}},
-            {"name": "poll", "tool": "builtin_poll-task", "arguments": {"task_id": "${long_run.task_id}"}},
+            {"name": "cancel", "tool": "core__cancel_task", "arguments": {"task_id": "${long_run.task_id}"}},
+            {"name": "read_logs", "tool": "core__read_task_logs", "arguments": {"task_id": "${long_run.task_id}", "cursor": 0}},
+            {"name": "poll", "tool": "core__poll_task", "arguments": {"task_id": "${long_run.task_id}"}},
         ])
 
         msg_data = json.dumps({"channel_id": mm_channel_id, "message": script}).encode()
@@ -4746,7 +4756,7 @@ def test_fn_16_tool_message_formats():
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (
                 tools_data.get("tools") or tools_data.get("data") or [])
-            if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "") for t in tools):
+            if any(_tn("test-python_lorem") in _tn(t.get("full_name") or t.get("name") or "") for t in tools):
                 print("[test-python_lorem registered]")
                 break
         except Exception:
@@ -4852,13 +4862,13 @@ def test_fn_17_parallel_wait():
     print("[all 3 tools enabled]")
 
     # Wait for all 3 _wait tools to register
-    required_tools = {"test-python_wait", "test-js-tool_wait", "test-rust-tool_wait"}
+    required_tools = {_tn("test-python_wait"), _tn("test-js-tool_wait"), _tn("test-rust-tool_wait")}
     for attempt in range(30):
         try:
             r = urllib.request.urlopen(urllib.request.Request(f"{MCP_BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            registered = set(t.get("full_name") or t.get("name","") for t in tools)
+            registered = set(_tn(t.get("full_name") or t.get("name","")) for t in tools)
             if required_tools.issubset(registered):
                 print(f"[all 3 _wait tools registered ({len(registered)} tools)]")
                 break
@@ -5379,7 +5389,7 @@ if __name__ == "__main__":
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            if any("prompt_compact" in (t.get("full_name") or t.get("name") or "") for t in tools):
+            if any(_tn("prompt_compact") in _tn(t.get("full_name") or t.get("name") or "") for t in tools):
                 break
         except Exception as _ex:
             print(f"  [waiting: {_ex}]")
@@ -5631,14 +5641,14 @@ services:
 
         # 3-step script:
         # 1. docker_compose exec appends a marker + sleeps 6s (>5s → bg task)
-        # 2. builtin_wait-task on the task_id (must resolve, not hang)
+        # 2. core__wait_task on the task_id (must resolve, not hang)
         # 3. docker_compose exec reads the marker line count
         script = json.dumps([
             {"name": "long_run", "tool": "docker_compose",
              "arguments": {"project_dir": project_dir, "command": "exec",
                            "service": "worker",
                            "args": f"echo BG_ONCE >> {marker_path} && sleep 6"}},
-            {"name": "wait", "tool": "builtin_wait-task",
+            {"name": "wait", "tool": "core__wait_task",
              "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 60}},
             {"name": "count", "tool": "docker_compose",
              "arguments": {"project_dir": project_dir, "command": "exec",
@@ -6415,12 +6425,12 @@ def _g24_wait_for_tool(tool_name, timeout=24):
                 tools = tools["tools"]
             if isinstance(tools, list):
                 names = [
-                    (t.get("full_name") or t.get("name") or "") if isinstance(t, dict) else str(t)
+                    _tn(t.get("full_name") or t.get("name") or "") if isinstance(t, dict) else _tn(str(t))
                     for t in tools
                 ]
             else:
                 names = list(tools.keys())
-            if any(tool_name in n for n in names):
+            if any(_tn(tool_name) in n for n in names):
                 return True
         except Exception:
             pass
@@ -7470,7 +7480,7 @@ test(test_22_6_kanban_invalid_status)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 22: Workflow Implementation (R7)
-#  Executor/tester/reviewer combos, builtin_fail-thread transitions,
+#  Executor/tester/reviewer combos, core__fail_thread transitions,
 #  interruption reruns, retry-exhaustion → blocked, clear_executions_on_review,
 #  D9 dependency gate.
 #  NOTE: workflow role provider/model are metadata (resolved at PUT); step
@@ -7485,8 +7495,8 @@ print("GROUP 22: Workflow Implementation (R7) - combos, fail-thread, interruptio
 print("=" * 60)
 
 WF_SCRIPT_OK = json.dumps([{"name": "ok", "tool": "test-python_lorem", "arguments": {"seconds": 1}}])
-WF_SCRIPT_FAIL_RUNNING = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "running"}}])
-WF_SCRIPT_FAIL_TESTING = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "testing"}}])
+WF_SCRIPT_FAIL_RUNNING = json.dumps([{"name": "fail", "tool": "core__fail_thread", "arguments": {"workflow_step": "running"}}])
+WF_SCRIPT_FAIL_TESTING = json.dumps([{"name": "fail", "tool": "core__fail_thread", "arguments": {"workflow_step": "testing"}}])
 WF_SCRIPT_4STEPS = json.dumps([{"name": f"s{i}", "tool": "test-python_lorem", "arguments": {"seconds": 1}} for i in range(4)])
 
 
@@ -7507,7 +7517,7 @@ def _wf_ensure_test_python():
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            names = [(t.get("full_name") or t.get("name") or "") for t in tools]
+            names = [_tn(t.get("full_name") or t.get("name") or "") for t in tools]
             if (any("test-python_lorem" in n for n in names) and
                     any("prompt_generate" in n for n in names)):
                 # Settle: the discovery/registry update lags the async server spawn.
@@ -7792,7 +7802,7 @@ def test_22_workflow_3_executor_tester_reviewer():
 
 
 def test_22_workflow_4_fail_thread_running_retry_then_blocked():
-    """builtin_fail-thread with workflow_step='running': first failure → retry (task stays running, new thread), then retry-limit → blocked."""
+    """core__fail_thread with workflow_step='running': first failure → retry (task stays running, new thread), then retry-limit → blocked."""
     cid, orig = _wf_channel_patch()
     _wf_ensure_test_python()
     key = "wf_test_fail_run_" + uuid.uuid4().hex[:8]
@@ -7829,7 +7839,7 @@ def test_22_workflow_4_fail_thread_running_retry_then_blocked():
 
 
 def test_22_workflow_5_fail_thread_testing_no_tester_blocked():
-    """builtin_fail-thread with workflow_step='testing' from the executor with NO tester role → blocked (fail matrix F2)."""
+    """core__fail_thread with workflow_step='testing' from the executor with NO tester role → blocked (fail matrix F2)."""
     cid, orig = _wf_channel_patch()
     _wf_ensure_test_python()
     key = "wf_test_fail_test_" + uuid.uuid4().hex[:8]
@@ -8409,7 +8419,7 @@ def test_27_hooks_counter_trigger_reset():
 def test_27_hooks_scope_channel_profile():
     """GROUP 27-B: channel scope (target by name) and profile scope (target by name) - matching
     events trigger the scoped counter+reset, mismatched events are ignored. Action mode executes
-    an actions.yml action (a3 = builtin_read-attached-file; its params error on the missing
+    an actions.yml action (a3 = core__read_attached_file; its params error on the missing
     file_id, but reaching the tool proves the registry executed it).
     Evidence is DB/API-based (journald drops log lines under load):
       - channel/profile observer hooks (count=100000, never trigger) count the thread_started
@@ -8745,7 +8755,7 @@ def test_27_hooks_event_meta():
 
 def test_27_hooks_event_action():
     """GROUP 27-F-2: action-mode trigger writes meta + resets the counter (the trigger path
-    ran), and the actions.yml action executes (a3 = builtin_read-attached-file; its params
+    ran), and the actions.yml action executes (a3 = core__read_attached_file; its params
     error on the missing file, but reaching the tool proves the event was merged into the
     McpToolCall arguments and executed via the plugin registry)."""
     _h27_cleanup()
@@ -9413,7 +9423,7 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
                 tools_data = json.loads(r.read())
                 tools = tools_data if isinstance(tools_data, list) else (
                     tools_data.get("tools") or tools_data.get("data") or [])
-                if any("test-python_lorem" in (t.get("full_name") or t.get("name") or "")
+                if any(_tn("test-python_lorem") in _tn(t.get("full_name") or t.get("name") or "")
                        for t in tools):
                     break
             except Exception:
@@ -9426,7 +9436,7 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
 
         script_a = json.dumps([
             {"name": "long_run", "tool": "test-python_lorem", "arguments": {"seconds": 40}},
-            {"name": "wait", "tool": "builtin_wait-task",
+            {"name": "wait", "tool": "core__wait_task",
              "arguments": {"task_id": "${long_run.task_id}", "timeout_secs": 60}},
         ])
         # Baseline BEFORE posting: earlier tests (GROUP 13) also post scripts
@@ -9445,7 +9455,7 @@ def test_30_stop_thread_live_pending_stop_keeps_processing():
 
         script_b = json.dumps([
             {"name": "short", "tool": "test-python_lorem", "arguments": {"seconds": 1}},
-            {"name": "wait", "tool": "builtin_wait-task",
+            {"name": "wait", "tool": "core__wait_task",
              "arguments": {"task_id": "${short.task_id}", "timeout_secs": 30}},
         ])
         pre_b = _g30_max_thread_id()
@@ -11842,7 +11852,7 @@ test(test_38_prompt_renders_skills_block)
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 39: Plugin consolidation - task_18cc76a266a194f9
 #  search/query/metrics merged into ONE search plugin (7 search_* tools),
-#  cron+kanban replaced by generic builtin_omniagent-api tool +
+#  cron+kanban replaced by generic core__omniagent_api tool +
 #  DELETE /schedule/{id}, telegram/hindsight out of omniagent (remote).
 # ═══════════════════════════════════════════════════════════════════════
 print("GROUP 39: Plugin consolidation (search merge, omniagent-api generic tool, DELETE /schedule/{id})")
@@ -11900,13 +11910,13 @@ def test_39_live_plugins():
 
 
 def test_39_search_tools_listed():
-    """39-C: /mcp/tools lists all 7 search_* tools + builtin_omniagent-api."""
+    """39-C: /mcp/tools lists all 7 search_* tools + core__omniagent_api."""
     req = urllib.request.Request(f"{BASE}/mcp/tools")
     with urllib.request.urlopen(req, timeout=10) as r:
         tools = json.loads(r.read().decode("utf-8"))
     if isinstance(tools, dict) and "tools" in tools:
         tools = tools["tools"]
-    names = [t.get("full_name") or t.get("name") or "" for t in tools] if isinstance(tools, list) else list(tools.keys())
+    names = [_tn(t.get("full_name") or t.get("name") or "") for t in tools] if isinstance(tools, list) else [_tn(k) for k in tools.keys()]
 
     # Registered names are dasherized per omni-stack ac431c3:
     # search_thread-messages / search_channel-prompts (underscore kept after
@@ -11915,8 +11925,8 @@ def test_39_search_tools_listed():
                  "search_thread-messages", "search_channel-prompts",
                  "search_channels", "search_metrics"]:
         assert any(want in n for n in names), f"{want} not in /mcp/tools ({len(names)} tools)"
-    assert any("builtin_omniagent-api" in n for n in names), "builtin_omniagent-api not in /mcp/tools"
-    print("PASS: 7 search_* tools + builtin_omniagent-api listed in /mcp/tools")
+    assert any(_tn("core__omniagent_api") in n for n in names), "core__omniagent_api not in /mcp/tools"
+    print("PASS: 7 search_* tools + core__omniagent_api listed in /mcp/tools")
 
 
 def test_39_schedule_delete():
@@ -11950,7 +11960,7 @@ def test_39_schedule_delete():
 
 
 def test_39_omniagent_api_generic_tool():
-    """39-E: builtin_omniagent-api generic tool e2e - kanban CRUD + schedule
+    """39-E: core__omniagent_api generic tool e2e - kanban CRUD + schedule
     CRUD incl DELETE via the generic MCP tool (method/path/body to :8080)."""
     import uuid as _g39_uuid
     title = f"g39api{_g39_uuid.uuid4().hex[:8]}"
@@ -11960,7 +11970,7 @@ def test_39_omniagent_api_generic_tool():
         _g39_tbody = {"title": title, "status": "todo"}
         if _kanban_plain_board():
             _g39_tbody["board"] = "plain"
-        resp = _g24_mcp_execute("builtin_omniagent-api",
+        resp = _g24_mcp_execute("core__omniagent_api",
                                 {"method": "POST", "path": "/kanban/tasks",
                                  "body": _g39_tbody})
         out = resp.get("content") or ""
@@ -11969,16 +11979,16 @@ def test_39_omniagent_api_generic_tool():
         data = json.loads(body)
         tid = data.get("data", {}).get("id") or data.get("id")
         assert tid, f"no task id in: {out[:300]}"
-        print(f"  ✓ kanban task {tid} created via builtin_omniagent-api")
+        print(f"  ✓ kanban task {tid} created via core__omniagent_api")
 
-        resp = _g24_mcp_execute("builtin_omniagent-api",
+        resp = _g24_mcp_execute("core__omniagent_api",
                                 {"method": "GET", "path": "/kanban/tasks"})
         out = resp.get("content") or ""
         assert "HTTP 200" in out and title in out, f"kanban list via generic tool: {out[:300]}"
         print("  ✓ kanban list via generic tool")
 
         sname = f"g39apisched{_g39_uuid.uuid4().hex[:8]}"
-        resp = _g24_mcp_execute("builtin_omniagent-api",
+        resp = _g24_mcp_execute("core__omniagent_api",
                                 {"method": "POST", "path": "/schedule",
                                  "body": {"name": sname, "cron": "0 5 * * *",
                                           "prompt": "g39 api", "channel": "cron",
@@ -11989,20 +11999,20 @@ def test_39_omniagent_api_generic_tool():
         sdata = json.loads(body)
         sid = sdata.get("data", {}).get("id") or sdata.get("id")
         assert sid, f"no schedule id in: {out[:300]}"
-        print(f"  ✓ schedule {sid} created via builtin_omniagent-api")
+        print(f"  ✓ schedule {sid} created via core__omniagent_api")
 
-        resp = _g24_mcp_execute("builtin_omniagent-api",
+        resp = _g24_mcp_execute("core__omniagent_api",
                                 {"method": "DELETE", "path": f"/schedule/{sid}"})
         out = resp.get("content") or ""
         assert "HTTP 200" in out, f"DELETE /schedule/{sid} via generic tool: {out[:300]}"
-        print(f"  ✓ DELETE /schedule/{sid} via builtin_omniagent-api")
+        print(f"  ✓ DELETE /schedule/{sid} via core__omniagent_api")
         sid = None
 
-        resp = _g24_mcp_execute("builtin_omniagent-api",
+        resp = _g24_mcp_execute("core__omniagent_api",
                                 {"method": "DELETE", "path": f"/kanban/tasks/{tid}"})
         out = resp.get("content") or ""
         assert "HTTP 200" in out, f"kanban delete via generic tool: {out[:300]}"
-        print(f"  ✓ kanban task {tid} deleted via builtin_omniagent-api")
+        print(f"  ✓ kanban task {tid} deleted via core__omniagent_api")
         tid = None
     finally:
         if tid:
@@ -12010,7 +12020,7 @@ def test_39_omniagent_api_generic_tool():
         if sid:
             delete_json(f"/schedule/{sid}", raise_on_error=False)
             tasks_yml_remove_keys(lambda section, key: key == sid)
-    print("PASS: builtin_omniagent-api generic tool e2e (kanban CRUD + schedule CRUD incl DELETE)")
+    print("PASS: core__omniagent_api generic tool e2e (kanban CRUD + schedule CRUD incl DELETE)")
 
 
 test(test_39_plugins_yml_consolidated)
@@ -12262,9 +12272,9 @@ test(test_40_auto_approve_forces_review_on_fail_false)
 #  routes non-reviewer blocked-bound fails to REVIEW; auto_approve forces the
 #  flag off; the fail reason propagates into the re-run thread's cause message.
 # ═══════════════════════════════════════════════════════════════════════
-WF_SCRIPT_FAIL_F0 = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {}}])
-WF_SCRIPT_FAIL_BLOCKED = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "blocked"}}])
-WF_SCRIPT_FAIL_REASON = json.dumps([{"name": "fail", "tool": "builtin_fail-thread", "arguments": {"workflow_step": "running", "reason": "REASON41-PROPAGATE-MARKER"}}])
+WF_SCRIPT_FAIL_F0 = json.dumps([{"name": "fail", "tool": "core__fail_thread", "arguments": {}}])
+WF_SCRIPT_FAIL_BLOCKED = json.dumps([{"name": "fail", "tool": "core__fail_thread", "arguments": {"workflow_step": "blocked"}}])
+WF_SCRIPT_FAIL_REASON = json.dumps([{"name": "fail", "tool": "core__fail_thread", "arguments": {"workflow_step": "running", "reason": "REASON41-PROPAGATE-MARKER"}}])
 
 
 def _wf41_wait_retry(tid, timeout=60):
@@ -12943,7 +12953,7 @@ test(test_43_settings_regroup)
 
 # ── GROUP 44: builtin omniagent-api via test-tool-caller + fetch method gating ──
 def test_44_tool_caller_omniagent_api():
-    """44-A: test-tool-caller channel script drives builtin_omniagent-api end
+    """44-A: test-tool-caller channel script drives core__omniagent_api end
     to end: GET /kanban/tasks, POST /kanban/tasks (create), GET again -
     proving the builtin tool reaches the real API with no host/scheme/port
     knowledge. Follows the GROUP 12/13 pattern: JSON script posted to the
@@ -12962,13 +12972,13 @@ def test_44_tool_caller_omniagent_api():
     test_token = _mm_login(MM, "testuser", "Mattermost_Fresh_Start_1")
     title = f"g44tt{uuid.uuid4().hex[:8]}"
     script = json.dumps([
-        {"name": "list1", "tool": "builtin_omniagent-api",
+        {"name": "list1", "tool": "core__omniagent_api",
          "arguments": {"method": "GET", "path": "/kanban/tasks"}},
-        {"name": "create", "tool": "builtin_omniagent-api",
+        {"name": "create", "tool": "core__omniagent_api",
          "arguments": {"method": "POST", "path": "/kanban/tasks",
                        "body": {"title": title, "status": "todo",
                                 "board": "default", "profile": "omni"}}},
-        {"name": "list2", "tool": "builtin_omniagent-api",
+        {"name": "list2", "tool": "core__omniagent_api",
          "arguments": {"method": "GET", "path": "/kanban/tasks"}},
     ])
     msg_data = json.dumps({"channel_id": mm_channel_id, "message": script}).encode()
@@ -12998,19 +13008,19 @@ def test_44_tool_caller_omniagent_api():
                        f"fresh responses; saw {http200s}")
     # Cleanup: find the created task via the API and delete it
     try:
-        resp = _g24_mcp_execute("builtin_omniagent-api",
+        resp = _g24_mcp_execute("core__omniagent_api",
                                 {"method": "GET", "path": "/kanban/tasks"})
         out = resp.get("content") or ""
         data = json.loads(out.split("\n", 1)[1] if "\n" in out else out)
         tid = next((t.get("id") for t in (data.get("data") or [])
                     if t.get("title") == title), None)
         if tid:
-            _g24_mcp_execute("builtin_omniagent-api",
+            _g24_mcp_execute("core__omniagent_api",
                              {"method": "DELETE", "path": f"/kanban/tasks/{tid}"})
             print(f"  ✓ cleaned up task {tid}")
     except Exception as e:
         print(f"  [cleanup warning: {e}]")
-    print("PASS: 44-A test-tool-caller drives builtin_omniagent-api (kanban GET+create)")
+    print("PASS: 44-A test-tool-caller drives core__omniagent_api (kanban GET+create)")
 
 
 def test_44_plugin_endpoint_via_builtin_tool():
@@ -13019,18 +13029,18 @@ def test_44_plugin_endpoint_via_builtin_tool():
     GROUP 12 safety pattern: disable then immediately re-enable the noop
     provider."""
     import time as _t44b
-    resp = _g24_mcp_execute("builtin_omniagent-api",
+    resp = _g24_mcp_execute("core__omniagent_api",
                             {"method": "POST",
                              "path": "/api/plugins/providers/bundled/noop/disable"})
     out = resp.get("content") or ""
     assert "HTTP 200" in out, f"noop disable via builtin tool: {out[:300]}"
     _t44b.sleep(1)
-    resp = _g24_mcp_execute("builtin_omniagent-api",
+    resp = _g24_mcp_execute("core__omniagent_api",
                             {"method": "POST",
                              "path": "/api/plugins/providers/bundled/noop/enable"})
     out = resp.get("content") or ""
     assert "HTTP 200" in out, f"noop enable via builtin tool: {out[:300]}"
-    print("PASS: 44-B plugin enable/disable via builtin_omniagent-api")
+    print("PASS: 44-B plugin enable/disable via core__omniagent_api")
 
 
 def test_44_fetch_method_gating():
@@ -13075,7 +13085,7 @@ def test_44_fetch_method_gating():
     print("PASS: 44-C fetch method gating (default rejects, allow_unsafe_methods=true sends)")
 
 
-print("GROUP 44: builtin_omniagent-api via test-tool-caller + fetch allow_unsafe_methods")
+print("GROUP 44: core__omniagent_api via test-tool-caller + fetch allow_unsafe_methods")
 test(test_44_tool_caller_omniagent_api)
 test(test_44_plugin_endpoint_via_builtin_tool)
 test(test_44_fetch_method_gating)
@@ -14398,7 +14408,7 @@ def test_51_redaction_tool():
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else \
                 (tools_data.get("tools") or tools_data.get("data") or [])
-            if any(TOOL in (t.get("full_name") or t.get("name") or "") for t in tools):
+            if any(_tn(TOOL) in _tn(t.get("full_name") or t.get("name") or "") for t in tools):
                 registered = True
                 break
         except Exception:
