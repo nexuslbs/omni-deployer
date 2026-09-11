@@ -280,10 +280,19 @@ def run_pretests(mode):
             # -e SQLX_OFFLINE=true here would defeat the dev overlay and
             # require a stale committed .sqlx cache. Only CI mode (host
             # cargo) uses the committed offline cache.
-            env_flags = []
+            #
+            # CARGO_BUILD_JOBS=1: the dev overlay caps the omniagent container
+            # (4g) and the dev host is small; with the default jobs = nproc the
+            # parallel LINK of the workspace test binaries is SIGKILLed (OOM)
+            # during the workspace release-test pretest, aborting the
+            # deploy. One rustc/ld at a time keeps the peak bounded.
+            # extra_env may override it.
+            merged = {"CARGO_BUILD_JOBS": "1"}
             if extra_env:
-                for k, v in extra_env.items():
-                    env_flags += ["-e", f"{k}={v}"]
+                merged.update(extra_env)
+            env_flags = []
+            for k, v in merged.items():
+                env_flags += ["-e", f"{k}={v}"]
             r = run_compose(
                 compose, "run", "--rm", *env_flags, "omniagent", *args
             )
