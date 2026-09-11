@@ -1168,6 +1168,18 @@ def run_tests(compose=None):
     if compose is None:
         compose = compose_cmd("dev")
 
+    # Companion harness scripts (groups 54/55) are imported by tests.py, which
+    # is piped in on stdin: __file__ is '<stdin>' and dirname() is the container
+    # CWD (/app), so they must exist at a known container path. Stage them in
+    # /tmp/omni-test-scripts (a lookup candidate in tests.py) - never in the
+    # repo or omni_dir, which would be untracked residue.
+    for helper in ("x5_session_auth.py", "x6_robustness.py"):
+        src = os.path.join(os.path.dirname(TESTS_SCRIPT), helper)
+        if os.path.exists(src):
+            subprocess.run(list(compose) + ["--env-file", OMNI_ENV_PATH, "cp", src,
+                                            f"omniagent:/tmp/omni-test-scripts/{helper}"],
+                           capture_output=True, check=False)
+
     cmd = list(compose) + ["--env-file", OMNI_ENV_PATH,
                            "exec", "-T", "omniagent", "python3", "-u", "-"]
     print(f"  Running: {' '.join(cmd[:2])} ... exec -T omniagent python3 -u -")

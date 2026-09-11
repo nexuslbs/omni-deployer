@@ -33,6 +33,33 @@ import urllib.request
 BASE = os.environ.get("OMNI_BASE", "http://localhost:8080")
 # The agent's own tree (the runtime copy): the plan file and the plugin dir live here.
 WORKSPACE = os.environ.get("OMNI_DIR", "/opt/omni")
+
+
+def runtime_file(rel):
+    """Resolve a runtime/profile-relative path to the first existing candidate.
+
+    OMNI_DIR points at the runtime tree: in the omnidev dev stack that is the
+    omni-root checkout (config/ + profiles/), but in the omni-deploy stack
+    (deploy.py dev) it is the omni-stack SEED checkout, which carries config/
+    and data/ only - profile content (wiki, skills, templates) lives in the
+    omni-root checkout. Look in the runtime tree first, then in the omni-root
+    checkout (override with OMNI_ROOT_DIR), then the production copy."""
+    roots = [WORKSPACE,
+             os.environ.get("OMNI_ROOT_DIR", ""),
+             "/opt/workspace/omni-root",
+             "/opt/omni"]
+    cands = []
+    for root in roots:
+        if not root:
+            continue
+        cand = os.path.join(root, rel)
+        if cand not in cands:
+            cands.append(cand)
+    for cand in cands:
+        if os.path.exists(cand):
+            return cand
+    raise FileNotFoundError(
+        "%s not found under any runtime root: %s" % (rel, cands))
 # Dev/hybrid stack env file - only used to pin the compose project of THIS stack.
 STACK_ENV_FILE = os.environ.get("OMNI_DEV_ENV_FILE", "")
 PLAYWRIGHT_IMAGE = "mcr.microsoft.com/playwright/mcp"
@@ -221,8 +248,9 @@ def check_prereqs_and_sms_deferral():
     assert not sms_tools and not cli, (
         "an SMS backend appeared (tools=%s cli=%s): X2 was DEFERRED, so X6 must "
         "now add the SMS robustness case (timeout/hang/failure/cleanup)" % (sms_tools, cli))
-    plan = open(f"{WORKSPACE}/profiles/omni/wiki/Projects/Omniagent/"
-                "Omniagent-External-Improvement-Plan.md", encoding="utf-8").read()
+    plan = open(runtime_file("profiles/omni/wiki/Projects/Omniagent/"
+                             "Omniagent-External-Improvement-Plan.md"),
+                encoding="utf-8").read()
     assert "## 11. X2 status: **DEFERRED" in plan, \
         "external plan section 11 (X2 deferral) missing"
     print("PASS: 55-A himalaya/oathtool/pyotp present; no SMS tool and no gammu/mmcli "

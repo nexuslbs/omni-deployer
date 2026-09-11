@@ -3,7 +3,6 @@
 
 general:
   condense_keep_turns: 4
-  delete_after_days: 30
   default_provider: deepseek
   llm_provider: deepseek
   max_inline_file_kb: 100

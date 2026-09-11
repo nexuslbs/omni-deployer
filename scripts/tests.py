@@ -7639,9 +7639,23 @@ def _wf_history_rows(task_id):
 
 
 def _wf_history_retry_fired(task_id):
-    """True if kanban_history shows a retry transition (running→running, 'Creating thread')."""
-    return any(r["initial_board"] == "running" and r["final_board"] == "running"
-               for r in _wf_history_rows(task_id))
+    """True if kanban_history shows a workflow retry ('Creating thread').
+
+    Post-b6e092b a retry is still recorded as a workflow row, but the from/to
+    pair is only written when the STATUS changed: a retry keeps the task
+    running, so its row carries a descriptive comment and a NULL from/to pair.
+    """
+    for r in _wf_history_rows(task_id):
+        if r.get("action") != "workflow":
+            continue
+        if "Creating thread" not in (r.get("comment") or ""):
+            continue
+        if r.get("initial_board") == "running" and r.get("final_board") == "running":
+            return True
+        # status unchanged -> descriptive comment instead of an "X to X" pair
+        if r.get("initial_board") is None and r.get("final_board") is None:
+            return True
+    return False
 
 
 def _wf_settings_get(name):
@@ -11918,11 +11932,11 @@ def test_39_search_tools_listed():
         tools = tools["tools"]
     names = [_tn(t.get("full_name") or t.get("name") or "") for t in tools] if isinstance(tools, list) else [_tn(k) for k in tools.keys()]
 
-    # Registered names are dasherized per omni-stack ac431c3:
-    # search_thread-messages / search_channel-prompts (underscore kept after
-    # 'search', dash before the suffix). Spec gate: all 7 search_* tools listed.
+    # Exposed names follow the {plugin}__{tool} grammar (v0.2.3): the multi-word
+    # search tools are search__thread_messages / search__channel_prompts, and
+    # _tn() collapses the separator for this membership check. Spec gate: all 7.
     for want in ["search_messages", "search_wiki", "search_database",
-                 "search_thread-messages", "search_channel-prompts",
+                 "search_thread_messages", "search_channel_prompts",
                  "search_channels", "search_metrics"]:
         assert any(want in n for n in names), f"{want} not in /mcp/tools ({len(names)} tools)"
     assert any(_tn("core__omniagent_api") in n for n in names), "core__omniagent_api not in /mcp/tools"
@@ -12289,6 +12303,10 @@ def _wf41_wait_retry(tid, timeout=60):
             if "Creating thread" not in r.get("comment", ""):
                 continue
             if r.get("final_board") == "running" and r.get("initial_board") in ("running", "testing"):
+                return True
+            # post-b6e092b: a status-preserving retry has no from/to pair; the
+            # re-entry is described in the comment (see _wf_history_retry_fired)
+            if r.get("final_board") is None and r.get("initial_board") is None:
                 return True
         time.sleep(1)
     return False
@@ -12748,7 +12766,8 @@ def test_43_source_audit():
     for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent"):
         assert f'"{key}"' in settings, f"{key} missing from settings.rs"
     assert '"sub_prompt_iteration_percent" => "prompt"' in settings, "category mapping to prompt missing"
-    assert '"delete_after_days" => "general"' in settings, "delete_after_days must be categorized under general"
+    assert '"soft_delete_after_days" | "hard_delete_after_days" =>' in settings, \
+        "soft/hard_delete_after_days must be categorized under general"
     assert 'label: "Memory & Retention"' not in settings, "Memory & Retention group must be removed from settings.rs"
     assert "sub_prompt_settings_are_writable_numbers_in_prompt" in settings, "settings unit test missing"
     assert "default_profile_is_a_select" in settings, "default_profile select unit test missing"
@@ -12765,7 +12784,8 @@ def test_43_source_audit():
     for key in ("sub_prompt_max_chars", "sub_prompt_iteration_percent", "memory_max_chars"):
         assert key in seed_prompt, f"seed settings.yml prompt group missing {key}"
     assert "\nmemory:" not in sy_seed, "seed settings.yml must not keep a memory (Memory & Retention) section"
-    assert "\n  delete_after_days: 30\n" in sy_seed, "seed settings.yml must keep delete_after_days under general"
+    assert "delete_after_days" not in sy_seed, \
+        "seed settings.yml must not carry the renamed legacy delete_after_days key"
     print("PASS: 43-A source audit - migration, DB helpers, pre-condense "
           "injection, settings wiring + defaults all present")
 
@@ -12929,7 +12949,8 @@ def test_43_settings_regroup():
     general = cat_by_name.get("general")
     assert general, "general category missing"
     gnames = [s.get("name") for s in general.get("settings", [])]
-    assert "delete_after_days" in gnames, f"delete_after_days must be under general: {gnames}"
+    for _ret in ("soft_delete_after_days", "hard_delete_after_days"):
+        assert _ret in gnames, f"{_ret} must be under general: {gnames}"
     dp = None
     for c in cats:
         for s in c.get("settings", []):
@@ -14393,7 +14414,10 @@ def test_51_redaction_tool():
     """
     import shutil
     FAKE_SECRET = "sk-test1234567890abcdefgh1234567890"
-    TOOL = "redaction_redact"
+    # v0.2.3 core namespace: exposed names are {plugin}__{tool}
+    # (redaction__redact). The test reads the exact registered name from
+    # /mcp/tools below and configures THAT, instead of a pre-rename alias.
+    TOOL = "redaction__redact"
     MM_DELAY = 2  # seconds between polls
 
     # 1. Install the redaction plugin (bundled) from omni-plugins and enable it.
@@ -14401,20 +14425,25 @@ def test_51_redaction_tool():
     yaml_set("tools", "redaction", {"enabled": False, "source": "bundled", "config": {}})
     resp = api_post_body("/plugins/tools/bundled/redaction/enable", {}, timeout=60)
     assert resp.get("success"), f"enable redaction plugin failed: {resp}"
-    registered = False
+    registered = None
     for _ in range(15):
         try:
             r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
             tools_data = json.loads(r.read())
             tools = tools_data if isinstance(tools_data, list) else \
                 (tools_data.get("tools") or tools_data.get("data") or [])
-            if any(_tn(TOOL) in _tn(t.get("full_name") or t.get("name") or "") for t in tools):
-                registered = True
-                break
+            for t in tools:
+                nm = t.get("full_name") or t.get("name") or ""
+                if _tn(TOOL) in _tn(nm):
+                    registered = nm
+                    TOOL = nm          # configure the exact registered name
+                    break
         except Exception:
             pass
+        if registered:
+            break
         time.sleep(MM_DELAY)
-    assert registered, "redaction_redact tool did not register after enable"
+    assert registered, "redaction plugin tool did not register after enable"
 
     mm_channel_id, admin_token = _g51_mm_channel()
 
@@ -14776,9 +14805,33 @@ test(test_53_docs_and_baseline_recorded)
 # Reference: profiles/omni/skills/web-interaction/SKILL.md
 
 
+def _g_ext_script(name):
+    """Resolve a companion harness script (groups 54/55).
+
+    tests.py is piped into the agent container on stdin, so __file__ is
+    '<stdin>' and dirname(abspath(__file__)) is the container CWD (/app), where
+    the companion scripts do not exist. Fall back to the checked-out
+    omni-deployer scripts dir (bound into the dev container), to the copy
+    deploy.py drops in /tmp/omni-test-scripts, and to the agent omni_dir
+    data/scripts dir documented in x6_robustness.py for standalone runs.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.join(here, name)]
+    env_dir = os.environ.get("OMNI_TEST_SCRIPTS_DIR", "")
+    if env_dir:
+        candidates.append(os.path.join(env_dir, name))
+    candidates.append(os.path.join("/tmp/omni-test-scripts", name))
+    candidates.append(os.path.join("/opt/omni/data/scripts", name))
+    candidates.append(os.path.join("/opt/workspace/omni-deployer/scripts", name))
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    raise FileNotFoundError(f"{name} not found; looked in {candidates}")
+
+
 def _g54():
     import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "x5_session_auth.py")
+    path = _g_ext_script("x5_session_auth.py")
     spec = importlib.util.spec_from_file_location("x5_session_auth", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -14827,7 +14880,7 @@ test(test_54_session_negative_control)
 
 def _g55():
     import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "x6_robustness.py")
+    path = _g_ext_script("x6_robustness.py")
     spec = importlib.util.spec_from_file_location("x6_robustness", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
