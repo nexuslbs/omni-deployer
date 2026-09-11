@@ -2960,7 +2960,11 @@ def test_mm9_e2e():
     print(f"[mattermost platform enabled]")
     print("[mattermost platform enabled]")
 
-    resp = api_post_body("/plugins/providers/built-in/noop-full/enable", {})
+    # Provider enable can exceed the 15s api_post_body default on a loaded
+    # stack (observed once in 8 dev runs) and the endpoint is idempotent, so
+    # retry instead of failing the whole integration gate.
+    resp = api_post_body_retry("/plugins/providers/built-in/noop-full/enable", {},
+                               timeout=60, attempts=3, retry_delay=5)
 
     # 2. Check noop-full is available
     r = urllib.request.urlopen(f"{BASE}/api/plugins/providers/built-in/noop-full", timeout=10)
