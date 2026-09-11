@@ -831,7 +831,7 @@ def setup():
     print(f"{'=' * 50}")
 
 
-def seed_remote_plugins():
+def seed_remote_plugins(only=None):
     """Install every remote plugin listed in config/remote.yml via install-git.
 
     Mirrors scripts/tests.py ensure_remote_plugin: the omniagent API clones the
@@ -871,6 +871,8 @@ def seed_remote_plugins():
     HTTPS_URL = "https://github.com/nexuslbs/omni-plugins.git"
     installed = 0
     for name, plugin_type, meta in sorted(entries):
+        if only is not None and name not in only:
+            continue
         # remote.yml paths carry the type prefix (tools/actions,
         # platforms/telegram, providers/noop) - reuse it when present so the
         # install-git path matches the registered plugin type exactly.
@@ -1593,7 +1595,25 @@ def _get_registered_tools():
     tool_list = result if isinstance(result, list) else (
         result.get("tools") or result.get("data") or []
     )
-    return [t.get("name") or t.get("full_name") or "" for t in tool_list]
+    return [t.get("full_name") or t.get("name") or "" for t in tool_list]
+
+
+def _tool_key(name):
+    """Normalize a tool name for registry/profile comparisons (v0.2.3).
+
+    The registry exposes canonical '<plugin>__<tool>' names (filesystem__read)
+    while TOOL_DEFS keep the legacy '<plugin>_<tool>' spelling
+    (filesystem_read); profile allowed_tools entries use the registered
+    spelling. Collapse '__' and '-' to '_' so the spellings compare equal."""
+    return (name or "").replace("__", "_").replace("-", "_").lower()
+
+
+def _registered_tool_map():
+    """Map _tool_key(<registered name>) -> the registry's canonical spelling."""
+    out = {}
+    for n in _get_registered_tools():
+        out.setdefault(_tool_key(n), n)
+    return out
 
 
 def _wait_for_tool_registered(tool_name, timeout=30):
@@ -1607,10 +1627,10 @@ def _wait_for_tool_registered(tool_name, timeout=30):
     /mcp/tools until the tool is registered, up to timeout seconds."""
     deadline = time.time() + timeout
     while True:
-        if tool_name in _get_registered_tools():
+        if _tool_key(tool_name) in _registered_tool_map():
             return True
         if time.time() >= deadline:
-            return tool_name in _get_registered_tools()
+            return _tool_key(tool_name) in _registered_tool_map()
         time.sleep(1.0)
 
 
@@ -1638,6 +1658,34 @@ def _enable_plugin(p_type, source, name):
     except RuntimeError as e:
         print(f"  ~ {p_type}/{name} enable: {str(e)[:80]}")
         return None
+
+
+def _install_missing_tool_plugin(tool_name, tool_def):
+    """Make a missing tool available by installing its remote plugin.
+
+    Remote tool plugins (e.g. 'actions', which moved to omni-plugins) are only
+    registered after an install-git clone into plugins/<type>/.remote/. A fresh
+    data dir carries no clone yet, so on an otherwise healthy stack their tools
+    are missing and every test of them would fail. Install the plugin's own
+    config/remote.yml entry (file:// omni-plugins first, HTTPS fallback - the
+    same strategy deploy.py uses for the noop provider), enable it and wait for
+    the tool to register. Returns True when the tool is registered afterwards.
+    """
+    plugin = (tool_def or {}).get("plugin")
+    if not plugin:
+        return False
+    if _tool_plugin_source(plugin) != "remote":
+        return False
+    print(f"  [tool '{tool_name}' missing: seeding remote plugin '{plugin}' from remote.yml]")
+    try:
+        seed_remote_plugins(only={plugin})
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"  ~ seed_remote_plugins({plugin}): {str(e)[:100]}")
+    try:
+        _enable_plugin("tools", "remote", plugin)
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"  ~ enable remote/{plugin}: {str(e)[:100]}")
+    return _wait_for_tool_registered(tool_name, timeout=120)
 
 
 def _tool_plugin_source(plugin_name):
@@ -2354,6 +2402,7 @@ def run_tests():
     print("=" * 50)
 
     registered = _get_registered_tools()
+    registered_map = _registered_tool_map()
     print(f"\n  Registered tools: {len(registered)}")
 
     for def_name, tool_def in TOOL_DEFS.items():
@@ -2363,10 +2412,21 @@ def run_tests():
             failed += 1
             continue
 
-        if tool_name not in registered:
+        if _tool_key(tool_name) not in registered_map:
+            # A remote tool plugin may simply not be downloaded yet on a
+            # fresh data dir (actions moved to omni-plugins): seed+enable
+            # it once, then re-read the registry before failing.
+            if _install_missing_tool_plugin(tool_name, tool_def):
+                registered = _get_registered_tools()
+                registered_map = _registered_tool_map()
+        if _tool_key(tool_name) not in registered_map:
             _print_result(def_name, "FAIL", f"Tool '{tool_name}' not registered")
             failed += 1
             continue
+        # v0.2.3: the registry exposes canonical '<plugin>__<tool>' names; run
+        # the tests against the registered spelling (the legacy spelling is
+        # honoured as an alias in some states only).
+        tool_name = registered_map[_tool_key(tool_name)]
 
         print(f"\n  --- Testing {tool_name} ---")
 
@@ -2471,7 +2531,7 @@ def run_tests():
         # Test 4: Check that the tool is in the registered tools list after re-enable
         registered2 = _get_registered_tools()
         total_assertions += 1
-        if tool_name in registered2:
+        if _tool_key(tool_name) in {_tool_key(n) for n in registered2}:
             _print_result(f"{tool_name} (re-registered)", "PASS")
             passed += 1
         else:
@@ -2521,14 +2581,26 @@ def run_tests():
         phase2_extra_tools = []
 
         registered_tools = _get_registered_tools()
+        registered_map2 = _registered_tool_map()
         print(f"\n  Registered tools: {len(registered_tools)}")
         phase2_count = 0
 
-        for tool_name, tool_args, success_key in phase2_tools_list + phase2_extra_tools:
-            if tool_name not in registered_tools:
-                _print_result(f"{tool_name} (agent)", "FAIL", "Tool not registered")
+        for def_name, tool_args, success_key in phase2_tools_list + phase2_extra_tools:
+            if _tool_key(def_name) not in registered_map2:
+                if _install_missing_tool_plugin(def_name, TOOL_DEFS.get(def_name, {})):
+                    registered_tools = _get_registered_tools()
+                    registered_map2 = _registered_tool_map()
+            if _tool_key(def_name) not in registered_map2:
+                _print_result(f"{def_name} (agent)", "FAIL", "Tool not registered")
                 failed += 1
                 continue
+            # v0.2.3: canonical '<plugin>__<tool>' names, and the profile
+            # allow-list carries the same spelling - resolve once, use it for
+            # every agent-side call and allow-list edit.
+            tool_name = registered_map2[_tool_key(def_name)]
+            validator = TOOL_VALIDATORS.get(def_name) or TOOL_VALIDATORS.get(tool_name)
+            poll_timeout = PHASE2_POLL_TIMEOUTS.get(
+                def_name, PHASE2_POLL_TIMEOUTS.get(tool_name, PHASE2_ACTIVE_POLL_TIMEOUT))
 
             if "_" in tool_name:
                 plugin_name = tool_name.split("_")[0]
@@ -2562,7 +2634,7 @@ def run_tests():
             print(f"  Tool {phase2_count}: {tool_name}")
             print(f"  {'=' * 50}")
 
-            pre_check = _mcp_execute(tool_name, TOOL_DEFS.get(tool_name, {}).get("mcp_test_args", tool_args))
+            pre_check = _mcp_execute(tool_name, TOOL_DEFS.get(def_name, {}).get("mcp_test_args", tool_args))
             if pre_check.get("is_error"):
                 print(f"  [FAIL: {tool_name} failed MCP pre-check - Phase 2 tests failing]")
                 _print_result(f"{tool_name} (all states)", "FAIL", f"MCP error: {str(pre_check.get('content', ''))[:100]}")
@@ -2581,7 +2653,7 @@ def run_tests():
                 expected_keyword=None,
                 poll_timeout=2,
             )
-            validator_a = TOOL_VALIDATORS.get(tool_name, _validate_not_error)
+            validator_a = validator or _validate_not_error
             if resp_a is None or resp_a == "":
                 _print_result(f"{tool_name} (disabled)", "PASS", "Tool unavailable (no agent reply)")
                 passed += 1
@@ -2615,7 +2687,7 @@ def run_tests():
                 expected_keyword=None,
                 poll_timeout=2,
             )
-            validator_b = TOOL_VALIDATORS.get(tool_name, _validate_not_error)
+            validator_b = validator or _validate_not_error
             if resp_b is None or resp_b == "":
                 _print_result(f"{tool_name} (restricted)", "PASS", "Tool restricted (no agent reply)")
                 passed += 1
@@ -2644,8 +2716,8 @@ def run_tests():
             resp_c = _test_tool_via_mattermost(
                 mm_channel_id_test, testuser_token,
                 tool_name, tool_args,
-                validate_fn=TOOL_VALIDATORS.get(tool_name),
-                poll_timeout=PHASE2_POLL_TIMEOUTS.get(tool_name, PHASE2_ACTIVE_POLL_TIMEOUT),
+                validate_fn=validator,
+                poll_timeout=poll_timeout,
             )
             if not resp_c:
                 # Retry once: the agent occasionally misses the first script
@@ -2655,11 +2727,11 @@ def run_tests():
                 resp_c = _test_tool_via_mattermost(
                     mm_channel_id_test, testuser_token,
                     tool_name, tool_args,
-                    validate_fn=TOOL_VALIDATORS.get(tool_name),
-                    poll_timeout=PHASE2_POLL_TIMEOUTS.get(tool_name, PHASE2_ACTIVE_POLL_TIMEOUT),
+                    validate_fn=validator,
+                    poll_timeout=poll_timeout,
                 )
             if resp_c:
-                validator_name = TOOL_VALIDATORS.get(tool_name, _validate_not_error).__name__
+                validator_name = (validator or _validate_not_error).__name__
                 _print_result(f"{tool_name} (active)", "PASS", f"Validator '{validator_name}' passed")
                 passed += 1
             else:
