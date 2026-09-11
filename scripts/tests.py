@@ -274,6 +274,33 @@ def read_plugins_yml():
                 config_lines.append(line)
     return sections
 
+_YAML_INDICATORS = "&*!|%#@`'\"[]{},>"
+
+
+def yaml_scalar(value):
+    """Render a YAML scalar safely (quote anything that is not a plain scalar).
+
+    A glob like '**/*.md' (semantic_search corpus_globs) written unquoted is
+    scanned by the YAML parser as an ALIAS, which makes the WHOLE plugins.yml
+    unparseable for the agent (serde_yaml). JSON string quoting is a valid YAML
+    double-quoted scalar.
+    """
+    s = str(value)
+    if (
+        s == ""
+        or s != s.strip()
+        or "\n" in s
+        or ": " in s
+        or " #" in s
+        or s.endswith(":")
+        or s.lower() in ("true", "false", "null", "yes", "no", "on", "off", "~")
+        or s[0] in _YAML_INDICATORS
+        or (s[0] in "-?:" and (len(s) == 1 or s[1] in " \t"))
+    ):
+        return json.dumps(s)
+    return s
+
+
 def write_plugins_yml(data):
     lines = []
     for section, entries in data.items():
@@ -284,7 +311,7 @@ def write_plugins_yml(data):
                 if isinstance(v, dict) and v:
                     lines.append(f"    {k}:")
                     for sk, sv in v.items():
-                        sv_str = json.dumps(sv) if "'" in str(sv) or sv == "" else str(sv)
+                        sv_str = yaml_scalar(sv)
                         lines.append(f"      {sk}: {sv_str}")
                 elif isinstance(v, bool):
                     lines.append(f"    {k}: {str(v).lower()}")
@@ -293,7 +320,7 @@ def write_plugins_yml(data):
                 elif v == "" or v is None:
                     lines.append(f"    {k}: ''")
                 else:
-                    lines.append(f"    {k}: {v}")
+                    lines.append(f"    {k}: {yaml_scalar(v)}")
         lines.append("")
     content = "\n".join(lines)
     with open(f"{DATA_DIR}/config/plugins.yml", "w") as f:
