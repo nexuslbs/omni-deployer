@@ -2887,6 +2887,25 @@ def _ensure_secret_exists(name, value=None):
             raise
 
 
+def _get_secret_value(name, default=None):
+    """Read the CURRENT value of a secret (empty/missing -> default).
+
+    On a fresh CI stack the secrets are created by this test with known values;
+    on an EXISTING stack (e.g. omnidev after a production-DB restore) the secret
+    already holds the real configured value that the setup endpoint used to
+    create the user. Reading the stored value keeps the E2E login working in
+    both cases instead of hardcoding a password that only matches a freshly
+    created secret.
+    """
+    import urllib.request
+    try:
+        r = urllib.request.urlopen(f"{BASE}/secrets/{name}", timeout=10)
+        val = (json.loads(r.read()).get("data") or {}).get("current_value") or ""
+        return val or default
+    except Exception:
+        return default
+
+
 def _check_mm_container():
     # Use Docker API label filtering instead of hardcoded container names
     project = os.environ.get("COMPOSE_PROJECT_NAME", "omnideploy")
@@ -2952,7 +2971,12 @@ def test_mm9_e2e():
         assert os.path.exists(noop_dir), f"Failed to restore noop provider"
     _check_mm_container()
     MM = "http://mattermost:8065"
-    test_pass = "Mattermost_Fresh_Start_1"
+    # Password of the `testuser` account. On a fresh stack it is the value this
+    # test creates below; on an existing stack (omnidev restored from the
+    # PRODUCTION DB) the secret already holds the value the setup endpoint used
+    # to create the user, so read the stored value instead of assuming the
+    # fresh-start constant (hardcoding it breaks the login after a restore).
+    test_pass = _get_secret_value("MATTERMOST_TEST_PASSWORD", "Mattermost_Fresh_Start_1")
     test_user = "testuser"
 
     # 1. Ensure mattermost and noop platforms are enabled
