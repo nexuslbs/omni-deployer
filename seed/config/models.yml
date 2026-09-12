@@ -20,10 +20,18 @@
 # api_key supports $env:VAR and $secret:NAME (same expansion as plugins.yml).
 
 providers:
-  # Override the deepseek provider plugin: fix the (wrong) hardcoded model list
-  # without touching the plugin - selectors now show the real models.
+  # Code-less deepseek provider: served by the CORE builtin path (no provider
+  # plugin ships in the omniagent image any more). The api_key is resolved BY
+  # THE CORE at request time, so $secret:DEEPSEEK_API_KEY is expanded exactly
+  # like a plugin config value.
   deepseek:
-    plugin: true
+    plugin: false
+    api_mode: "chat_completions"
+    supports_reasoning: true
+    default_base_url: "https://api.deepseek.com/v1"
+    refresh_url: "https://api.deepseek.com/v1/models"
+    default_model: "deepseek-v4-flash"
+    api_key: "$secret:DEEPSEEK_API_KEY"
     models: ["deepseek-v4-flash", "deepseek-v3", "deepseek-r1", "deepseek-v4-pro"]
 
   # Plugin-less provider: works via builtin chat_completions/anthropic support.
