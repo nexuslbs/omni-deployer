@@ -307,6 +307,22 @@ jobs:
           repository: nexuslbs/omni-plugins
           path: omni-plugins
           fetch-depth: 0
+
+      # Profile content (wiki/skills/templates) lives in the omni-root repo,
+      # not in the omni-stack SEED checkout that the deploy uses as its
+      # runtime tree. The group 54/55 harnesses resolve runtime files against
+      # <workspace>/omni-root (mounted at /opt/workspace in the containers),
+      # so check it out best effort: omni-root is PRIVATE, and a token without
+      # access must not fail the release job - the harness then skips the
+      # affected cross-check loudly instead.
+      - name: Checkout omni-root (profile content, best effort)
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: nexuslbs/omni-root
+          path: omni-root
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
   
       - name: Download omniagent image
         uses: actions/download-artifact@v4
