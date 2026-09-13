@@ -5458,30 +5458,19 @@ def _select_groups(segments, args):
         sel = ordered[idx:]
         print("[selection] --start-group %s -> %d group(s) from %s onward" % (
             want, len(sel), sel[0]["key"]))
-        # a resume starts in a fresh interpreter, so module-level names bound by
-        # EARLIER segments are gone: re-run the (declared + statically derived)
-        # prerequisite segments needed by the selected ones. Prerequisites that
-        # only carry fixture state are cheap; nothing that passed is re-run
-        # wholesale (the point of --start-group is to skip them).
-        selkeys = {s["key"] for s in sel}
-        extra, changed = [], True
-        while changed:
-            changed = False
-            for s in list(sel):
-                for dep in (s.get("requires") or []):
-                    if dep in selkeys:
-                        continue
-                    for d in ordered:
-                        if dep in (d["id"], d["key"]) and d["key"] not in selkeys:
-                            selkeys.add(d["key"])
-                            extra.append(d)
-                            sel.append(d)
-                            changed = True
-        if extra:
-            pos = {id(s): i for i, s in enumerate(ordered)}
-            sel = sorted(sel, key=lambda s: pos[id(s)])
-            print("[selection] +%d prerequisite segment(s) for the resume point: %s" % (
-                len(extra), ",".join(sorted(s["key"] for s in extra))))
+        # A resume re-enters in a FRESH interpreter, but in the SAME dev stack
+        # where every group BEFORE the resume point already ran, so their
+        # fixtures and live agent state are still there. Prerequisite segments
+        # are therefore NOT re-run here: injecting them executes a segment in a
+        # context where ITS OWN prerequisites never ran, which produces
+        # deterministic false failures. Observed 2026-09-13 (thread 2079): the
+        # resume from group 46 pulled 11,24,32,helpers, group 11 then failed
+        # 3 prompt-plan tests (HTTP 400), burned all 3 retries and aborted the
+        # whole deploy on a failure that the full-suite order never shows.
+        # Transitive prerequisite closure is only correct for a from-scratch
+        # selection (--group N), which keeps it (see the branch above).
+        print("[selection] resume: no prerequisite injection (groups before "
+              "%s already ran in this stack)" % sel[0]["key"])
     else:
         sel = ordered
         print("[selection] full suite: %d segments" % len(sel))
@@ -15723,7 +15712,12 @@ _GROUP_SEGMENTS = [
     {"id": '9', "key": '9', "title": 'Mattermost + Noop E2E Integration Test', "standalone": True, "requires": [], "always_run": False, "line": 5408, "lines": 7, "fn": _seg_9},
     {"id": '8', "key": '8', "title": 'Add/Install-Git Tests', "standalone": True, "requires": [], "always_run": False, "line": 5418, "lines": 8, "fn": _seg_8},
     {"id": '10', "key": '10', "title": 'Disabled Plugin Visibility Regression Tests', "standalone": True, "requires": [], "always_run": False, "line": 5429, "lines": 9, "fn": _seg_10},
-    {"id": '11', "key": '11', "title": 'Prompt Plugin Tests', "standalone": True, "requires": [], "always_run": False, "line": 5440, "lines": 81, "fn": _seg_11},
+    # Group 11 was declared standalone in 8087e34 but is NOT: it ran green in
+    # full-suite order (after the 1-10 prefix) and failed 3 prompt-plan tests
+    # (HTTP 400) whenever it was re-run without that prefix (resume context
+    # 11,24,32,helpers, 2026-09-13). Truthful declaration: the harness/env
+    # prefix it depends on, so `--group 11` pulls it instead of failing.
+    {"id": '11', "key": '11', "title": 'Prompt Plugin Tests', "standalone": False, "requires": ['1', '2', '3', '4', '5', '6', '7', '9', '8', '10'], "always_run": False, "line": 5440, "lines": 81, "fn": _seg_11},
     {"id": '12', "key": '12', "title": 'File Upload via Mattermost + test-tool-caller', "standalone": False, "requires": ['11'], "always_run": False, "line": 5528, "lines": 66, "fn": _seg_12},
     {"id": '13', "key": '13', "title": 'Non-Blocking Tasks via test-tool-caller', "standalone": True, "requires": [], "always_run": False, "line": 5604, "lines": 4, "fn": _seg_13},
     {"id": '13B', "key": '13B', "title": 'BG task single-execution regression (no re-send', "standalone": False, "requires": ['13'], "always_run": False, "line": 5610, "lines": 170, "fn": _seg_13B},
