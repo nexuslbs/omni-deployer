@@ -3778,6 +3778,14 @@ def _make_tool_msg(name: str = "tool_a", tool_call_id: str = "call_0") -> dict:
     """Build a tool result message."""
     return {"role": "tool", "content": '{"result": "ok"}', "name": name, "tool_call_id": tool_call_id}
 
+# MCP execution (prompt_compact-messages) does REAL work inside the agent
+# process (LLM-backed compaction of large contexts, MCP server spawn on first
+# use). The old 10-15 s timeouts made group 11 fail when it was run ALONE
+# (--group 11: ~14 fails, all TimeoutError at 15.0 s) while the same tests
+# passed inside a full suite. Generous harness timeout; no assertion relaxed.
+_MCP_EXEC_TIMEOUT = 120
+
+
 def _make_user_msg(text: str = "Hello") -> dict:
     return {"role": "user", "content": text}
 
@@ -3811,7 +3819,7 @@ def _compact_call(messages: list, keep_recent: int = 3,
             headers={"Content-Type": "application/json"},
             method="POST"
         ),
-        timeout=15
+        timeout=_MCP_EXEC_TIMEOUT
     )
     result = json.loads(r.read())
     assert result.get("success"), f"compact-messages failed: {result}"
@@ -4013,7 +4021,7 @@ def test_p7_missing_messages_field():
             headers={"Content-Type": "application/json"},
             method="POST"
         ),
-        timeout=10
+        timeout=_MCP_EXEC_TIMEOUT
     )
     result = json.loads(r.read())
     assert result.get("success"), f"Expected tool-level success, got {result}"
@@ -4121,7 +4129,7 @@ def test_p8_missing_budget_params_is_error():
             headers={"Content-Type": "application/json"},
             method="POST"
         ),
-        timeout=10
+        timeout=_MCP_EXEC_TIMEOUT
     )
     result = json.loads(r.read())
     assert result.get("success"), f"tool-level success expected, got {result}"
@@ -5407,20 +5415,34 @@ def _select_groups(segments, args):
         want = args.group.strip()
         if want in ids or want in keys:
             chosen = [s for s in ordered if want in (s["id"], s["key"])]
+            # A segment that declares `requires` CANNOT run correctly alone, so
+            # selecting it always pulls its transitive declared prerequisites
+            # (same closure as --start-group). This is what makes `--list`
+            # truthful: groups reported as NOT standalone are runnable via
+            # `--group N` because their declared prerequisites come with them.
+            # (--with-prereqs is kept as an accepted no-op alias.)
             deps = []
-            if args.with_prereqs:
-                seen = set()
-                for s in chosen:
+            selkeys = {s["key"] for s in chosen}
+            changed = True
+            while changed:
+                changed = False
+                for s in list(chosen) + list(deps):
                     for dep in (s.get("requires") or []):
-                        if dep in seen:
+                        if dep in selkeys:
                             continue
-                        seen.add(dep)
-                        deps.extend([d for d in ordered
-                                     if dep in (d["id"], d["key"]) and d not in chosen])
-            sel = deps + chosen
+                        for d in ordered:
+                            if dep in (d["id"], d["key"]) and d["key"] not in selkeys:
+                                selkeys.add(d["key"])
+                                deps.append(d)
+                                changed = True
+            if deps:
+                pos = {id(s): i for i, s in enumerate(ordered)}
+                sel = sorted(deps + chosen, key=lambda s: pos[id(s)])
+            else:
+                sel = chosen
             print("[selection] --group %s -> %s%s" % (
                 want, ",".join(s["key"] for s in sel),
-                " (with prerequisites)" if args.with_prereqs else ""))
+                " (with %d prerequisite segment(s))" % len(deps) if deps else ""))
         else:
             os.environ["TEST_FILTER"] = want
             print("[selection] --group %r is not a group id -> legacy TEST_FILTER "
@@ -5802,6 +5824,32 @@ def _seg_11():
         time.sleep(1)
     else:
         raise AssertionError("Timed out waiting for prompt_compact-messages tool to register - prompt plugin may not be properly enabled")
+
+    # Warm the MCP execute path. Tool REGISTRATION is not enough: the first
+    # /mcp/execute call after a dynamic enable has to spawn/attach the prompt
+    # MCP server, which can outlast the per-test timeout and made the whole
+    # group fail when it ran ALONE (--group 11) while it passed inside a full
+    # suite. Setup only - no assertion is touched.
+    for _warm_i in range(3):
+        try:
+            _warm_req = urllib.request.Request(
+                f"{BASE}/mcp/execute",
+                data=json.dumps({"name": "prompt_compact-messages",
+                                 "arguments": {
+                                     "messages": [_make_user_msg("warm-up")],
+                                     "keep_recent": 1,
+                                     "soft_budget": 100000,
+                                     "hard_budget": 200000}}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST")
+            urllib.request.urlopen(_warm_req, timeout=_MCP_EXEC_TIMEOUT)
+            print("  \u2713 MCP execute path warm for GROUP 11")
+            break
+        except Exception as _warm_ex:
+            print(f"  [GROUP 11 MCP warm-up retry: {_warm_ex}]")
+            time.sleep(2)
+    else:
+        print("  [GROUP 11 MCP warm-up did not answer - running the tests anyway]")
 
     for fn in [
         test_p1_basic_response_structure,
