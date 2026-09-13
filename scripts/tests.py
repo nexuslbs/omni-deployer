@@ -13136,7 +13136,17 @@ def _seg_42():
         assert "omni_dir" in keys, f"prompt plugin.json config_schema missing omni_dir: {keys}"
         entry = next(k for k in pj["config_schema"] if k.get("key") == "omni_dir")
         assert entry.get("type") == "string" and entry.get("default") == "$env:OMNI_DIR", entry
-        assert entry.get("label") == "OMNI_DIR", entry
+        # Label parity with the builtin Rust plugin (single source of truth):
+        # omni-plugins ba3dc44 aligned the python plugin labels with the builtin
+        # ("Omni Dir"), so a hardcoded "OMNI_DIR" literal is stale drift. Assert
+        # parity with the builtin + non-empty instead of a frozen literal.
+        with open("/opt/workspace/omniagent/plugins/tools/prompt/plugin.json",
+                  encoding="utf-8") as _builtin_f:
+            _builtin_pj = json.load(_builtin_f)
+        _builtin_entry = next(k for k in _builtin_pj["config_schema"]
+                              if k.get("key") == "omni_dir")
+        assert entry.get("label") and entry.get("label") == _builtin_entry.get("label"), \
+            f"prompt omni_dir label != builtin label: {entry} vs {_builtin_entry}"
         # memory + actions keep declaring omni_dir
         for sub in ["memory", "actions"]:
             with open(f"{REMOTE_REPO}/tools/{sub}/plugin.json", encoding="utf-8") as f:
