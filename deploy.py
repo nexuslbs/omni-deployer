@@ -1414,8 +1414,19 @@ def deploy(mode, group_retries=3, start_group="", pretest_cache=True):
                 print(f"  [WARNING: post-deploy inbound verification failed: {e}]")
 
 
-def run_tests(compose=None):
-    """Run integration tests via tests.py piped into the omniagent container."""
+def run_tests(compose=None, argv=None, check=True, capture=False):
+    """Run integration tests via tests.py piped into the omniagent container.
+
+    argv: extra tests.py CLI args appended after `python3 -u -` (F1/F2, thread
+          2077): --group N, --start-group N, --verify-only, --json-report PATH.
+    check: raise RuntimeError on a non-zero exit (default, back-compat).
+          check=False lets the dev failure-resume loop inspect (rc, report).
+    capture: stream the suite output to the console AND capture it, parse the
+          machine-readable TESTS_REPORT_PREFIX line, and return (rc, report).
+          report is None when the marker line is absent.
+
+    Returns (rc, report) with capture=True, else None.
+    """
     if not os.path.exists(TESTS_SCRIPT):
         raise RuntimeError(f"Tests script not found: {TESTS_SCRIPT}")
 
@@ -1436,11 +1447,37 @@ def run_tests(compose=None):
 
     cmd = list(compose) + ["--env-file", OMNI_ENV_PATH,
                            "exec", "-T", "omniagent", "python3", "-u", "-"]
-    print(f"  Running: {' '.join(cmd[:2])} ... exec -T omniagent python3 -u -")
+    cmd += [str(a) for a in (argv or [])]
+    shown = " ".join(str(a) for a in (argv or [])) or "(full suite)"
+    print(f"  Running: {' '.join(cmd[:2])} ... exec -T omniagent python3 -u - "
+          f"{shown}")
     with open(TESTS_SCRIPT, "rb") as f:
-        r = subprocess.run(cmd, stdin=f)
-    if r.returncode != 0:
-        raise RuntimeError(f"Tests failed (exit={r.returncode})")
+        if not capture:
+            r = subprocess.run(cmd, stdin=f)
+            if check and r.returncode != 0:
+                raise RuntimeError(f"Tests failed (exit={r.returncode})")
+            return None
+        # capture=True: stream the suite output to the console AND capture it,
+        # then parse the report marker line so the dev resume loop knows the
+        # first failing group (F2, thread 2077).
+        proc = subprocess.Popen(cmd, stdin=f, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        report = None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            if line.startswith(TESTS_REPORT_PREFIX):
+                try:
+                    report = json.loads(line[len(TESTS_REPORT_PREFIX):].strip())
+                except json.JSONDecodeError:
+                    report = None
+        rc = proc.wait()
+        if report is not None:
+            print(f"[deploy] suite report: ok={report.get('ok')} "
+                  f"first_failure={report.get('first_failure')} "
+                  f"totals={report.get('totals')}")
+        if check and rc != 0:
+            raise RuntimeError(f"Tests failed (exit={rc})")
+        return rc, report
 
 
 def test_s3_backup_restore(compose):
