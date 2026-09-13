@@ -14575,7 +14575,7 @@ def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=60, mus
 
 def test_51_redaction_tool():
     """Secret redaction: without a redaction tool the string is unchanged;
-    with redaction_redact configured the secret is replaced.
+    with redaction__redact configured the secret is replaced.
 
     Uses the omni-plugins redaction plugin (python, tools/redaction) and the
     noop/test-tool-caller channel: the provider echoes the posted message, so
@@ -14637,11 +14637,11 @@ def test_51_redaction_tool():
         f"case B: secret must be redacted when redaction tool is set, replies={replies_b!r}"
     assert any("[REDACTED" in r for r in replies_b), \
         f"case B: redaction mask missing from delivered reply, replies={replies_b!r}"
-    print(f"  [case B OK: redaction_redact -> secret replaced by [REDACTED ...] ({len(replies_b)} reply(es))]")
+    print(f"  [case B OK: redaction__redact -> secret replaced by [REDACTED ...] ({len(replies_b)} reply(es))]")
 
     # 4. Restore the default (empty = no redaction).
     _g51_put_setting("redaction_tool", "")
-    print("PASS: redaction - no tool = unchanged; redaction_redact = redacted; setting restored")
+    print("PASS: redaction - no tool = unchanged; redaction__redact = redacted; setting restored")
 
 
 test(test_51_redaction_tool)
