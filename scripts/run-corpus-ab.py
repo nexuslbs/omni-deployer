@@ -341,13 +341,16 @@ def write_profiles_yml(content, run):
 
 
 def _repo_allowlist():
-    """omni profile allowed_tools from the omni-root repo config (dev mount
-    /opt/omni/config/profiles.yml == host /opt/workspace/omni-root/config/
-    profiles.yml). Corpus threads only get the tools the profile declares
-    (profiles.yml allowed_tools); mirroring the repo allowlist keeps the dev
-    profile identical to production."""
-    for p in ("/opt/omni/config/profiles.yml",
-              "/opt/workspace/omni-root/config/profiles.yml"):
+    """omni profile allowed_tools from the runtime config/profiles.yml (the
+    dev mount /opt/omni/config/profiles.yml is the source checkout's config).
+    An extra candidate can be supplied with OMNI_SOURCE_CONFIG, so host-side
+    runs never depend on a hard-coded checkout path. Corpus threads only get
+    the tools the profile declares (profiles.yml allowed_tools); mirroring the
+    runtime allowlist keeps the dev profile identical to production."""
+    candidates = ["/opt/omni/config/profiles.yml"]
+    if os.environ.get("OMNI_SOURCE_CONFIG"):
+        candidates.append(os.environ["OMNI_SOURCE_CONFIG"])
+    for p in candidates:
         try:
             with open(p) as f:
                 txt = f.read()
