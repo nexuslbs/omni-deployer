@@ -523,6 +523,68 @@ def _tests_argv(group="", start_group="", verify_only=False, json_report=""):
     return argv
 
 
+# ── Rust api_tests fixture (dev only) ───────────────────────────────────
+# tests/api_tests.rs::test_messages_events_last_only_one_row_per_thread asserts
+# that /messages/events?last=true returns at least one row, i.e. it needs a
+# thread WITH at least one message in the DB. A clean dev deploy has an EMPTY
+# DB until the Python suite (Step 10) runs, so that test used to depend on
+# incidental data created by an earlier deploy step: it passed in some runs and
+# failed on a truly clean DB ("expected at least one last message", thread
+# 2077 gates full3/full4). Seed the fixture explicitly so Step 9 is
+# deterministic (F1 self-containment: setup -> run -> verify). threads.cause
+# is constrained by chk_thread_cause (cause IN ('user','system')), so the fixture
+# uses 'system' and is identified by its channel id; it is removed again right
+# after the Rust tests so the Python suite (Step 10) still sees a clean DB.
+API_TEST_FIXTURE_SQL = (
+    "INSERT INTO threads (status, cause, channel_id, profile, provider, model, "
+    "terminal, started_at, ended_at) "
+    "SELECT 'completed', 'system', 'dev-api-fixture', 'omni', 'noop', "
+    "'noop', true, NOW(), NOW() "
+    "WHERE NOT EXISTS (SELECT 1 FROM messages); "
+    "INSERT INTO messages (role, content, thread_id, thread_sequence) "
+    "SELECT v.role, v.content, t.id, v.seq "
+    "FROM threads t, (VALUES "
+    "('user', 'dev api fixture: first message', 1), "
+    "('assistant', 'dev api fixture: last message', 2)"
+    ") AS v(role, content, seq) "
+    "WHERE t.channel_id = 'dev-api-fixture' "
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id);"
+)
+API_TEST_FIXTURE_CLEANUP_SQL = (
+    "DELETE FROM messages WHERE thread_id IN "
+    "(SELECT id FROM threads WHERE channel_id = 'dev-api-fixture'); "
+    "DELETE FROM threads WHERE channel_id = 'dev-api-fixture';"
+)
+
+
+def seed_api_test_fixture(compose):
+    """Insert a deterministic thread+messages fixture for the Rust api_tests.
+
+    Idempotent: only inserts while the messages table is empty (fresh dev DB),
+    so a resumed/repeated run never piles up fixtures.
+    """
+    r = run_compose(compose, "exec", "-T", "postgres", "psql", "-U", "omniagent",
+                    "-d", "omniagent", "-v", "ON_ERROR_STOP=1", "-c",
+                    API_TEST_FIXTURE_SQL)
+    if r.returncode != 0:
+        raise RuntimeError("api_tests fixture seed failed: "
+                           f"{r.stdout[-300:]} {r.stderr[-300:]}")
+    r = run_compose(compose, "exec", "-T", "postgres", "psql", "-U", "omniagent",
+                    "-d", "omniagent", "-tAc", "SELECT count(*) FROM messages")
+    print("  [integration] api_tests fixture: %s message(s) in DB"
+          % r.stdout.strip())
+
+
+def clear_api_test_fixture(compose):
+    """Drop the api_tests fixture again (Step 10 expects a clean DB)."""
+    r = run_compose(compose, "exec", "-T", "postgres", "psql", "-U", "omniagent",
+                    "-d", "omniagent", "-v", "ON_ERROR_STOP=1", "-c",
+                    API_TEST_FIXTURE_CLEANUP_SQL)
+    if r.returncode != 0:
+        print("  [WARNING: api_tests fixture cleanup failed: %s]"
+              % (r.stdout[-200:] + r.stderr[-200:]))
+
+
 def run_rust_integration_tests(compose, mode="dev"):
     """Run api_tests and plugin_tests via cargo test.
 
@@ -537,6 +599,8 @@ def run_rust_integration_tests(compose, mode="dev"):
         return
 
     print("\n[integration] Running Rust integration tests (api_tests, plugin_tests)...")
+    seed_api_test_fixture(compose)
+    rust_error = None
 
     for test_file in ["api_tests", "plugin_tests"]:
         print(f"\n  Running {test_file}...")
@@ -559,8 +623,16 @@ def run_rust_integration_tests(compose, mode="dev"):
             if r.stderr:
                 lines = r.stderr.splitlines()
                 print("\n".join(lines[-30:]), file=sys.stderr)
-            raise RuntimeError(f"Rust integration test '{test_file}' failed (exit={r.returncode})")
+            rust_error = RuntimeError(
+                f"Rust integration test '{test_file}' failed (exit={r.returncode})")
+            break
         print(f"  ✓ {test_file} passed")
+
+    # The fixture exists only to make api_tests deterministic: remove it now so
+    # the Python suite (Step 10) still starts from a clean DB.
+    clear_api_test_fixture(compose)
+    if rust_error is not None:
+        raise rust_error
 
 
 # ═══════════════════════════════════════════════════════════════════════
