@@ -2989,6 +2989,39 @@ def _mm_get_posts(base_url, channel_id, token):
     return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
 
+def _ensure_bundled_provider_dir(name):
+    """Group-isolation helper (F1, thread 2077): guarantee a COMPLETE bundled
+    provider directory before a group depends on it.
+
+    Groups 1-8 delete bundled provider dirs and a run killed mid-flight can
+    leave a partial copy behind.  A missing/partial dir makes the omniagent
+    provider subprocess unstartable: the plugin API reports ``entrypoint=no``
+    and no PID ever appears, which used to surface as a 120s timeout in GROUP 9
+    and then cascade into GROUPS 12/13/14.  Re-seed from the omni-plugins source
+    when the directory is absent or contains no executable entrypoint file.
+    """
+    target = f"{WORKSPACE}/plugins/providers/{name}"
+    src = f"{REMOTE_REPO}/providers/{name}"
+    has_entry = False
+    if os.path.exists(target):
+        try:
+            has_entry = any(f.endswith((".py", ".js"))
+                            for f in os.listdir(target))
+        except OSError:
+            has_entry = False
+    if has_entry:
+        return
+    assert os.path.exists(src), f"omni-plugins missing providers/{name}"
+    if os.path.exists(target):
+        print(f"[re-seeding incomplete bundled provider '{name}' from source]")
+        shutil.rmtree(target, ignore_errors=True)
+    else:
+        print(f"[restoring bundled provider '{name}' from source]")
+    shutil.copytree(src, target, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("target", "__pycache__"))
+    assert os.path.exists(target), f"failed to restore providers/{name}"
+
+
 def test_mm9_e2e():
     """Full e2e test: mattermost setup -> noop provider response.
 
@@ -2998,17 +3031,14 @@ def test_mm9_e2e():
     """
     import urllib.request, urllib.error, time
     _ensure_mm_platform_binary()
-    # Ensure noop provider exists (GROUP 1 tests may have deleted it).
-    # Restore from the omni-plugins repo - omni-stack is a seed and tracks no
-    # plugins, so there is no git fallback.
-    noop_dir = f"{WORKSPACE}/plugins/providers/noop"
-    if not os.path.exists(noop_dir):
-        print("[restoring noop provider from backup...]")
-        from shutil import copytree
-        repo_noop = f"{REMOTE_REPO}/providers/noop"
-        assert os.path.exists(repo_noop), f"omni-plugins missing providers/noop"
-        copytree(repo_noop, noop_dir, dirs_exist_ok=True)
-        assert os.path.exists(noop_dir), f"Failed to restore noop provider"
+    # Ensure BOTH noop providers exist and are complete (F1 self-containment,
+    # thread 2077).  GROUP 1 tests delete bundled provider dirs and a killed run
+    # can leave a partial copy, in which case omniagent reports entrypoint=no and
+    # the provider subprocess never starts (a 120s timeout here that then
+    # cascaded into GROUPS 12/13/14).  omni-stack is a seed and tracks no
+    # plugins, so the omni-plugins repo is the only fallback.
+    _ensure_bundled_provider_dir("noop")
+    _ensure_bundled_provider_dir("noop-full")
     _check_mm_container()
     MM = "http://mattermost:8065"
     # Password of the `testuser` account. On a fresh stack it is the value this
@@ -4460,6 +4490,11 @@ def test_fn_12_file_upload():
     import urllib.request, urllib.error, time, uuid
 
     MM = "http://mattermost:8065"
+
+    # F1 self-containment: both bundled noop provider dirs must be complete (see
+    # _ensure_bundled_provider_dir) or the provider subprocess cannot start.
+    _ensure_bundled_provider_dir("noop")
+    _ensure_bundled_provider_dir("noop-full")
 
     # Safety: ensure noop provider is in clean HTTP-based state (same as Groups 13/14)
     try:
