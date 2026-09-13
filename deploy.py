@@ -236,7 +236,139 @@ def wait_for_db(compose, service, user, db, label="db"):
 #  Pretests
 # ═══════════════════════════════════════════════════════════════════════
 
-def run_pretests(mode):
+# ═══════════════════════════════════════════════════════════════════════
+#  Dev-runtime reduction helpers (F2/F3/F6, thread 2077)
+#
+#  The 7h14m dev run (thread 1877) spent 5 full monolithic tests.py runs
+#  (4h36m) + 5 pretest/cargo-build attempts (1h18m). F2 removes the re-runs
+#  (group-level failure resume) and F3 removes the repeated compile gate
+#  (cache keyed on the exact gate input). F6 records per-stage timings.
+# ═══════════════════════════════════════════════════════════════════════
+
+PRETEST_CACHE_PATH = os.path.join(tempfile.gettempdir(), "omni-deployer-pretest-cache.json")
+DEPLOY_TIMINGS_PATH = os.path.join(tempfile.gettempdir(), "omni-deployer-timings.json")
+# tests.py prints this prefix once per run with a one-line JSON summary. The
+# script is PIPED on stdin (__file__ == '<stdin>'), so a report file written
+# inside the container is not reachable from the host: the stdout marker is
+# the transport the resume loop parses to learn WHICH group failed.
+TESTS_REPORT_PREFIX = "OMNIAGENT_TESTS_REPORT "
+TESTS_REPORT_CONTAINER = "/tmp/omni-deployer-tests-report.json"
+STAGE_TIMINGS = []
+DEPLOY_META = {}
+
+
+def stage_timing(name, started):
+    """Record one deploy stage duration (F6) and return it."""
+    elapsed = time.time() - started
+    STAGE_TIMINGS.append({"stage": name, "elapsed_secs": round(elapsed, 3)})
+    print(f"[timing] {name}: {elapsed:.1f}s")
+    return elapsed
+
+
+def write_stage_timings(mode, extra=None):
+    data = {
+        "schema": "omniagent-deploy-timings/v1",
+        "mode": mode,
+        "generated_at": time.time(),
+        "stages": STAGE_TIMINGS,
+        "total_secs": round(sum(s["elapsed_secs"] for s in STAGE_TIMINGS), 1),
+    }
+    data.update(extra or {})
+    try:
+        with open(DEPLOY_TIMINGS_PATH, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+        print(f"[timing] wrote {DEPLOY_TIMINGS_PATH}")
+    except OSError as e:
+        print(f"[timing] WARNING: could not write {DEPLOY_TIMINGS_PATH}: {e}")
+    return data
+
+
+def _sha256_blob(blob):
+    import hashlib
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _sha256_file(path):
+    try:
+        with open(path, "rb") as fh:
+            return _sha256_blob(fh.read())
+    except OSError:
+        return "missing:" + path
+
+
+def _git_out(repo, *args):
+    try:
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True,
+                           text=True, timeout=30)
+        return r.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _pretest_cache_key():
+    """Identity of the pretest gate input (F3).
+
+    The 4 cargo gates (fmt --check, check -D warnings, clippy -D warnings,
+    cargo test --release) are a pure function of the omniagent source tree,
+    its Cargo.lock, the dev Dockerfile and the dev overlay. If all of those
+    are byte-identical, re-running them adds no information - and the 7h14m
+    run burned 4,692s (18%) re-running them after each failure. A DIRTY
+    source tree (uncommitted edit) always invalidates the key, so an
+    in-progress edit can never inherit a stale green gate.
+    """
+    parts = [
+        "v1",
+        _git_out(OMNIAGENT_DIR, "rev-parse", "HEAD"),
+        _git_out(OMNIAGENT_DIR, "status", "--porcelain"),
+        _sha256_file(os.path.join(OMNIAGENT_DIR, "Cargo.lock")),
+        _sha256_file(os.path.join(OMNIAGENT_DIR, "Dockerfile.dev")),
+        _sha256_file(os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml")),
+    ]
+    return _sha256_blob("\n".join(parts).encode())
+
+
+def _pretest_cache_hit(cache_key, compose):
+    try:
+        with open(PRETEST_CACHE_PATH) as fh:
+            cache = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    if cache.get("key") != cache_key:
+        return False
+    # The compiled artifacts must still exist: the dev volumes can be
+    # recreated, and a cached gate over a wiped /target would be a false
+    # green (the gates compile; they are only skippable if they compiled
+    # the SAME input into an artifact that is still there).
+    probe = run_compose(compose, "run", "--rm", "omniagent", "sh", "-c",
+                        "test -x /target/release/omniagent")
+    if probe.returncode != 0:
+        print("[pretests] cache key matches but /target/release/omniagent is "
+              "gone - re-running the gates")
+        return False
+    print("[pretests] CACHE HIT (key %s, recorded %s, gates took %.0fs): "
+          "omniagent HEAD + Cargo.lock + Dockerfile.dev are byte-identical, "
+          "skipping the 4 cargo gates (F3)" % (
+              cache_key[:12], cache.get("stamp", "?"), cache.get("gates_secs", 0)))
+    return True
+
+
+def _pretest_cache_store(cache_key, gates_secs):
+    data = {
+        "key": cache_key,
+        "stamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "gates_secs": round(gates_secs, 1),
+        "agent_head": _git_out(OMNIAGENT_DIR, "rev-parse", "HEAD"),
+    }
+    try:
+        with open(PRETEST_CACHE_PATH, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+        print("[pretests] gate cached (key %s, %.0fs) - a later dev invocation "
+              "with the same source skips it" % (cache_key[:12], gates_secs))
+    except OSError as e:
+        print(f"[pretests] WARNING: could not cache the gate: {e}")
+
+
+def run_pretests(mode, image_built=False, use_cache=True):
     """
     Run pre-deploy checks: fmt, clippy, unit tests, build test binaries.
 
@@ -245,6 +377,12 @@ def run_pretests(mode):
     builder stage runs the identical gates during the image build (the CI
     build job builds the images, so re-running them on the host with a cold
     cargo cache would duplicate work and blow the runner's time budget).
+
+    dev + F3 (thread 2077): `image_built` is passed True by _deploy() because
+    Step 2 already built the very same dev image, and the 4 cargo gates are
+    skipped when a previous dev invocation already ran them against the
+    identical source/Cargo.lock/Dockerfile identity (`use_cache`, disabled by
+    deploy.py --no-pretest-cache).
     """
     docker_mode = mode  # for compose run; only dev uses the dev overlay
     compose = compose_cmd(docker_mode)
@@ -270,8 +408,16 @@ def run_pretests(mode):
         return
 
     if mode == "dev":
-        print("\n[pretests] Building dev image...")
-        run_compose_check(compose, "build", "omniagent", label="dev image")
+        cache_key = _pretest_cache_key()
+        if use_cache and _pretest_cache_hit(cache_key, compose):
+            return
+        if not image_built:
+            # Step 2 of _deploy() already built this exact image in the same
+            # run; the redundant build is skipped (it is idempotent but the
+            # docker build still costs a dependency-graph walk).
+            print("\n[pretests] Building dev image...")
+            run_compose_check(compose, "build", "omniagent", label="dev image")
+        gates_t0 = time.time()
 
         def run_cargo(args, label="", extra_env=None):
             # Dev mode NEVER uses SQLX_OFFLINE=true: the dev overlay
@@ -351,6 +497,30 @@ def run_pretests(mode):
     print("\n[pretests] Running cargo test --workspace --release...")
     check_cargo(["cargo", "test", "--workspace", "--release"], label="cargo test --workspace --release")
     print("  ✓ Unit tests passed")
+    if mode == "dev":
+        stage_timing("pretests-cargo-gates", gates_t0)
+        _pretest_cache_store(cache_key, time.time() - gates_t0)
+
+
+def _tests_argv(group="", start_group="", verify_only=False, json_report=""):
+    """Extra tests.py CLI args for a dev run (F1/F2, thread 2077).
+
+    tests.py is piped on stdin, so these are appended after `python3 -u -`:
+      --group N           run EXACTLY group N (standalone run)
+      --start-group N     run every group from N onward (failure resume)
+      --verify-only       the conditional full verification pass
+      --json-report PATH  machine-readable per-group report (in-container path)
+    """
+    argv = []
+    if group:
+        argv += ["--group", str(group)]
+    if start_group:
+        argv += ["--start-group", str(start_group)]
+    if verify_only:
+        argv.append("--verify-only")
+    if json_report:
+        argv += ["--json-report", str(json_report)]
+    return argv
 
 
 def run_rust_integration_tests(compose, mode="dev"):
@@ -547,9 +717,19 @@ def remove_data_volumes():
         print(f"[deploy] Removed data volumes: {', '.join(removed)}")
 
 
-def _deploy(mode):
+def _deploy(mode, group_retries=3, start_group="", pretest_cache=True):
     """Internal deploy body - wrapped by deploy() which guarantees the seed
-    restore runs in a finally on BOTH success and failure paths."""
+    restore runs in a finally on BOTH success and failure paths.
+
+    F2/F3/F7 (thread 2077, dev mode only):
+      group_retries: max attempts per FAILING GROUP before the deploy gives up
+                     (default 3 = the explicit flake-retry policy).
+      start_group:   skip straight to this group id (manual resume).
+      pretest_cache: reuse a recorded green cargo gate when the omniagent
+                     source, Cargo.lock and dev Dockerfile are byte-identical
+                     (F3; any dirty tree invalidates the key automatically).
+    """
+    t_deploy = time.time()
     if not os.path.isdir(OMNI_STACK_DIR):
         raise RuntimeError(f"omni-stack not found at {OMNI_STACK_DIR}")
     # Step 0.4 (hybrid): CI-consistency preflight. Hybrid must test EXACTLY the
@@ -801,7 +981,9 @@ def _deploy(mode):
     # Step 0: Pretests - AFTER the DB is migrated (dev) so SQLX_OFFLINE=false
     # validates against the live schema. In dev mode cargo runs inside the dev
     # container; in CI mode cargo runs on the host (uses committed .sqlx cache).
-    run_pretests(mode)
+    # Step 2 already built the dev image and the cache covers repeated dev
+    # invocations (F3, thread 2077).
+    run_pretests(mode, image_built=(mode == "dev"), use_cache=pretest_cache)
 
     # Step 5b (dev): prepare.py + build all binaries (after pretests)
     if mode == "dev":
@@ -944,15 +1126,26 @@ def _deploy(mode):
         time.sleep(2)
 
     # Step 9: Rust integration tests (api_tests, plugin_tests)
+    t_stage = time.time()
     run_rust_integration_tests(compose, mode)
+    stage_timing("rust-integration-tests", t_stage)
 
-    # Step 10: Python integration tests (2 passes, no retry - tests must be
-    # robust). CI runs a SINGLE pass: the GitHub-hosted runner died after
-    # >1h ("lost communication with the server") - the double pass plus the
-    # build pushed it over the runner's time budget. dev/hybrid keep the
-    # double pass for extra confidence.
-    passes = [1] if mode == "ci" else [1, 2]
-    for pass_num in passes:
+    # Step 10: Python integration tests.
+    #
+    # ci: a SINGLE full pass, unchanged (the GitHub-hosted runner died after
+    # >1h with the double pass plus the build, so CI never runs pass 2).
+    # hybrid: unchanged - two UNCONDITIONAL passes (release-pipeline semantics
+    # must not move).
+    # dev (F2/F7, thread 2077): pass 1 + GROUP-LEVEL failure resume. A failing
+    # group re-invokes the suite FROM that group (--start-group) with NO image
+    # rebuild and NO volume teardown, so the groups that already passed are NOT
+    # re-run; at most `group_retries` attempts per group. The old unconditional
+    # second PASS is now CONDITIONAL: after a resume a full --verify-only pass
+    # runs (nothing is left unverified), while a clean first run costs exactly
+    # one pass. Before F1 a single failure threw away the whole 40-76 min suite
+    # and the operator had to re-run deploy.py dev from scratch: 5 monolithic
+    # re-runs = 4h36m (64%) of the 7h14m run (thread 1877).
+    def _prep_pass(label):
         # Before each tests.py invocation, re-assert the SEED content of the
         # transient config files (plugins.yml, remote.yml, actions.yml,
         # settings.yml, workflows.yml) in the bind-mounted omni-stack config/
@@ -971,9 +1164,61 @@ def _deploy(mode):
         # deploy contract is ZERO tasks at all times).
         clear_deploy_tasks()
         print(f"\n{'=' * 60}")
-        print(f"  INTEGRATION TESTS - PASS {pass_num}")
+        print(f"  INTEGRATION TESTS - {label}")
         print(f"{'=' * 60}")
-        run_tests(compose)
+
+    if mode in ("ci", "hybrid"):
+        for pass_num in ([1] if mode == "ci" else [1, 2]):
+            _prep_pass(f"PASS {pass_num}")
+            t_stage = time.time()
+            run_tests(compose)
+            stage_timing(f"python-suite-pass-{pass_num}", t_stage)
+    else:
+        resumed = False
+        attempts = {}
+        start = start_group
+        attempt = 0
+        while True:
+            attempt += 1
+            label = ("PASS 1" if attempt == 1 else
+                     f"RESUME ATTEMPT {attempt} (from group {start})")
+            _prep_pass(label)
+            t_stage = time.time()
+            rc, report = run_tests(
+                compose,
+                argv=_tests_argv(start_group=start,
+                                 json_report=TESTS_REPORT_CONTAINER),
+                check=False, capture=True)
+            stage_timing(f"python-suite-attempt-{attempt}", t_stage)
+            if rc == 0:
+                break
+            failed = (report or {}).get("first_failure")
+            if not failed:
+                raise RuntimeError(
+                    f"Tests failed (exit={rc}) with no machine-readable report "
+                    "line, so the suite cannot be resumed from the failing "
+                    "group. See the output above.")
+            attempts[failed] = attempts.get(failed, 0) + 1
+            if attempts[failed] >= group_retries:
+                raise RuntimeError(
+                    f"Tests failed in group {failed} after {attempts[failed]} "
+                    f"attempt(s) (exit={rc}); giving up (--group-retries "
+                    f"{group_retries}).")
+            print(f"\n[resume] group {failed} failed "
+                  f"(attempt {attempts[failed]}/{group_retries}): re-running "
+                  f"the suite FROM group {failed} - no image rebuild, no "
+                  f"volume teardown, groups before it are not re-run")
+            start = failed
+            resumed = True
+        if resumed:
+            _prep_pass("FINAL VERIFICATION PASS (--verify-only after a resume)")
+            t_stage = time.time()
+            run_tests(compose,
+                      argv=_tests_argv(verify_only=True,
+                                       json_report=TESTS_REPORT_CONTAINER))
+            stage_timing("python-suite-verify-pass", t_stage)
+        DEPLOY_META.update({"resumed": resumed, "resume_attempts": attempts,
+                            "suite_attempts": attempt})
 
     # Clean test-created plugin residue from omni-stack (seed rule: test
     # artifacts are removed after the run, not gitignored). The same sweep
@@ -995,12 +1240,14 @@ def _deploy(mode):
     print(f"\n{'=' * 60}")
     print("  SHARED TOOL TESTS (Phase 1 + Phase 2)")
     print(f"{'=' * 60}")
+    t_stage = time.time()
     # shared_settings was initialized at module level; only the dev overlay
     # is mode-dependent.
     shared_settings.dev_overlay = (
         os.path.join(OMNI_STACK_DIR, "docker-compose.dev.yml") if mode == "dev" else None
     )
     shared.run_tests()
+    stage_timing("shared-tool-tests", t_stage)
 
     print(f"\n{'=' * 60}")
     print("  ALL TESTS PASSED (including shared tool tests)")
@@ -1009,7 +1256,13 @@ def _deploy(mode):
     # Step 11b: Local S3 (MinIO) backup/restore/checkpoint test - runs LAST
     # because restore_backup/restore_checkpoint drop + recreate the omniagent
     # DB, which would invalidate any subsequent test's data.
+    t_stage = time.time()
     test_s3_backup_restore(compose)
+    stage_timing("s3-backup-restore", t_stage)
+
+    # F6 (thread 2077): per-stage timing JSON (before/after table evidence).
+    write_stage_timings(mode, dict(DEPLOY_META,
+                                   total_secs=round(time.time() - t_deploy, 1)))
 
 
 # Live runtime config files whose content (platform secret refs, remote
@@ -1116,7 +1369,7 @@ def restore_seed_config():
     print("  ✓ omni-stack clean after restore")
 
 
-def deploy(mode):
+def deploy(mode, group_retries=3, start_group="", pretest_cache=True):
     """Run the deploy, ALWAYS restoring the seed config when it ends.
 
     deploy.py creates runtime-only state in omni-stack (config/, plugins/,
@@ -1133,7 +1386,8 @@ def deploy(mode):
     if preserve_live_config:
         preserve_runtime_config()
     try:
-        _deploy(mode)
+        _deploy(mode, group_retries=group_retries, start_group=start_group,
+                pretest_cache=pretest_cache)
     finally:
         try:
             restore_seed_config()
@@ -1362,6 +1616,21 @@ def main():
         choices=["dev", "ci", "hybrid", "test", "verify-inbound"],
         help="dev=build from source + shared tool tests, ci=use pre-built images, hybrid=build images+run like CI, test=run tests only, verify-inbound=check every enabled platform resolves its secrets and inbound is active",
     )
+    parser.add_argument(
+        "--group-retries", type=int, default=3, dest="group_retries",
+        help="dev only: max attempts per FAILING GROUP before the deploy gives "
+             "up (F7 flake-retry policy, default 3).",
+    )
+    parser.add_argument(
+        "--start-group", type=str, default="", dest="start_group",
+        help="dev only: resume the integration suite at this group id (the "
+             "groups before it are skipped, nothing is rebuilt).",
+    )
+    parser.add_argument(
+        "--no-pretest-cache", action="store_true", dest="no_pretest_cache",
+        help="dev only: ignore the recorded green cargo gate and re-run all 4 "
+             "gates even when the source tree is byte-identical (F3).",
+    )
     args = parser.parse_args()
 
     if args.mode == "test":
@@ -1371,7 +1640,9 @@ def main():
         print(f"[deploy] verify-inbound exit={code}")
         sys.exit(code)
     else:
-        deploy(args.mode)
+        deploy(args.mode, group_retries=args.group_retries,
+               start_group=args.start_group,
+               pretest_cache=not args.no_pretest_cache)
 
 
 if __name__ == "__main__":
