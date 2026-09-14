@@ -84,6 +84,44 @@ single-instance lock, and the kanban-workflow feature groups:
 | 49 | omni-dashboard UI/UX fixes regression (DB page, custom selects, workflow defaults, hooks, templates, red cancel, plugin remove, git box) |
 | 50 | Release push-tag version verification + dashboard Connected version |
 
+### Group isolation and failure resume (`--group`, `--from-group`)
+
+`scripts/tests.py` is a **group-isolated harness**: every group is a registered
+segment, executed as setup → run → verify → cleanup inside its own scope, so any
+single group can run alone in a fresh interpreter. `--list` prints all 59
+segments with a `standalone` flag and the prerequisites a group declares.
+
+| Flag | Meaning |
+|------|---------|
+| `--group N` | run EXACTLY group N (isolation; the group re-establishes its own preconditions) |
+| `--from-group N` (alias `--start-group N`) | run every group from N onward to the end |
+| `--list` | list every group segment, its standalone flag and declared prerequisites |
+| `--with-prereqs` | with `--group N`, also run the groups N declares as prerequisites |
+| `--json-report PATH` | write the per-group machine report (also echoed as one `OMNIAGENT_TESTS_REPORT {...}` line) |
+| `--verify-only` | re-run the suite against the already-built stack, no rebuild |
+
+Invocations (from the host, against the running dev stack):
+
+    # one group, in isolation
+    python3 deploy.py test --group 37
+    # from group 37 to the end
+    python3 deploy.py test --from-group 37
+    # dev pipeline whose suite resumes at group 37 (no rebuild, no teardown)
+    python3 deploy.py dev --from-group 37
+
+Same directly inside the agent container (useful when debugging a group live):
+
+    docker exec omnidev-omniagent-1 python3 -u \
+        /opt/workspace/omni-deployer/scripts/tests.py --group 37
+
+`deploy.py dev` drives this automatically: the suite reports its first failing
+group, the deploy re-invokes it **from that group onward** without an image
+rebuild or volume teardown (max `--group-retries` attempts per group), and a
+run with no failure costs exactly one pass. The resume-on-failure loop is
+therefore: fix the root cause of the failing group, re-run
+`deploy.py dev --from-group N`, repeat until the end, then make one final
+complete `deploy.py dev` run.
+
 ## CI/CD
 
 Single `publish.yml` workflow triggered on push to `stable` or `v*` tags.

@@ -1731,9 +1731,17 @@ def main():
              "up (F7 flake-retry policy, default 3).",
     )
     parser.add_argument(
-        "--start-group", type=str, default="", dest="start_group",
-        help="dev only: resume the integration suite at this group id (the "
-             "groups before it are skipped, nothing is rebuilt).",
+        "--start-group", "--from-group", type=str, default="",
+        dest="start_group",
+        help="dev/test: resume the integration suite at this group id (the "
+             "groups before it are skipped, nothing is rebuilt in dev). "
+             "--from-group is an accepted alias (run from group N onward).",
+    )
+    parser.add_argument(
+        "--group", type=str, default="", dest="group",
+        help="test only: run EXACTLY this integration group id in isolation "
+             "(e.g. --group 37). The group re-establishes its own "
+             "preconditions; nothing is built.",
     )
     parser.add_argument(
         "--no-pretest-cache", action="store_true", dest="no_pretest_cache",
@@ -1743,7 +1751,10 @@ def main():
     args = parser.parse_args()
 
     if args.mode == "test":
-        run_tests()
+        # F1/F2: `deploy.py test` also drives the group-isolation harness, so
+        # an operator/agent can run one group alone (--group 37) or resume
+        # from a group (--from-group 37) without a full dev deploy.
+        run_tests(argv=_tests_argv(group=args.group, start_group=args.start_group))
     elif args.mode == "verify-inbound":
         code = shared.verify_platform_inbound()
         print(f"[deploy] verify-inbound exit={code}")

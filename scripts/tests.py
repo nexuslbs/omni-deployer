@@ -5369,8 +5369,11 @@ def _cli_parser():
     _p.add_argument("--group", type=str, default="",
                     help="Run EXACTLY this group id (e.g. 37). Any value that is not a "
                          "known group id keeps the legacy TEST_FILTER name-substring mode.")
-    _p.add_argument("--start-group", type=str, default="", dest="start_group",
-                    help="Run every group from this id onward (failure resume).")
+    _p.add_argument("--start-group", "--from-group", type=str, default="",
+                    dest="start_group",
+                    help="Run every group from this id onward (failure resume). "
+                         "--from-group is the operator-facing alias used by the "
+                         "deploy failure-resume loop and the docs.")
     _p.add_argument("--with-prereqs", action="store_true", dest="with_prereqs",
                     help="With --group, also run the groups it declares as prerequisites.")
     _p.add_argument("--list", action="store_true",
