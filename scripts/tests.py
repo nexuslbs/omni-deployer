@@ -3011,6 +3011,36 @@ def _mm_get_posts(base_url, channel_id, token):
     return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
 
+def _bundled_provider_dir_complete(target):
+    """True when a bundled provider dir has a usable manifest + entrypoint.
+
+    A dir counts as complete only when BOTH the manifest (``plugin.json``
+    declaring an ``entrypoint.command``) AND the entrypoint file it names are
+    present.  Checking for "some .py file" was not enough: a run killed
+    mid-copy (or a group that removed part of the dir) could leave ``client.py``
+    behind WITHOUT ``plugin.json``, so the dir looked complete while omniagent
+    loaded an empty manifest and reported ``entrypoint=no`` - the provider
+    subprocess never started and GROUP 9 timed out (thread 1971 full-run
+    first-pass flake).
+    """
+    if not os.path.isdir(target):
+        return False
+    manifest_path = os.path.join(target, "plugin.json")
+    if not os.path.isfile(manifest_path):
+        return False
+    try:
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    command = ((manifest or {}).get("entrypoint") or {}).get("command") or ""
+    if not command:
+        return False
+    if os.path.isabs(command):
+        return os.path.exists(command)
+    return os.path.isfile(os.path.join(target, command))
+
+
 def _ensure_bundled_provider_dir(name):
     """Group-isolation helper (F1, thread 2077): guarantee a COMPLETE bundled
     provider directory before a group depends on it.
@@ -3024,14 +3054,7 @@ def _ensure_bundled_provider_dir(name):
     """
     target = f"{WORKSPACE}/plugins/providers/{name}"
     src = f"{REMOTE_REPO}/providers/{name}"
-    has_entry = False
-    if os.path.exists(target):
-        try:
-            has_entry = any(f.endswith((".py", ".js"))
-                            for f in os.listdir(target))
-        except OSError:
-            has_entry = False
-    if has_entry:
+    if _bundled_provider_dir_complete(target):
         return
     assert os.path.exists(src), f"omni-plugins missing providers/{name}"
     if os.path.exists(target):
