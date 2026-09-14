@@ -122,6 +122,17 @@ therefore: fix the root cause of the failing group, re-run
 `deploy.py dev --from-group N`, repeat until the end, then make one final
 complete `deploy.py dev` run.
 
+`deploy.py test` (with `--group N` or `--from-group N`) re-asserts the dev prep
+BEFORE the selection runs, so an isolated run is reproducible on a stack left
+behind by a previous (possibly failed) run, with no manual prep step: the
+tracked seed config (`config/plugins.yml`, `channels.yml`, `remote.yml`,
+`actions.yml`, `settings.yml`, `workflows.yml`) is re-seeded, the deploy-only
+`cron`/`kanban`/`hooks` channel pins are applied, deploy tasks are cleared, the
+agent container is restarted and `/health` is polled. Groups also re-establish
+their own preconditions at the start of the group (provider plugin
+directories/files, channels, profiles, wiki dirs), which is what makes a bare
+`--group N` selection pass on a from-scratch stack.
+
 ## CI/CD
 
 Single `publish.yml` workflow triggered on push to `stable` or `v*` tags.

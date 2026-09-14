@@ -148,6 +148,42 @@ if shutil.which("sudo") is None:
 #  Helpers
 # ═══════════════════════════════════════════════════════════════════════
 
+def prep_test_invocation():
+    """Prepare the ALREADY DEPLOYED stack for an isolated `deploy.py test` run.
+
+    Mode `test` pipes scripts/tests.py into a running stack and does NOT go
+    through deploy()'s `_prep_pass` (deploy.py:1220), so the transient
+    bind-mounted config (omni-stack/config/*.yml) is whatever the previous
+    run/tests left behind. An isolated group then reads DRIFTED config and
+    fails for reasons that have nothing to do with the group (thread 1972:
+    group 55 "no docker tool in the live registry", group 37 "actions status:
+    disabled", group 27 "POST /schedule/.../run -> no channel defined").
+    Re-assert the tracked SEED of every transient config file (*including
+    channels.yml*, which the tests themselves mutate and whose `cron:` block
+    patch_deploy_channels_noop pins), empty tasks.yml (clear_deploy_tasks) and
+    restart the omniagent container so the file-backed config is re-read -
+    exactly what a dev pass does before each tests.py invocation.
+    """
+    shared.ensure_seed_config(
+        OMNI_STACK_DIR,
+        overwrite_files=["plugins.yml", "remote.yml", "actions.yml",
+                         "settings.yml", "workflows.yml", "channels.yml"],
+    )
+    patch_deploy_channels_noop()
+    clear_deploy_tasks()
+    compose = compose_cmd("dev")
+    print("[deploy test] restarting omniagent to load the re-asserted config...")
+    run_compose(compose, "restart", "omniagent")
+    for i in range(60):
+        r = run_compose(compose, "exec", "-T", "omniagent",
+                        "curl", "-sf", "http://localhost:8080/health")
+        if r.returncode == 0:
+            print(f"  omniagent healthy after restart ({i * 2}s)")
+            return
+        time.sleep(2)
+    print("  [WARNING: omniagent did not become healthy after restart]")
+
+
 def sh(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
@@ -1754,6 +1790,9 @@ def main():
         # F1/F2: `deploy.py test` also drives the group-isolation harness, so
         # an operator/agent can run one group alone (--group 37) or resume
         # from a group (--from-group 37) without a full dev deploy.
+        # Thread 1972: re-assert the dev prep FIRST, otherwise the isolated
+        # group reads the drifted post-run config and yields false failures.
+        prep_test_invocation()
         run_tests(argv=_tests_argv(group=args.group, start_group=args.start_group))
     elif args.mode == "verify-inbound":
         code = shared.verify_platform_inbound()

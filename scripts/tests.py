@@ -12480,6 +12480,12 @@ def _seg_37():
             else:
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(content)
+        # F1 isolation (thread 1972): the deploy omni_dir is a SEED checkout
+        # whose profiles/ is not tracked, so profiles/omni/wiki may not exist
+        # when this group runs in isolation and the actions plugin answers
+        # "No wiki directory found" instead of writing the index. Create it
+        # here (tracked, so the finally prunes exactly what THIS test made).
+        wiki_dirs_created = _makedirs_tracked(f"{WORKSPACE}/profiles/omni/wiki")
         files = ["config/actions.yml", "config/tasks.yml",
                  "profiles/omni/wiki/relevant-index.md", "hindsight_watermark.json"]
         backup = {f: _rd(f"{WORKSPACE}/{f}") for f in files}
@@ -12515,6 +12521,8 @@ def _seg_37():
             put_json("/actions/builtin_setup_knowledge_pipeline", {"enabled": False})
             for f in files:
                 _wr(f"{WORKSPACE}/{f}", backup[f])
+            # prune only the wiki directories THIS test had to create
+            _cleanup_seeded([], wiki_dirs_created)
 
 
     test(test_37_config_wiring)
@@ -13839,6 +13847,24 @@ def _seg_44():
     any live channel."""
         import urllib.request, urllib.error, time, uuid
         MM = "http://mattermost:8065"
+        # F1 isolation (thread 1972): the dedicated wf-test channel is pinned
+        # noop/test-tool-caller, so the bundled noop provider must be present
+        # and enabled. An earlier group (9b) can leave the bundled copy removed
+        # or incomplete; the agent then answers nothing at all and the script
+        # post below times out ("fresh responses; saw 0"). Re-assert the
+        # provider precondition BEFORE resolving the channel (same preamble as
+        # the GROUP 12/13 helpers; never patches any channel).
+        _ensure_bundled_provider_dir("noop")
+        _ensure_bundled_provider_dir("noop-full")
+        try:
+            api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+        except Exception:
+            pass
+        time.sleep(1)
+        try:
+            api_post_body("/plugins/providers/bundled/noop/enable", {}, timeout=10)
+        except Exception:
+            pass
         _wf_dedicated_channel()  # ensure the dedicated wf-test channel is bootstrapped
         mm_channel_id = _wf_dedicated_mm_channel_id()
         admin_data = json.dumps({"login_id": "lucasbasquerotto",
@@ -15268,31 +15294,212 @@ def _seg_51():
 
 
     def _g51_mm_channel():
-        """Resolve the Mattermost 'setup' channel (the same channel every other
-    noop/test-tool-caller test uses) and return (channel_id, admin_token)."""
+        """Resolve the DEDICATED wf-test channel (Mattermost 'test-channel' in team
+    'omni', whose omniagent channel is pinned noop/test-tool-caller and whose
+    noop provider ECHOES the posted text) and return (mm_channel_id,
+    admin_token).
+
+    F1 isolation (thread 1973): this used to resolve the Mattermost 'setup'
+    channel. That channel belongs to GROUP 8's mattermost-setup flow: its
+    omniagent binding only exists once that setup ran, and its provider pin is
+    whatever a previous group left behind. An isolated selection therefore
+    failed both ways - no binding at all ("no omniagent channel is bound to the
+    Mattermost 'setup' channel") or a stale noop-full pin answering "LLM
+    provider returned an error ... builder error" - while the full sequence
+    only worked because GROUP 8 leaves that channel pinned. The dedicated
+    wf-test channel is bootstrapped AND pinned by _wf_dedicated_channel()
+    itself, and its noop provider echoes the posted message verbatim, which is
+    exactly the precondition the delivery-path redaction needs."""
         MM = "http://mattermost:8065"
+        # Idempotent: the reply path needs the mattermost platform plugin up (an
+        # isolated selection may not have run GROUP 8's enable).
+        try:
+            api_post_body("/plugins/platforms/built-in/mattermost/enable", {},
+                          timeout=60)
+        except Exception as e:
+            print(f"  [g51: mattermost platform enable skipped ({e})]")
+        # F1 isolation (thread 1973): GROUP 11 (a declared prerequisite of this
+        # group) DISABLES the prompt tool plugin on purpose, and in the full
+        # sequence a later group re-enables it. An isolated --group 51
+        # selection does not run that later group, so every agent thread died
+        # with the agent log error 'Failed to process thread N:
+        # Message("Unknown tool: prompt_generate")' - the agent cannot build a
+        # system prompt, so no echo reply was ever delivered (observed
+        # 2026-09-14T14:19:32Z in the dev stack). Re-enable it here
+        # (idempotent) so this group defines its own precondition.
+        try:
+            api_post_body("/plugins/tools/built-in/prompt/enable", {}, timeout=60)
+            print("  [g51: prompt tool plugin enabled (isolation precondition)]")
+        except Exception as e:
+            print(f"  [g51: prompt plugin enable skipped ({e})]")
         admin_data = json.dumps({"login_id": "lucasbasquerotto",
                                  "password": _get_secret_value("MATTERMOST_ADMIN_PASSWORD", "Mattermost_Fresh_Start_1")}).encode()
         admin_req = urllib.request.Request(
             f"{MM}/api/v4/users/login", data=admin_data, method="POST",
             headers={"Content-Type": "application/json"})
         admin_token = urllib.request.urlopen(admin_req, timeout=10).headers.get("Token")
-        team_resp = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{MM}/api/v4/users/me/teams",
-                                   headers={"Authorization": f"Bearer {admin_token}"}),
-            timeout=10).read())
-        team_id = next((t["id"] for t in team_resp if t["name"] == "omni"), None)
-        assert team_id, "Cannot find 'omni' team"
-        channels = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"{MM}/api/v4/teams/{team_id}/channels",
-                                   headers={"Authorization": f"Bearer {admin_token}"}),
-            timeout=10).read())
-        ch = next((c["id"] for c in channels if c["name"] == "setup"), None)
-        assert ch, "Cannot find 'setup' channel"
-        return ch, admin_token
+        # Resolve (and bootstrap, when the harness channel is missing entirely)
+        # the DEDICATED wf-test channel. _wf_dedicated_channel asserts the
+        # noop/test-tool-caller pin and never patches any other channel.
+        omni_channel_id = _wf_dedicated_channel()
+        ch = _wf_dedicated_mm_channel_id()
+        _g51_ensure_provider()
+        provider, model = _g51_pick_echo_pin(ch, admin_token, omni_channel_id)
+        return ch, admin_token, omni_channel_id, provider, model
 
 
-    def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=60, must_contain=None):
+    def _g51_pin_echo(omni_channel_id, provider="noop", model="test-model-1"):
+        """Pin the dedicated wf-test channel to an ECHO model for THIS test.
+
+    _wf_dedicated_channel() guarantees the script-driver pin
+    noop/test-tool-caller, but this test needs the provider to echo the posted
+    text back through the Mattermost delivery path (the delivered reply must
+    carry the fake secret). The original pin is restored by the caller.
+    The PATCH response is checked (model, and provider when echoed back) so a
+    rejected pin fails loudly here instead of surfacing as a case-A timeout."""
+        resp = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"{BASE}/channels/{omni_channel_id}",
+            data=json.dumps({"provider": provider, "model": model}).encode(),
+            method="PATCH", headers={"Content-Type": "application/json"}),
+            timeout=10).read())
+        got = resp.get("data", resp) if isinstance(resp, dict) else {}
+        assert got.get("model") == model, \
+            f"PATCH /channels/{omni_channel_id} did not apply the echo pin: {resp}"
+        if got.get("provider") is not None:
+            assert got.get("provider") == provider, \
+                f"PATCH /channels/{omni_channel_id} kept provider={got.get('provider')!r}: {resp}"
+        print(f"  [g51: wf-test channel {omni_channel_id} pinned {provider}/{model} (echo)]")
+
+
+    def _g51_ensure_provider():
+        """Idempotently (re)establish the echo providers - isolation precondition.
+
+    This group's declared prerequisites END with GROUPS 10/11, which delete and
+    disable bundled plugins on purpose (identical to GROUP 1). An isolated
+    `--group 51` selection therefore leaves the bundled provider DIRECTORY gone:
+    the plugin API still accepts the enable call, but the provider cannot start,
+    so the pinned noop/noop-full model silently falls back to the
+    OpenAI-compatible client and the executor answers "Failed to send
+    OpenAI-compatible completion request: builder error" instead of echoing
+    (observed 2026-09-14, gates-1973d/g51.log: both echo pins failed 4 probes in
+    a row while the SAME pins passed in --from-group 37, where GROUP 40 had
+    re-seeded the providers). GROUP 9 (tests.py:3085) and GROUP 44
+    (tests.py:13857) establish the identical precondition: re-seed the bundled
+    provider directory from omni-plugins, then cycle the provider so the running
+    agent reloads it."""
+        for name in ("noop", "noop-full"):
+            try:
+                _ensure_bundled_provider_dir(name)
+            except Exception as e:
+                print(f"  [g51: re-seeding bundled provider '{name}' skipped ({e})]")
+        try:
+            api_post_body("/plugins/providers/bundled/noop/disable", {}, timeout=10)
+        except Exception:
+            pass
+        time.sleep(1)
+        for path in ("/plugins/providers/bundled/noop/enable",
+                     "/plugins/providers/built-in/noop-full/enable"):
+            try:
+                api_post_body(path, {}, timeout=60)
+            except Exception as e:
+                print(f"  [g51: {path} skipped ({e})]")
+
+
+    def _g51_provider_state():
+        """Compact provider dump for precondition failures (run report)."""
+        try:
+            data = json.loads(urllib.request.urlopen(f"{BASE}/plugins", timeout=10).read())
+            items = data.get("data") if isinstance(data, dict) else data
+            out = []
+            for p in items or []:
+                nm = str(p.get("name", ""))
+                if nm in ("noop", "noop-full", "deepseek") and p.get("category") == "providers":
+                    out.append(f"{nm}={p.get('status')}/{p.get('running')}")
+            return "; ".join(out) or "no noop provider entry in /plugins"
+        except Exception as e:
+            return f"/plugins unreadable ({e})"
+
+
+    def _g51_is_echo(msg, probe):
+        """True when `msg` is a genuine provider ECHO of `probe`.
+
+    The noop family answers with 'This is a reply to your message from the
+    **test provider** ... Your original message: > <probe>'. The agent's own
+    failure delivery ('The LLM provider returned an error 3 consecutive
+    times ...') also quotes the inbound text, so matching the probe token alone
+    used to make _g51_ensure_echo() pass on a BROKEN precondition (observed
+    2026-09-14T14:34:25Z) and then fail confusingly in case A. Require the echo
+    marker as well."""
+        if probe not in msg:
+            return False
+        low = msg.lower()
+        return any(mk in low for mk in ("test provider", "original message",
+                                        "reply to your message", "reply from"))
+
+
+    def _g51_restore_pin(omni_channel_id, provider="noop", model="test-tool-caller"):
+        """Restore the permanent wf-test pin (noop/test-tool-caller)."""
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"{BASE}/channels/{omni_channel_id}",
+                data=json.dumps({"provider": provider, "model": model}).encode(),
+                method="PATCH", headers={"Content-Type": "application/json"}),
+                timeout=10).read()
+            print(f"  [g51: wf-test channel {omni_channel_id} restored {provider}/{model}]")
+        except Exception as e:
+            print(f"  [g51: wf-test pin restore skipped ({e})]")
+
+
+    def _g51_ensure_echo(mm_channel_id, admin_token, timeout=120):
+        """Prove the dedicated channel's echo reply path works BEFORE the real
+    test: post a unique probe token and wait for a GENUINE echo (marker + token,
+    see _g51_is_echo). Retries with a fresh token (re-enabling the providers in
+    between) so a provider that is still loading after the dev-prep restart is
+    waited out instead of failing the group."""
+        deadline = time.time() + timeout
+        attempts = 0
+        last = []
+        while time.time() < deadline:
+            attempts += 1
+            probe = f"g51probe{int(time.time() * 1000)}"
+            last = _g51_post_and_collect(
+                mm_channel_id, admin_token, probe, poll_timeout=25,
+                accept=lambda m, p=probe: _g51_is_echo(m, p))
+            if any(_g51_is_echo(m, probe) for m in last):
+                print(f"  [g51 precondition: echo reply path OK after {attempts} "
+                      f"probe(s)]")
+                return
+            _g51_ensure_provider()
+        raise AssertionError(
+            f"dedicated wf-test channel {mm_channel_id}: noop echo reply did not "
+            f"arrive within {timeout}s ({attempts} probe(s), last replies="
+            f"{last[:2]!r}; providers: {_g51_provider_state()}) - "
+            f"channel/provider precondition is broken")
+
+
+    def _g51_pick_echo_pin(mm_channel_id, admin_token, omni_channel_id):
+        """Pin the channel to the first echo provider that really answers.
+
+    Both the built-in 'noop-full' and the bundled 'noop' provider echo the
+    posted text; which one is healthy depends on what the isolated selection
+    ran before (the bundled python provider is (re)loaded by GROUP 9 and can
+    still be starting). Returns the confirmed (provider, model)."""
+        problems = []
+        for provider, model in (("noop-full", "test-model-1"),
+                                ("noop", "test-model-1")):
+            _g51_pin_echo(omni_channel_id, provider, model)
+            try:
+                _g51_ensure_echo(mm_channel_id, admin_token, timeout=90)
+                print(f"  [g51: echo provider confirmed {provider}/{model}]")
+                return provider, model
+            except AssertionError as e:
+                problems.append(f"{provider}/{model}: {e}")
+                _g51_ensure_provider()
+        raise AssertionError("no echo provider answered: " + " | ".join(problems))
+
+
+    def _g51_post_and_collect(mm_channel_id, admin_token, text, poll_timeout=60,
+                              must_contain=None, accept=None):
         """Post `text` to the channel and collect all NEW agent replies.
 
     Returns the list of new post messages (excluding the post we just sent).
@@ -15323,7 +15530,10 @@ def _seg_51():
                     msg = p.get("message", "")
                     if msg and msg.strip() != text.strip() and msg not in replies:
                         replies.append(msg)
-            if must_contain:
+            if accept is not None:
+                if any(accept(m) for m in replies):
+                    break
+            elif must_contain:
                 if any(must_contain in m for m in replies):
                     break
             elif replies:
@@ -15337,9 +15547,12 @@ def _seg_51():
     with redaction__redact configured the secret is replaced.
 
     Uses the omni-plugins redaction plugin (python, tools/redaction) and the
-    noop/test-tool-caller channel: the provider echoes the posted message, so
-    the delivered reply carries the fake secret and the delivery-path
-    redaction (enqueue_delivery -> configured redaction tool) is observable.
+    dedicated wf-test channel pinned to a noop ECHO model (_g51_pick_echo_pin
+    probes noop-full and noop and keeps the one that really answers): the
+    provider echoes the posted message, so the delivered reply carries the fake
+    secret and the delivery-path redaction (enqueue_delivery -> configured
+    redaction tool) is observable. The permanent noop/test-tool-caller pin is
+    restored in the finally block.
     """
         import shutil
         FAKE_SECRET = "sk-test1234567890abcdefgh1234567890"
@@ -15374,33 +15587,39 @@ def _seg_51():
             time.sleep(MM_DELAY)
         assert registered, "redaction plugin tool did not register after enable"
 
-        mm_channel_id, admin_token = _g51_mm_channel()
+        (mm_channel_id, admin_token, omni_channel_id,
+         echo_provider, echo_model) = _g51_mm_channel()
+        try:
+            # 2. Case A: redaction_tool empty (default) -> no redaction (unchanged).
+            _g51_put_setting("redaction_tool", "")
+            assert _g51_get_setting("redaction_tool") == "", \
+                "redaction_tool must default to empty"
+            replies_a = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET,
+                                              must_contain=FAKE_SECRET)
+            assert replies_a, "case A: no agent reply received"
+            assert any(FAKE_SECRET in r for r in replies_a), \
+                f"case A: secret must be unchanged when no redaction tool is set, replies={replies_a!r}"
+            print(f"  [case A OK: no redaction tool -> secret unchanged ({len(replies_a)} reply(es))]")
 
-        # 2. Case A: redaction_tool empty (default) -> no redaction (unchanged).
-        _g51_put_setting("redaction_tool", "")
-        assert _g51_get_setting("redaction_tool") == "", \
-            "redaction_tool must default to empty"
-        replies_a = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET,
-                                          must_contain=FAKE_SECRET)
-        assert replies_a, "case A: no agent reply received"
-        assert any(FAKE_SECRET in r for r in replies_a), \
-            f"case A: secret must be unchanged when no redaction tool is set, replies={replies_a!r}"
-        print(f"  [case A OK: no redaction tool -> secret unchanged ({len(replies_a)} reply(es))]")
+            # 3. Case B: redaction_tool set -> redaction applied by the plugin.
+            _g51_put_setting("redaction_tool", TOOL)
+            replies_b = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET,
+                                              must_contain="[REDACTED")
+            assert replies_b, "case B: no agent reply received"
+            assert not any(FAKE_SECRET in r for r in replies_b), \
+                f"case B: secret must be redacted when redaction tool is set, replies={replies_b!r}"
+            assert any("[REDACTED" in r for r in replies_b), \
+                f"case B: redaction mask missing from delivered reply, replies={replies_b!r}"
+            print(f"  [case B OK: redaction__redact -> secret replaced by [REDACTED ...] ({len(replies_b)} reply(es))]")
 
-        # 3. Case B: redaction_tool set -> redaction applied by the plugin.
-        _g51_put_setting("redaction_tool", TOOL)
-        replies_b = _g51_post_and_collect(mm_channel_id, admin_token, FAKE_SECRET,
-                                          must_contain="[REDACTED")
-        assert replies_b, "case B: no agent reply received"
-        assert not any(FAKE_SECRET in r for r in replies_b), \
-            f"case B: secret must be redacted when redaction tool is set, replies={replies_b!r}"
-        assert any("[REDACTED" in r for r in replies_b), \
-            f"case B: redaction mask missing from delivered reply, replies={replies_b!r}"
-        print(f"  [case B OK: redaction__redact -> secret replaced by [REDACTED ...] ({len(replies_b)} reply(es))]")
-
-        # 4. Restore the default (empty = no redaction).
-        _g51_put_setting("redaction_tool", "")
-        print("PASS: redaction - no tool = unchanged; redaction__redact = redacted; setting restored")
+            # 4. Restore the default (empty = no redaction).
+            _g51_put_setting("redaction_tool", "")
+            print("PASS: redaction - no tool = unchanged; redaction__redact = redacted; setting restored")
+        finally:
+            # Never leave the dedicated channel on the echo pin: the wf-test
+            # channel's permanent pin is noop/test-tool-caller (asserted by
+            # _wf_dedicated_channel for every later group).
+            _g51_restore_pin(omni_channel_id)
 
 
     test(test_51_redaction_tool)
