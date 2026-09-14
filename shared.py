@@ -1512,8 +1512,10 @@ def prepare():
         "search", "skills", "subtasks",
     ]
     for p_name in builtin_tool_plugins:
+        # 'memory' ships in omni-plugins only (remote); _tool_plugin_source
+        # picks the source the plugin is actually registered under.
         try:
-            _enable_plugin("tools", "built-in", p_name)
+            _enable_plugin("tools", _tool_plugin_source(p_name), p_name)
         except Exception as e:
             print(f"  ! Could not enable {p_name}: {str(e)[:80]}")
             try:
@@ -1688,10 +1690,17 @@ def _install_missing_tool_plugin(tool_name, tool_def):
     return _wait_for_tool_registered(tool_name, timeout=120)
 
 
+# Tool plugins that only exist in the omni-plugins repo (their built-in Rust
+# counterpart was removed - e.g. actions, memory): install-git clones them into
+# plugins/<type>/.remote/, so they must be enabled/disabled via the 'remote'
+# source, never 'built-in'. Keep in sync with seed/config/remote.yml.
+REMOTE_TOOL_PLUGINS = ("actions", "memory")
+
+
 def _tool_plugin_source(plugin_name):
-    """Remote tool plugins (moved to omni-plugins, e.g. actions) must be
+    """Remote tool plugins (moved to omni-plugins, e.g. actions, memory) must be
     enabled/disabled via the 'remote' source; everything else is built-in."""
-    return "remote" if plugin_name == "actions" else "built-in"
+    return "remote" if plugin_name in REMOTE_TOOL_PLUGINS else "built-in"
 
 
 def _disable_plugin(p_type, source, name):
@@ -2282,8 +2291,10 @@ def run_tests():
         "kanban", "memory", "prompt", "search", "skills", "subtasks",
     ]
     for p_name in builtin_tool_plugins:
+        # 'memory' ships in omni-plugins only (remote); _tool_plugin_source
+        # picks the source the plugin is actually registered under.
         try:
-            _enable_plugin("tools", "built-in", p_name)
+            _enable_plugin("tools", _tool_plugin_source(p_name), p_name)
         except Exception as e:
             print(f"  ! Could not enable {p_name}: {str(e)[:80]}")
             try:
@@ -2301,9 +2312,9 @@ def run_tests():
     print("\n[Restarting tool plugins to fix MCP server env...]")
     for p_name in builtin_tool_plugins:
         try:
-            _disable_plugin("tools", "built-in", p_name)
+            _disable_plugin("tools", _tool_plugin_source(p_name), p_name)
             time.sleep(0.1)
-            _enable_plugin("tools", "built-in", p_name)
+            _enable_plugin("tools", _tool_plugin_source(p_name), p_name)
             time.sleep(1.0)
         except Exception as e:
             print(f"  ! Could not restart {p_name}: {str(e)[:80]}")

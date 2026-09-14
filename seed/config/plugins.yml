@@ -86,7 +86,7 @@ tools:
     config: {}
   memory:
     enabled: true
-    source: built-in
+    source: remote
     config: {}
   notes:
     enabled: true

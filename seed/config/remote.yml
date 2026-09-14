@@ -29,6 +29,10 @@ tools:
   mcp-time:
     url: https://github.com/modelcontextprotocol/servers.git
     path: ''
+  memory:
+    url: https://github.com/nexuslbs/omni-plugins.git
+    git_ref: main
+    path: tools/memory
   paperclip:
     url: https://github.com/nexuslbs/omni-plugins.git
     path: tools/paperclip
