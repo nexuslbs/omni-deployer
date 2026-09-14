@@ -1307,15 +1307,28 @@ def test_8():
 
 def _kanban_plain_board():
     """Return 'plain' when the boards feature is enabled (boards.yml present with a
-    workflow-less 'plain' board), else None. The kanban API requires a board once
-    boards.yml exists; 'plain' is the board that leaves a task workflow-less
-    (GROUP 26 convention), which plain kanban CRUD/upload tests need."""
+    workflow-less board, else None. The kanban API requires a board once
+    boards.yml exists; 'plain' (the deploy seed board) leaves a task
+    workflow-less (GROUP 26 convention), which plain kanban CRUD/upload tests
+    need. The omni dir under test may not declare 'plain' (v0.3.0 dev/prod
+    boards.yml has main/omnidev/research only), so fall back to the first
+    board whose block declares no `workflow:` key (still workflow-less), then
+    to the first declared board: a boards-enabled API always needs SOME
+    board, and this keeps GROUP 3/20 self-contained in every omni dir."""
     boards_path = f"{WORKSPACE}/config/boards.yml"
     if not os.path.exists(boards_path):
         return None
     import re as _re
-    keys = _re.findall(r"^  ([A-Za-z0-9_-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
-    return "plain" if "plain" in keys else None
+    text = open(boards_path, encoding="utf-8").read()
+    parts = _re.split(r"^  ([A-Za-z0-9_-]+):", text, flags=_re.M)
+    names = parts[1::2]
+    bodies = parts[2::2]
+    if "plain" in names:
+        return "plain"
+    for name, body in zip(names, bodies):
+        if "workflow:" not in body:
+            return name
+    return names[0] if names else None
 
 
 def test_9():
@@ -1329,8 +1342,9 @@ def test_9():
         "priority": 0,
         "status": "backlog",
     }
-    if _kanban_plain_board():
-        task_body["board"] = "plain"
+    _plain_board = _kanban_plain_board()
+    if _plain_board:
+        task_body["board"] = _plain_board
     task_resp = api_post("/kanban/tasks", task_body, base=DASHBOARD)
 
     task_id = task_resp.get("data", {}).get("id", "")
@@ -3060,9 +3074,21 @@ def test_mm9_e2e():
     resp = api_post_body_retry("/plugins/providers/built-in/noop-full/enable", {},
                                timeout=60, attempts=3, retry_delay=5)
 
-    # 2. Check noop-full is available
-    r = urllib.request.urlopen(f"{BASE}/api/plugins/providers/built-in/noop-full", timeout=10)
-    nd = json.loads(r.read()).get("data", {})
+    # 2. Check noop-full is available. Poll: on a loaded stack the enable POST
+    #    returns before the plugin status flips (group-9 setup flake in the
+    #    thread-1971 isolation sweep: status read 'disabled' 0.2s after a
+    #    successful enable). Re-issue the (idempotent) enable while polling;
+    #    the assertion below still fails if the provider cannot be enabled.
+    nd = {}
+    _noop_deadline = time.time() + 90
+    while time.time() < _noop_deadline:
+        r = urllib.request.urlopen(f"{BASE}/api/plugins/providers/built-in/noop-full", timeout=10)
+        nd = json.loads(r.read()).get("data", {})
+        if nd.get("status") == "enabled":
+            break
+        time.sleep(5)
+        api_post_body_retry("/plugins/providers/built-in/noop-full/enable", {},
+                            timeout=60, attempts=2, retry_delay=3)
     assert nd.get("status") == "enabled", f"noop-full status={nd.get('status')}, expected enabled"
     print(f"[noop-full status=enabled]")
 
@@ -3174,8 +3200,11 @@ def test_mm9_e2e():
     msg_resp = _mm_send_message(MM, mm_channel_id, token, test_msg)
     print(f"[message sent: {msg_resp.get('id', '?')}]")
 
-    # 10. Poll for noop response
-    deadline = time.time() + 60
+    # 10. Poll for noop response. 180s window: a full deploy suite runs many
+    #     threads concurrently and the old 60s budget flaked (thread 1971
+    #     isolation sweep, deterministic in a fresh stack); the provider
+    #     still has to actually reply for the test to pass.
+    deadline = time.time() + 180
     while time.time() < deadline:
         time.sleep(4)
         posts = _mm_get_posts(MM, mm_channel_id, token)
@@ -3186,7 +3215,7 @@ def test_mm9_e2e():
                 assert "noop" in msg.lower(), f"Missing noop provider mention: {msg[:100]}"
                 print("[e2e test PASSED]")
                 return
-    assert False, "Noop provider did not respond within 60s"
+    assert False, "Noop provider did not respond within 180s"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GROUP 9b: Provider source-awareness test (remote + bundled noop)
@@ -3274,7 +3303,11 @@ def test_fn_9b_provider_source_awareness():
         return
 
     # Enable remote "noop" provider
-    resp = api_post_body("/plugins/providers/remote/noop/enable", {})
+    # Enable remote "noop" provider. 180s: enabling a REMOTE provider can
+    # synchronously install/compile the plugin subprocess, which blew the old
+    # default 15s client timeout (group 9 flake in the thread-1971 isolation
+    # sweep) even though the server-side enable completed.
+    resp = api_post_body("/plugins/providers/remote/noop/enable", {}, timeout=180)
     assert resp.get("success"), f"Enable remote noop failed: {resp}"
     print("  [enabled remote noop provider]")
 
@@ -7572,8 +7605,9 @@ def _seg_20():
         import uuid
         title = f"Test Task {uuid.uuid4().hex[:8]}"
         body = {"title": title, "status": "todo", "priority": 2}
-        if _kanban_plain_board():
-            body["board"] = "plain"
+        _plain_board = _kanban_plain_board()
+        if _plain_board:
+            body["board"] = _plain_board
         r = post_json("/kanban/tasks", body)
         tid = r.get("data", {}).get("id") or r.get("id")
         assert tid, f"No task id: {r}"
@@ -7600,8 +7634,9 @@ def _seg_20():
         tid = None
         try:
             body = {"title": title, "status": "todo", "plan": True}
-            if _kanban_plain_board():
-                body["board"] = "plain"
+            _plain_board = _kanban_plain_board()
+            if _plain_board:
+                body["board"] = _plain_board
             r = post_json("/kanban/tasks", body)
             d = r.get("data", r) if isinstance(r, dict) else r
             tid = d.get("id") if isinstance(d, dict) else None
@@ -8614,12 +8649,9 @@ def _seg_26():
         # boardless tasks, and boards main/dev would inject workflow
         # omniagent-dev. Plain tasks use the workflow-less 'plain' board so the
         # task stays plain (workflow_id NULL) while still being dispatchable.
-        boards_path = f"{WORKSPACE}/config/boards.yml"
-        if os.path.exists(boards_path):
-            import re as _re
-            keys = _re.findall(r"^  ([\w-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
-            if "plain" in keys:
-                body["board"] = "plain"
+        _plain_board = _kanban_plain_board()
+        if _plain_board:
+            body["board"] = _plain_board
         r = post_json("/kanban/tasks", body)
         d = r.get("data", r) if isinstance(r, dict) else r
         assert d.get("id"), f"plain task create failed: {d}"
@@ -9496,8 +9528,9 @@ def _seg_29():
             import re as _re
             keys = _re.findall(r"^  ([\w-]+):", open(boards_path, encoding="utf-8").read(), _re.M)
             if keys:
-                if not workflow_id and "plain" in keys:
-                    body["board"] = "plain"
+                _plain_board = _kanban_plain_board()
+                if not workflow_id and _plain_board:
+                    body["board"] = _plain_board
                 else:
                     body["board"] = keys[0]
         r = post_json("/kanban/tasks", body)
@@ -12577,8 +12610,9 @@ def _seg_39():
         sid = None
         try:
             _g39_tbody = {"title": title, "status": "todo"}
-            if _kanban_plain_board():
-                _g39_tbody["board"] = "plain"
+            _g39_board = _kanban_plain_board()
+            if _g39_board:
+                _g39_tbody["board"] = _g39_board
             resp = _g24_mcp_execute("core__omniagent_api",
                                     {"method": "POST", "path": "/kanban/tasks",
                                      "body": _g39_tbody})
@@ -13403,9 +13437,9 @@ def _seg_43():
         cfg = _g43_read("src/agent/config.rs")
         assert "sub_prompt_max_chars" in cfg and "sub_prompt_iteration_percent" in cfg
         assert '"4000"' in cfg and '"50"' in cfg, "AgentConfig defaults 4000/50"
-        with open("/opt/workspace/omni-stack/config/settings.yml", encoding="utf-8") as f:
+        with open(f"{DATA_DIR}/config/settings.yml", encoding="utf-8") as f:
             sy = f.read()
-        assert "sub_prompt_max_chars" in sy and "sub_prompt_iteration_percent" in sy, "omni-stack settings.yml defaults missing"
+        assert "sub_prompt_max_chars" in sy and "sub_prompt_iteration_percent" in sy, "live omni_dir settings.yml defaults missing"
         with open("/opt/workspace/omni-deployer/seed/config/settings.yml", encoding="utf-8") as f:
             sy_seed = f.read()
         seed_prompt = sy_seed.split("prompt:", 1)[1].split("\n\n", 1)[0] if "prompt:" in sy_seed else ""
@@ -14041,7 +14075,13 @@ def _seg_46():
 
     G46_MODELS_YML = """providers:
   deepseek:
-    plugin: true
+    # deepseek is the CORE plugin-less provider in v0.3.0 (builtin
+    # chat_completions path, no provider plugin on disk): models.yml must
+    # declare it plugin:false so the synthetic provider detail is built with
+    # default_model.allowed_values from `models`. With plugin:true the stale
+    # plugins.yml entry (empty config_schema) wins and the models.yml overlay
+    # has no default_model field to override - the old assertion failed.
+    plugin: false
     models: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-pro-max"]
   my_provider_01:
     plugin: false
