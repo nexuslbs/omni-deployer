@@ -2415,6 +2415,10 @@ def test_t6_enable_provider():
     if not name:
         return
     source = get_plugin_source_from_api(name) or "bundled"
+    if source == "bundled":
+        # Self-containment: test_enable_source asserts the BUNDLED directory
+        # exists, and an earlier group may have deleted it (see _seg_6).
+        _ensure_bundled_provider_dir(name)
     test_enable_source(name, source)
 
 def test_t6_disable_provider():
@@ -2425,6 +2429,10 @@ def test_t6_disable_provider():
     if not name:
         return
     source = get_plugin_source_from_api(name) or "bundled"
+    if source == "bundled":
+        # Self-containment: test_disable_source/test_enable_source assert the
+        # BUNDLED directory exists, and an earlier group may have deleted it.
+        _ensure_bundled_provider_dir(name)
     test_disable_source(name, source)
     # Re-enable
     test_enable_source(name, source)
@@ -5718,6 +5726,16 @@ def _seg_6():
     print("GROUP 6: Comprehensive Plugin Action Tests")
     print(f"{'=' * 60}")
 
+    # Group isolation (F1): GROUPS 1-5 delete bundled provider dirs, and this
+    # group's provider enable/disable tests exercise the BUNDLED source and
+    # assert that its directory EXISTS. On a fresh stack the dir is gone, so
+    # re-seed it from omni-plugins (same helper GROUPS 9 and 34 use). Without
+    # this the group only passed when an earlier run happened to leave the dir
+    # behind - the exact cross-group dependency this harness removes
+    # (thread-1971 full deploy: "Expected to exist:
+    # /opt/omni/plugins/providers/noop-full" in passes 1 and 3).
+    _ensure_bundled_provider_dir("noop-full")
+    _ensure_bundled_provider_dir("noop")
     for fn in [
         test_t6_enable_bundled_tool,
         test_t6_enable_builtin_tool,
