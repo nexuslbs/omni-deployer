@@ -1610,9 +1610,9 @@ def prepare():
     # 6. Enable all built-in tool plugin MCPs
     print("\n[Enabling all built-in tool plugin MCPs...]")
     builtin_tool_plugins = [
-        "cron", "docker", "fetch", "filesystem", "git",
-        "kanban", "memory", "plugin-manager", "prompt",
-        "search", "skills", "subtasks",
+        "docker", "fetch", "filesystem", "git",
+        "memory", "plugin-manager", "prompt",
+        "search", "skills", "subtasks", "tasks",
     ]
     for p_name in builtin_tool_plugins:
         # 'memory' ships in omni-plugins only (remote); _tool_plugin_source
@@ -2085,13 +2085,13 @@ def _validate_memory_list(msg):
 
 # Map tool_name -> validator function
 TOOL_VALIDATORS = {
-    "cron_list-cron-jobs": _validate_cron_list,
+    "tasks__list_cron_jobs": _validate_cron_list,
     "docker_compose": _validate_docker_ps,
     "fetch_fetch": _validate_fetch,
     "filesystem_read": _validate_filesystem_read,
     "git_status": _validate_git_status,
     "git_run-command": _validate_git_run_command,
-    "kanban_list-kanban-tasks": _validate_kanban_list,
+    "tasks__list_kanban_tasks": _validate_kanban_list,
     "search_metrics": _validate_metrics,
     "prompt_generate": _validate_prompt_generate,
     "prompt_compact-messages": _validate_prompt_compact,
@@ -2118,8 +2118,8 @@ def _print_result(name, status, detail=""):
 # ── Tool definitions ──────────────────────────────────────────────────────────
 
 TOOL_DEFS = {
-    "cron_list-cron-jobs": {
-        "plugin": "cron",
+    "tasks__list_cron_jobs": {
+        "plugin": "tasks",
         "test_args": {},
         "success_key": "cron",
         "mcp_test_args": {},
@@ -2154,8 +2154,8 @@ TOOL_DEFS = {
         "success_key": "git",
         "mcp_test_args": {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]},
     },
-    "kanban_list-kanban-tasks": {
-        "plugin": "kanban",
+    "tasks__list_kanban_tasks": {
+        "plugin": "tasks",
         "test_args": {},
         "success_key": "kanban",
         "mcp_test_args": {},
@@ -2390,8 +2390,8 @@ def run_tests():
     # 0b. Ensure all built-in tool plugins are enabled
     print("\n[Enabling all built-in tool plugins...]")
     builtin_tool_plugins = [
-        "cron", "docker", "fetch", "filesystem", "git",
-        "kanban", "memory", "prompt", "search", "skills", "subtasks",
+        "docker", "fetch", "filesystem", "git",
+        "memory", "prompt", "search", "skills", "subtasks", "tasks",
     ]
     for p_name in builtin_tool_plugins:
         # 'memory' ships in omni-plugins only (remote); _tool_plugin_source
@@ -2665,13 +2665,13 @@ def run_tests():
         time.sleep(1.0)
 
         phase2_tools_list = [
-            ("cron_list-cron-jobs", {}, "cron"),
+            ("tasks__list_cron_jobs", {}, "cron"),
             ("docker_compose", {"command": "ps", "project_dir": _container_project_dir(s.omni_stack_dir)}, "NAME"),
             ("fetch_fetch", {"url": "https://raw.githubusercontent.com/nexuslbs/omniagent/main/README.md"}, "omniagent"),
             ("filesystem_read", {"path": "/opt/workspace/omniagent/Cargo.toml"}, "OmniAgent"),
             ("git_status", {"repo_dir": "/opt/workspace/omniagent"}, "git"),
             ("git_run-command", {"repo_dir": "/opt/workspace/omniagent", "args": ["log", "--oneline", "-3"]}, "git"),
-            ("kanban_list-kanban-tasks", {}, "kanban"),
+            ("tasks__list_kanban_tasks", {}, "kanban"),
             ("search_metrics", {}, "metrics"),
             ("prompt_generate", {"profile_name": "omni", "platform": "test", "user_message": "test", "tool_names": []}, "prompt"),
             ("prompt_compact-messages", {"messages": [{"role": "user", "content": "hello world"}],
@@ -2730,12 +2730,12 @@ def run_tests():
                 plugin_name = tool_name
 
             plugin_map = {
-                "actions": "actions", "cron": "cron", "docker": "docker",
+                "actions": "actions", "docker": "docker",
                 "fetch": "fetch", "filesystem": "filesystem", "git": "git",
-                "kanban": "kanban", "memory": "memory",
+                "memory": "memory",
                 "plugin-manager": "plugin-manager", "prompt": "prompt",
                 "search": "search", "skills": "skills",
-                "subtasks": "subtasks",
+                "subtasks": "subtasks", "tasks": "tasks",
             }
             plugin = plugin_map.get(plugin_name)
             if not plugin:

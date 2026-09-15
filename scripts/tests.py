@@ -7451,15 +7451,15 @@ def _seg_23():
 
 
     def test_23_2_import_from_remote_test_yml():
-        """Import the plugins listed in remote.test.yml - kanban, cron, subtasks,
+        """Import the plugins listed in remote.test.yml - tasks (the unified
+    kanban+cron+hooks tool plugin), subtasks,
     (the 'actions' crate was removed by the task_18cc73ad22835e2d port;
     the actions plugin now lives in nexuslbs/omni-plugins tools/actions.)"""
         backup_remote_yml()
         backup_plugins_yml()
         try:
             entries = {
-                "kanban": "plugins/tools/kanban",
-                "cron": "plugins/tools/cron",
+                "tasks": "plugins/tools/tasks",
                 "subtasks": "plugins/tools/subtasks",
             }
             for name, path in entries.items():
@@ -13030,17 +13030,16 @@ def _seg_39():
 
     def test_39_live_plugins():
         """39-B: live /plugins - query/metrics absent; search built-in enabled;
-    cron+kanban disabled; prompt enabled."""
-        # The seed plugins.yml (verified by 39-A) disables cron+kanban, but
-        # earlier lifecycle groups in this suite (e.g. GROUP 23-2 installs then
-        # removes the remote cron/kanban shadows; GROUP 6 plugin-state suites)
-        # can leave the built-in runtime state 'enabled'. Restore the seed state
-        # (disabled) so 39-B verifies the consolidated live config
+    unified tasks enabled (kanban+cron plugin names gone); prompt enabled."""
+        # The seed plugins.yml (verified by 39-A) enables the unified built-in
+        # `tasks` tool plugin (kanban + cron + hooks) and no longer carries the
+        # former `cron`/`kanban` entries, but earlier lifecycle groups in this
+        # suite can leave built-in runtime state flipped. Restore the seed state
+        # (tasks enabled) so 39-B verifies the consolidated live config
         # deterministically instead of flaking on suite-internal state.
-        for name in ("cron", "kanban"):
-            r = api_post_body(f"/plugins/tools/built-in/{name}/disable", {})
-            if not r.get("success"):
-                print(f"  [39-B: disabling {name} returned {r}]")
+        r = api_post_body("/plugins/tools/built-in/tasks/enable", {})
+        if not r.get("success"):
+            print(f"  [39-B: enabling tasks returned {r}]")
         plugins = api_get("/plugins")["data"]
         by_name = {}
         for p in plugins:
@@ -13051,13 +13050,13 @@ def _seg_39():
         s = next((p for p in by_name.get("search", []) if p.get("plugin_type") == "tool"), None)
         assert s is not None and s.get("source") == "built-in" and s.get("status") == "enabled", \
             f"search plugin state: {s}"
-        c = next((p for p in by_name.get("cron", []) if p.get("plugin_type") == "tool"), None)
-        assert c is not None and c.get("status") == "disabled", f"cron state: {c}"
-        k = next((p for p in by_name.get("kanban", []) if p.get("plugin_type") == "tool"), None)
-        assert k is not None and k.get("status") == "disabled", f"kanban state: {k}"
+        assert "cron" not in names, f"cron plugin must be gone (unified tasks), have {sorted(names)}"
+        assert "kanban" not in names, f"kanban plugin must be gone (unified tasks), have {sorted(names)}"
+        t = next((p for p in by_name.get("tasks", []) if p.get("plugin_type") == "tool"), None)
+        assert t is not None and t.get("status") == "enabled", f"tasks state: {t}"
         pr = next((p for p in by_name.get("prompt", []) if p.get("plugin_type") == "tool"), None)
         assert pr is not None and pr.get("status") == "enabled", f"prompt state: {pr}"
-        print("PASS: live /plugins consolidated (no query/metrics, search enabled, cron+kanban disabled)")
+        print("PASS: live /plugins consolidated (no query/metrics, search+prompt enabled, unified tasks enabled, kanban/cron gone)")
 
 
     def test_39_search_tools_listed():

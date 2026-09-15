@@ -38,7 +38,7 @@ After each change: cargo fmt + cargo clippy for Rust (inside container), npm run
 def main():
     print("Creating kanban task on mm-kanban channel...")
     payload = json.dumps({
-        "name": "kanban_create-kanban-task",
+        "name": "tasks__create_kanban_task",
         "arguments": {
             "title": "Database page + query tool follow-up (P1/P2)",
             "status": "ready",
@@ -51,7 +51,7 @@ def main():
     print(r.stdout[:800])
 
     # Now list tasks to confirm
-    r2 = shared.oc("docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d '{\"name\":\"kanban_list-kanban-tasks\",\"arguments\":{}}'")
+    r2 = shared.oc("docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d '{\"name\":\"tasks__list_kanban_tasks\",\"arguments\":{}}'")
     print(r2.stdout[:1500])
 
 if __name__ == "__main__":

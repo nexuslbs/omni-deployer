@@ -67,7 +67,7 @@ Workflow: use filesystem_write to create all files, then docker_compose(project_
 
 # ── Omni profile allowed_tools (the callable gate for the worker agent) ─────
 ALLOWED_TOOLS = [
-    "cron_list-cron-jobs",
+    "tasks__list_cron_jobs",
     "docker_compose",
     "fetch_fetch",
     "filesystem_read",
@@ -80,7 +80,7 @@ ALLOWED_TOOLS = [
     "git_commit-and-push",
     "git_create-github-repo",
     "git_run-command",
-    "kanban_list-kanban-tasks",
+    "tasks__list_kanban_tasks",
     "metrics_get-metrics",
     "prompt_generate",
     "prompt_compact-messages",
