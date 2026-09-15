@@ -8792,74 +8792,56 @@ def _seg_22():
             f"(stdout={probe.stdout[:200]!r} stderr={probe.stderr[:200]!r})")
         print("[truncation fixture: patched client verified "
               "(finish_reason=length)]")
-        # Force a respawn: the running subprocess still holds the OLD client code
-        # and the enable path is idempotent for a provider it believes is up. The
-        # restart endpoint can ALSO keep the previous process alive, which made
-        # GROUP 22 flaky (stale code -> finish_reason=stop -> task done). So verify
-        # the running PID really changed and, when the API refuses to respawn, kill
-        # the stale subprocess so the reload path starts a fresh one.
-        def _restart_provider():
+        # Force a respawn so the RUNNING subprocess serves the PATCHED client. The
+        # agent's enable/restart paths are idempotent for a provider it believes is
+        # already running, so a bare /restart left the OLD process alive and the
+        # regression then tested stale code (finish_reason=stop -> task done). Stop
+        # the provider through every source, PROVE the old process is gone, and only
+        # then bring it up through the verified path (enable + real-PID wait).
+        def _stop_noop_full():
             for _src_name in ("bundled", "built-in", "remote"):
                 try:
                     api_post_body(
-                        f"/plugins/providers/{_src_name}/noop-full/restart",
-                        {}, timeout=120)
-                    print(f"  [truncation fixture: noop-full /restart "
+                        f"/plugins/providers/{_src_name}/noop-full/disable",
+                        {}, timeout=60)
+                    print(f"  [truncation fixture: noop-full /disable "
                           f"(source={_src_name})]")
-                    return
                 except Exception as e:
-                    print(f"  [truncation fixture: restart source={_src_name} "
-                          f"failed: {str(e)[:100]}]")
-
-        def _wait_fresh_pids(timeout=60):
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                now = _provider_subprocess_pids("noop-full")
-                if now:
-                    new = now - before
-                    if new:
-                        return sorted(new)
+                    print(f"  [truncation fixture: disable source={_src_name} "
+                          f"failed: {str(e)[:80]}]")
+            deadline = time.time() + 30
+            while time.time() < deadline and _provider_subprocess_pids("noop-full"):
                 time.sleep(1)
-            return None
-
-        before = _provider_subprocess_pids("noop-full")
-        if before is None:
-            print("  [truncation fixture: no process tooling - falling back to the "
-                  "provider API signal]")
-            _restart_provider()
-            assert ensure_provider_subprocess_any("noop-full"), \
-                "noop-full provider subprocess is not running after the fixture patch"
-            return
-        if before:
-            print(f"  [truncation fixture: pre-patch noop-full PID(s) {sorted(before)}]")
-        fresh = None
-        for _attempt in range(1, 4):
-            _restart_provider()
-            fresh = _wait_fresh_pids(60)
-            if fresh:
-                break
-            stale = _provider_subprocess_pids("noop-full") or set()
-            print(f"  [truncation fixture: respawn attempt {_attempt}/3 kept the old "
-                  f"PID(s) {sorted(stale)} - killing them to force a fresh start]")
-            for _pid in stale:
+            for _pid in sorted(_provider_subprocess_pids("noop-full") or []):
+                print(f"  [truncation fixture: killing stale noop-full PID {_pid}]")
                 try:
-                    os.kill(_pid, signal.SIGTERM)
+                    os.kill(_pid, signal.SIGKILL)
                 except Exception:
                     pass
-            time.sleep(5)
-            try:
-                api_post_body_retry("/plugins/providers/bundled/noop-full/enable",
-                                    {}, timeout=90)
-            except Exception as e:
-                print(f"  [truncation fixture: enable after kill failed: {str(e)[:100]}]")
-            fresh = _wait_fresh_pids(60)
-            if fresh:
+            deadline = time.time() + 20
+            while time.time() < deadline and _provider_subprocess_pids("noop-full"):
+                time.sleep(1)
+            return not _provider_subprocess_pids("noop-full")
+
+        before = sorted(_provider_subprocess_pids("noop-full") or [])
+        if before:
+            print(f"  [truncation fixture: pre-patch noop-full PID(s) {before}]")
+        assert _stop_noop_full(), (
+            "the old noop-full subprocess (unpatched client) is still running - "
+            "the truncation regression would be testing stale code")
+        up = False
+        for _round in range(1, 3):
+            if ensure_provider_subprocess_any("noop-full"):
+                up = True
                 break
-        assert fresh, ("noop-full subprocess never respawned with the patched client "
-                       "- the truncation regression would be testing stale code")
+            print(f"  [truncation fixture: bring-up round {_round}/2 failed - "
+                  f"stopping the provider again]")
+            _stop_noop_full()
+        assert up, ("noop-full provider subprocess did not come up with the patched "
+                    "client after the fixture patch")
+        fresh = sorted(_provider_subprocess_pids("noop-full") or [])
+        assert fresh, "noop-full subprocess disappeared right after its bring-up"
         print(f"  [truncation fixture: patched client served by fresh PID(s) {fresh}]")
-        assert ensure_provider_subprocess_any("noop-full"), \
-            "noop-full provider subprocess is not running after the fixture patch"
 
 
     def _wf_bootstrap_trunc_channel():
