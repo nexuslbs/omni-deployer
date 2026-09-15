@@ -10701,13 +10701,16 @@ def _seg_30():
 
 def _seg_31():
     """GROUP 31: Kanban Boards (config/boards.yml) - task_18cc48e8eace4df3 ──────"""
-    global _g31_board_keys, _g31_boards_enabled, _g31_boards_file, _g31_cleanup_tasks, _g31_make_task, _g31_thread_rows, test_31_boards_crud_and_resolution, test_31_boards_list_and_filter, test_31_dispatch_skips_invalid_board, test_31_thread_creation_fails_invalid_board, test_31_update_board_validation
+    global _g31_board_keys, _g31_boards_file_present, _g31_boards_fallback_ok, _g31_boards_file, _g31_cleanup_tasks, _g31_make_task, _g31_thread_rows, test_31_boards_crud_and_resolution, test_31_boards_list_and_filter, test_31_dispatch_skips_invalid_board, test_31_thread_creation_fails_invalid_board, test_31_update_board_validation
 
 
     # ── GROUP 31: Kanban Boards (config/boards.yml) - task_18cc48e8eace4df3 ──────
-    # Boards group kanban tasks and carry default execution options. The feature is
-    # gated on the presence of config/boards.yml (omnidev only; omnistable has no
-    # boards.yml so all kanban behavior there is unchanged). When boards.yml is
+    # Boards group kanban tasks and carry default execution options. Boards are
+    # ALWAYS enabled - there is no feature-off state and no file-presence gate:
+    # when boards.yml is MISSING the built-in default board set ({main}) applies
+    # and GET /boards reports config_source=default plus a loud structured
+    # config_warning (boards_config_missing), never a silent empty board list.
+    # When boards.yml is
     # present: GET /boards lists the boards; tasks can carry a board field
     # (create + ?board= filter); board defaults fill the resolution chain
     # (task > board > channel). Since task_18cd074f62d194f2, POST /kanban/tasks
@@ -10723,8 +10726,32 @@ def _seg_31():
         return f"{WORKSPACE}/config/boards.yml"
 
 
-    def _g31_boards_enabled():
+    def _g31_boards_file_present():
         return os.path.exists(_g31_boards_file())
+
+
+    def _g31_boards_fallback_ok():
+        """Boards are ALWAYS enabled: with boards.yml absent the API must serve the
+        built-in default board set ({main}) plus a LOUD structured config_warning -
+        never a silent empty list."""
+        d = get_json("/boards")
+        d = d.get("data", d) if isinstance(d, dict) else d
+        keys = [b.get("key") for b in d.get("boards", [])] if isinstance(d, dict) else []
+        assert keys == ["main"], f"expected the built-in default board set, got {d}"
+        assert d.get("config_source") == "default", f"expected config_source=default, got {d}"
+        warn = d.get("config_warning") or {}
+        assert warn.get("code") == "boards_config_missing", \
+            f"expected a loud boards_config_missing warning, got {d}"
+        print("PASS: boards.yml absent -> default board set {main} + config_warning (boards always enabled)")
+
+
+    def _g31_skip_if_boards_absent():
+        """The configured-board assertions below need boards.yml; when it is absent
+        assert the always-on fallback instead of skipping the group silently."""
+        if not _g31_boards_file_present():
+            _g31_boards_fallback_ok()
+            return True
+        return False
 
 
     def _g31_board_keys():
@@ -10769,8 +10796,7 @@ def _seg_31():
     def test_31_boards_list_and_filter():
         """31-A: boards.yml present -> GET /boards returns configured boards;
     task create accepts a board; ?board= filter returns only that board's tasks."""
-        if not _g31_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
+        if _g31_skip_if_boards_absent():
             return
         keys = _g31_board_keys()
         assert "main" in keys and "dev" in keys, f"expected boards main+dev, got {keys}"
@@ -10800,8 +10826,7 @@ def _seg_31():
     created task. Legacy invalid-board rows that exist anyway (pre-validation
     rows, boards.yml edits) are still skipped by the dispatcher: they stay todo
     with no thread row."""
-        if not _g31_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
+        if _g31_skip_if_boards_absent():
             return
         tids = []
         try:
@@ -10844,8 +10869,7 @@ def _seg_31():
     task (board mutated to an unknown name - e.g. its board removed from
     boards.yml) creates the thread and immediately fails it with a clear Error
     message (reusing the existing fail-thread machinery)."""
-        if not _g31_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
+        if _g31_skip_if_boards_absent():
             return
         tids = []
         try:
@@ -10878,8 +10902,7 @@ def _seg_31():
         """31-E: with boards.yml present, PATCH /kanban/tasks/{id} cannot clear the
     board ("") or set an unknown board (both 400); a missing board field keeps
     the existing board; a valid board updates it."""
-        if not _g31_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
+        if _g31_skip_if_boards_absent():
             return
         tids = []
         try:
@@ -10918,8 +10941,7 @@ def _seg_31():
         """31-D: boards CRUD (PUT upsert / DELETE removes board AND its tasks) and
     board defaults fill the resolution chain (task with board but no channel ->
     thread channel = board channel). boards.yml restored byte-for-byte."""
-        if not _g31_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled, nothing to test")
+        if _g31_skip_if_boards_absent():
             return
         bfile = _g31_boards_file()
         with open(bfile) as f:
