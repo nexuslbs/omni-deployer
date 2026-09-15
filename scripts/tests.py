@@ -750,6 +750,38 @@ def ensure_provider_subprocess(provider_name, source="built-in", attempts=3,
         time.sleep(3)
     return False
 
+
+def ensure_provider_subprocess_any(provider_name, sources=("bundled", "built-in", "remote"),
+                                   attempts_per_source=2, wait_timeout=40):
+    """Bring an entrypoint provider UP under whichever SOURCE the agent can
+    actually spawn, and prove it with a real process.
+
+    omniagent resolves each plugin source to a DIFFERENT manifest root and
+    silently SKIPS (WARN log only, no spawn) any enabled provider whose
+    manifest is missing there:
+      built-in -> ``<app dir>/plugins/providers/<name>/plugin.json`` (the
+                  omniagent image's /app, NOT the omni dir)
+      bundled  -> ``<omni dir>/plugins/providers/<name>/plugin.json`` (the dir
+                  the test restores from omni-plugins)
+      remote   -> ``<omni dir>/plugins/providers/.remote/<name>/plugin.json``
+    The dev seed declares noop-full as source=built-in while its manifest only
+    exists in the omni dir: the reload logged
+    "Provider 'noop-full': manifest not found at /app/plugins/providers/...
+    (source: built-in), skipping" / "enabled but has no entrypoint, skipping",
+    no subprocess ever appeared and GROUP 9 then burned its 180s reply window
+    (thread 2016 GATE 1 + GATE 4). Trying every source makes the group
+    self-contained: the first source whose manifest resolves and spawns wins,
+    and the last one writes the working source into plugins.yml.
+    """
+    for src in sources:
+        if ensure_provider_subprocess(provider_name, source=src,
+                                      attempts=attempts_per_source,
+                                      wait_timeout=wait_timeout):
+            print(f"  [provider '{provider_name}' subprocess running "
+                  f"(source={src})]")
+            return True
+    return False
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Test harness
 # ═══════════════════════════════════════════════════════════════════════
@@ -3286,9 +3318,10 @@ def test_mm9_e2e():
     # FAILS FAST with an actionable message instead of sending the message and
     # burning the 180s reply window on a provider that can never answer.
     print("[ensuring noop-full provider subprocess (enable/wait/restart loop)...]")
-    assert ensure_provider_subprocess("noop-full", source="built-in"), \
-        ("noop-full provider subprocess is not running after 3 enable/restart "
-         "attempts (provider API reports enabled but no provider process exists)")
+    assert ensure_provider_subprocess_any("noop-full"), \
+        ("noop-full provider subprocess is not running after enable/restart "
+         "attempts under every plugin source (a source whose manifest root "
+         "does not exist is skipped by the agent without spawning anything)")
     # The mattermost platform subprocess must be POLLING with the bot token the
     # setup step above just wrote. /enable on an already-enabled platform is a
     # no-op (only PROVIDERS run reload_plugins on idempotent enable), so a
