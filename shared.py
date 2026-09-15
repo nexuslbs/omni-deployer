@@ -831,6 +831,42 @@ def setup():
     print(f"{'=' * 50}")
 
 
+def _minimal_yaml_map(path):
+    """Parse the flat remote.yml shape without PyYAML.
+
+    remote.yml is ``<type>:`` (0 indent) -> ``<name>:`` (2) -> ``key: value``
+    (4+). The deployer container does not always ship PyYAML; an unparsed
+    remote.yml made seed_remote_plugins report '0/0 plugins ready' and the
+    shared tool phase then failed on tools/memory ('Tool not registered',
+    thread 2016 GATE 4 FAIL). Returns {} on any read problem.
+    """
+    parsed = {}
+    section = None
+    name = None
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return parsed
+    for raw in lines:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        stripped = raw.strip()
+        if indent == 0 and stripped.endswith(":"):
+            section = stripped[:-1].strip()
+            parsed.setdefault(section, {})
+            name = None
+        elif indent == 2 and stripped.endswith(":") and section:
+            name = stripped[:-1].strip().strip('"').strip("'")
+            parsed[section].setdefault(name, {})
+        elif indent >= 4 and ":" in stripped and section and name:
+            key, value = stripped.split(":", 1)
+            parsed[section][name][key.strip()] = (
+                value.strip().strip('"').strip("'"))
+    return parsed
+
+
 def seed_remote_plugins(only=None):
     """Install every remote plugin listed in config/remote.yml via install-git.
 
@@ -851,8 +887,15 @@ def seed_remote_plugins(only=None):
     try:
         import yaml as _yaml
         parsed = _yaml.safe_load(open(remote_yml)) or {}
-    except Exception:
+    except Exception as e:
+        print(f"  [seed_remote_plugins: PyYAML unavailable ({str(e)[:60]}) - "
+              f"using the minimal parser]")
         parsed = {}
+    if not isinstance(parsed, dict) or not parsed:
+        parsed = _minimal_yaml_map(remote_yml)
+        n_entries = sum(len(v) for v in parsed.values() if isinstance(v, dict))
+        print(f"  [seed_remote_plugins: parsed {remote_yml} with the minimal "
+              f"parser ({n_entries} entries)]")
     # remote.yml shape: {tools: {name: {url, path}}, platforms: {...},
     # providers: {...}} - top-level keys ARE the plugin types; paths carry the
     # same type prefix (tools/actions, platforms/telegram, providers/noop).
@@ -1016,14 +1059,34 @@ def verify_platform_inbound(stack_dir=None):
         db_host = db_part.split(":")[0]
     if "/" in db_part:
         db_name = db_part.split("/", 1)[1]
-    if db_host == "postgres":
-        pg_container = f"{s.project_name}-postgres-1"
-    elif db_host.endswith("-1"):
-        pg_container = db_host
-    elif db_host:
-        pg_container = db_host + "-1"
-    else:
-        pg_container = f"{s.project_name}-postgres-1"
+    # The DB host in DATABASE_URL is a compose SERVICE name or network alias
+    # (dev overlay: DATABASE_URL host 'omnidev-postgres' is an alias of the
+    # 'postgres' service of project 'omnideploy' -> container
+    # omnideploy-postgres-1). Deriving '{host}-1' blindly pointed the secret
+    # read at a NON-EXISTENT container (omnidev-postgres-1), so every secret
+    # looked missing and verify-inbound FAILED after an otherwise green deploy
+    # (thread 2016 GATE 4). Resolve against the containers that actually exist.
+    running = set()
+    try:
+        rp = sh("docker ps -a --format '{{.Names}}' 2>/dev/null")
+        running = set((rp.stdout or "").split())
+    except Exception:
+        running = set()
+    candidates = [c for c in (
+        db_host,
+        f"{db_host}-1" if db_host else "",
+        f"{s.project_name}-{db_host}-1" if db_host else "",
+        f"{s.project_name}-postgres-1",
+    ) if c]
+    pg_container = next((c for c in candidates if c in running), None)
+    if not pg_container:
+        pg_container = next((n for n in sorted(running)
+                             if n.endswith("-postgres-1") and s.project_name in n), None)
+    if not pg_container:
+        pg_container = next((n for n in sorted(running)
+                             if n.endswith("-postgres-1")), None)
+    if not pg_container:
+        pg_container = candidates[0]
     print(f"  [verify-inbound] omniagent DB: {db_user}@{db_host}/{db_name} "
           f"(checking secrets in {pg_container})")
     if db_pass:

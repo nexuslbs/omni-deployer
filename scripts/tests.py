@@ -574,6 +574,7 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
     # which source the provider was registered under at this point)
     api_sources = ["built-in", "remote", "bundled"]
 
+    have_proc_tools = False
     while time.time() < deadline:
         # ── Process detection ──────────────────────────────────────
         pids_found = False
@@ -582,6 +583,7 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
                 ["pgrep", "-f", provider_name],
                 capture_output=True, text=True, timeout=5,
             )
+            have_proc_tools = True
             if r.returncode == 0 and r.stdout.strip():
                 # Filter: only keep PIDs whose command line references
                 # the provider's plugin directory (filters out curl/sh
@@ -610,13 +612,14 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
             # pgrep not available - fall through to ps aux fallback below
             pass
         except subprocess.TimeoutExpired:
-            pass
+            have_proc_tools = True
 
         if not pids_found:
             # Fallback: ps aux grep (if available)
             try:
                 subprocess.run(["ps", "--version"], capture_output=True, text=True, timeout=2)
                 has_ps_local = True
+                have_proc_tools = True
             except FileNotFoundError:
                 has_ps_local = False
             if has_ps_local:
@@ -653,11 +656,17 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
                 except Exception:
                     pass
 
-        # If BOTH process + API confirm, return success
-        if pids_found and api_ready:
+        # The RUNNING SUBPROCESS is the authoritative signal. The provider API
+        # reports status=enabled/entrypoint=yes even when no subprocess exists
+        # (reload_plugins is the only code path that spawns one, and it skips
+        # providers it believes are already running), so an api-only "ready" is
+        # exactly the false positive that let GROUP 9 send a message no provider
+        # could ever answer, followed by a 180s reply timeout (thread 2016).
+        if pids_found:
             print(
                 f"  [provider '{provider_name}' ready: subprocess running"
-                f" ({len(real_pids)} PID(s): {', '.join(real_pids)})]"
+                f" ({len(real_pids)} PID(s): {', '.join(real_pids)})"
+                f"{'' if api_ready else ' (API metadata not confirmed yet)'}]"
             )
             return True
 
@@ -681,8 +690,65 @@ def wait_for_provider_subprocess(provider_name, timeout=30):
             print(f"  [DIAG: no process matching '{provider_name}' among {total} total processes]")
     except FileNotFoundError:
         print("  [DIAG: ps not available in container]")
-    print(f"  [DIAG: provider API ready={api_ready}]")
-    return pids_found or api_ready
+    print(f"  [DIAG: provider API ready={api_ready}, "
+          f"process tooling available={have_proc_tools}]")
+    if pids_found:
+        return True
+    if not have_proc_tools:
+        # No pgrep/ps in this container (slim images): the provider API is the
+        # only observable, so fall back to it instead of failing the caller.
+        print("  [DIAG: no process tooling (pgrep/ps) available - falling back "
+              "to the provider API signal]")
+        return api_ready
+    return False
+
+
+def ensure_provider_subprocess(provider_name, source="built-in", attempts=3,
+                               wait_timeout=45):
+    """Deterministically bring an entrypoint provider's subprocess UP.
+
+    A group must not trust the provider status endpoint: it can report
+    ``status=enabled`` with ``entrypoint=yes`` while NO subprocess is running.
+    ``reload_plugins`` is the only code path that spawns a provider subprocess
+    and it is idempotent for providers it believes are already running, so a
+    subprocess that was never started (cold stack) or that died stays lost
+    until an explicit reload. This helper therefore: (1) re-issues the
+    idempotent enable (for providers that runs reload_plugins), (2) waits for a
+    REAL subprocess, (3) falls back to the dedicated ``/restart`` endpoint
+    (same reload_plugins path, forced respawn). Returns True only when the
+    subprocess is observed; every failed attempt prints the provider API status
+    so a failure is actionable instead of a mysterious reply timeout.
+    """
+    import urllib.request
+    for attempt in range(1, attempts + 1):
+        try:
+            api_post_body_retry(
+                f"/plugins/providers/{source}/{provider_name}/enable",
+                {}, timeout=60, attempts=3, retry_delay=5)
+        except Exception as e:
+            print(f"  [provider '{provider_name}' enable (attempt "
+                  f"{attempt}/{attempts}): {str(e)[:120]}]")
+        if wait_for_provider_subprocess(provider_name, timeout=wait_timeout):
+            return True
+        detail = ""
+        try:
+            r = urllib.request.urlopen(
+                f"{BASE}/api/plugins/providers/{source}/{provider_name}", timeout=10)
+            pd = json.loads(r.read()).get("data", {}) or {}
+            detail = (f"status={pd.get('status')}, "
+                      f"entrypoint={'yes' if (pd.get('manifest') or {}).get('entrypoint') else 'no'}")
+        except Exception as e:
+            detail = f"provider detail read failed: {str(e)[:80]}"
+        print(f"  [provider '{provider_name}' subprocess missing after enable "
+              f"(attempt {attempt}/{attempts}: {detail}) - issuing explicit restart]")
+        try:
+            api_post_body(f"/plugins/providers/{source}/{provider_name}/restart",
+                          {}, timeout=120)
+        except Exception as e:
+            print(f"  [provider '{provider_name}' restart (attempt "
+                  f"{attempt}/{attempts}): {str(e)[:120]}]")
+        time.sleep(3)
+    return False
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Test harness
@@ -3214,10 +3280,26 @@ def test_mm9_e2e():
     # The agent asynchronously starts provider subprocesses; we verify
     # the process is running rather than polling an endpoint that always
     # returns 200 regardless of provider state.
-    print("[waiting for provider subprocess...]")
-    assert wait_for_provider_subprocess("noop-full", timeout=40), \
-        "noop-full provider subprocess did not start within 40s"
-    time.sleep(1)
+    # Self-containment (thread 2016 G1 FAIL): the status endpoint can report
+    # enabled/entrypoint=yes while NO subprocess exists, so the group brings the
+    # provider up itself (enable -> wait for a real PID -> explicit restart) and
+    # FAILS FAST with an actionable message instead of sending the message and
+    # burning the 180s reply window on a provider that can never answer.
+    print("[ensuring noop-full provider subprocess (enable/wait/restart loop)...]")
+    assert ensure_provider_subprocess("noop-full", source="built-in"), \
+        ("noop-full provider subprocess is not running after 3 enable/restart "
+         "attempts (provider API reports enabled but no provider process exists)")
+    # The mattermost platform subprocess must be POLLING with the bot token the
+    # setup step above just wrote. /enable on an already-enabled platform is a
+    # no-op (only PROVIDERS run reload_plugins on idempotent enable), so a
+    # platform subprocess started at boot before the token existed would never
+    # pick the test message up. Restart it explicitly: cheap and idempotent.
+    try:
+        api_post_body("/plugins/platforms/built-in/mattermost/restart", {}, timeout=120)
+        print("[mattermost platform restarted (inbound polling with the fresh token)]")
+    except Exception as _e:
+        print(f"[WARNING: mattermost platform restart failed: {str(_e)[:120]}]")
+    time.sleep(2)
 
     # 8. Login as testuser (setup created this user with known password).
     #    No manual admin login, password reset, or team/channel membership
