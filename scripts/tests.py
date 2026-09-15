@@ -40,7 +40,7 @@ Running twice on a clean repo produces identical results.
 #
 
 
-import os, sys, json, shutil, subprocess, time, re
+import os, sys, json, shutil, subprocess, time, re, signal
 import urllib.request, urllib.error
 import uuid
 
@@ -5638,6 +5638,17 @@ plugin reload respawns ALL MCP servers asynchronously and the /mcp/tools registr
 fills in gradually - without this, 40-C/D/E hit 'Unknown tool: prompt_generate' /
 'Unknown tool: test-python_lorem' right after the enable reload."""
     ensure_bundled_plugin("test-python", "tools")
+    # Self-containment (GROUP 22): prompt_generate comes from the BUILT-IN prompt
+    # tool plugin, which the dev prep enables but an ISOLATED group run does not.
+    # Enable it here (idempotent) so the group defines its own preconditions
+    # instead of depending on the dev prep / an earlier group.
+    for _psrc in ("built-in", "bundled"):
+        try:
+            api_post_body(f"/plugins/tools/{_psrc}/prompt/enable", {}, timeout=20)
+            break
+        except Exception as e:
+            print(f"  [wf-test: prompt {_psrc} enable failed: {str(e)[:80]}]")
+    names = []
     for _round in range(1, 4):
         yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
         api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
@@ -5656,7 +5667,8 @@ fills in gradually - without this, 40-C/D/E hit 'Unknown tool: prompt_generate' 
                 pass
             time.sleep(2)
         print(f"  [wf-test: test-python tools not registered yet (round {_round}/3) - re-enabling]")
-    raise AssertionError("test-python_lorem / prompt_generate did not register after enable")
+    raise AssertionError("test-python_lorem / prompt_generate did not register "
+                         f"after enable (last tools seen: {names[-12:]})")
 
 def _wf_remove_test_python():
     try:
@@ -8675,6 +8687,33 @@ def _seg_22():
         return None
 
 
+    def _provider_subprocess_pids(name):
+        """PIDs of subprocesses whose cmdline references /plugins/providers/<name>/.
+
+    Same filter as wait_for_provider_subprocess (so 'noop' never matches
+    'noop-full'). Returns None when no process tooling is available, so the
+    caller can fall back to the provider API signal."""
+        import subprocess as _sp
+        try:
+            r = _sp.run(["pgrep", "-f", name], capture_output=True, text=True,
+                        timeout=5)
+        except Exception:
+            return None
+        pids = set()
+        if r.returncode != 0:
+            return pids
+        for pid_text in r.stdout.split():
+            try:
+                cmdline = open(f"/proc/{pid_text}/cmdline", "rb").read()
+            except Exception:
+                continue
+            s = cmdline.decode("utf-8", errors="replace").replace("\0", " ")
+            if (f"/plugins/providers/{name}/" in s
+                    or f"/plugins/providers/{name} " in s):
+                pids.add(int(pid_text))
+        return pids
+
+
     def _ensure_truncating_noop_full():
         """Group-isolation fixture (F1 / GROUP 22): make the noop-full provider
     REALLY return finish_reason='length' for model 'test-truncate'.
@@ -8703,7 +8742,16 @@ def _seg_22():
                                    "update the truncation fixture")
             branch = (
                 '    model = params.get("model", "test-model-1")\n'
-                '    if model == "test-truncate":\n'
+                '    _blob = json.dumps(params)\n'
+                '    try:\n'
+                '        with open("/tmp/noop-full-requests.log", "a") as _lg:\n'
+                '            _lg.write(json.dumps({"model": model, "chars": len(_blob),'
+                ' "trunc_marker": "test-channel-trunc" in _blob,'
+                ' "title_marker": "wf-trunc" in _blob}) + "\\n")\n'
+                '    except Exception:\n'
+                '        pass\n'
+                '    if (model == "test-truncate" or "test-channel-trunc" in _blob\n'
+                '            or "wf-trunc" in _blob):\n'
                 '        # Deploy-test fixture (GROUP 22): a response truncated at\n'
                 '        # the token cap (finish_reason=length) carrying prose and\n'
                 '        # NO tool call, so the agent must retry/escalate instead\n'
@@ -8727,18 +8775,89 @@ def _seg_22():
                 fh.write(src)
             print("[truncation fixture: patched noop-full client.py for model "
                   "test-truncate]")
+        # Prove the patched client really emits finish_reason=length for the
+        # marker (the agent-side model routing is a separate concern - the fixture
+        # therefore also triggers on the truncation channel/task markers in the
+        # request).  Runs the client directly over its stdio protocol.
+        probe = subprocess.run(
+            ["python3", client],
+            input=(json.dumps({"id": 1, "method": "complete",
+                               "params": {"model": "test-truncate",
+                                          "messages": [{"role": "user",
+                                                        "content": "probe"}]}}) + "\n"),
+            capture_output=True, text=True, timeout=60)
+        _out = (probe.stdout or "").strip().splitlines()
+        assert _out and '"length"' in _out[-1], (
+            "patched noop-full client did not report finish_reason=length "
+            f"(stdout={probe.stdout[:200]!r} stderr={probe.stderr[:200]!r})")
+        print("[truncation fixture: patched client verified "
+              "(finish_reason=length)]")
         # Force a respawn: the running subprocess still holds the OLD client code
-        # and the enable path is idempotent for a provider it believes is up.
-        for _src_name in ("bundled", "built-in", "remote"):
-            try:
-                api_post_body(f"/plugins/providers/{_src_name}/noop-full/restart",
-                              {}, timeout=120)
-                print(f"  [truncation fixture: noop-full restarted "
-                      f"(source={_src_name})]")
+        # and the enable path is idempotent for a provider it believes is up. The
+        # restart endpoint can ALSO keep the previous process alive, which made
+        # GROUP 22 flaky (stale code -> finish_reason=stop -> task done). So verify
+        # the running PID really changed and, when the API refuses to respawn, kill
+        # the stale subprocess so the reload path starts a fresh one.
+        def _restart_provider():
+            for _src_name in ("bundled", "built-in", "remote"):
+                try:
+                    api_post_body(
+                        f"/plugins/providers/{_src_name}/noop-full/restart",
+                        {}, timeout=120)
+                    print(f"  [truncation fixture: noop-full /restart "
+                          f"(source={_src_name})]")
+                    return
+                except Exception as e:
+                    print(f"  [truncation fixture: restart source={_src_name} "
+                          f"failed: {str(e)[:100]}]")
+
+        def _wait_fresh_pids(timeout=60):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                now = _provider_subprocess_pids("noop-full")
+                if now:
+                    new = now - before
+                    if new:
+                        return sorted(new)
+                time.sleep(1)
+            return None
+
+        before = _provider_subprocess_pids("noop-full")
+        if before is None:
+            print("  [truncation fixture: no process tooling - falling back to the "
+                  "provider API signal]")
+            _restart_provider()
+            assert ensure_provider_subprocess_any("noop-full"), \
+                "noop-full provider subprocess is not running after the fixture patch"
+            return
+        if before:
+            print(f"  [truncation fixture: pre-patch noop-full PID(s) {sorted(before)}]")
+        fresh = None
+        for _attempt in range(1, 4):
+            _restart_provider()
+            fresh = _wait_fresh_pids(60)
+            if fresh:
                 break
+            stale = _provider_subprocess_pids("noop-full") or set()
+            print(f"  [truncation fixture: respawn attempt {_attempt}/3 kept the old "
+                  f"PID(s) {sorted(stale)} - killing them to force a fresh start]")
+            for _pid in stale:
+                try:
+                    os.kill(_pid, signal.SIGTERM)
+                except Exception:
+                    pass
+            time.sleep(5)
+            try:
+                api_post_body_retry("/plugins/providers/bundled/noop-full/enable",
+                                    {}, timeout=90)
             except Exception as e:
-                print(f"  [truncation fixture: restart source={_src_name} failed: "
-                      f"{str(e)[:100]}]")
+                print(f"  [truncation fixture: enable after kill failed: {str(e)[:100]}]")
+            fresh = _wait_fresh_pids(60)
+            if fresh:
+                break
+        assert fresh, ("noop-full subprocess never respawned with the patched client "
+                       "- the truncation regression would be testing stale code")
+        print(f"  [truncation fixture: patched client served by fresh PID(s) {fresh}]")
         assert ensure_provider_subprocess_any("noop-full"), \
             "noop-full provider subprocess is not running after the fixture patch"
 
