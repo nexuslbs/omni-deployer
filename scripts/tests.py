@@ -5638,22 +5638,24 @@ plugin reload respawns ALL MCP servers asynchronously and the /mcp/tools registr
 fills in gradually - without this, 40-C/D/E hit 'Unknown tool: prompt_generate' /
 'Unknown tool: test-python_lorem' right after the enable reload."""
     ensure_bundled_plugin("test-python", "tools")
-    yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
-    api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
-    for attempt in range(20):
-        try:
-            r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
-            tools_data = json.loads(r.read())
-            tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
-            names = [_tn(t.get("full_name") or t.get("name") or "") for t in tools]
-            if (any("test-python_lorem" in n for n in names) and
-                    any("prompt_generate" in n for n in names)):
-                # Settle: the discovery/registry update lags the async server spawn.
-                time.sleep(3)
-                return True
-        except Exception:
-            pass
-        time.sleep(2)
+    for _round in range(1, 4):
+        yaml_set("tools", "test-python", {"enabled": False, "source": "bundled", "config": {}})
+        api_post_body_retry("/plugins/tools/bundled/test-python/enable", {}, timeout=20)
+        for attempt in range(20):
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(f"{BASE}/mcp/tools"), timeout=5)
+                tools_data = json.loads(r.read())
+                tools = tools_data if isinstance(tools_data, list) else (tools_data.get("tools") or tools_data.get("data") or [])
+                names = [_tn(t.get("full_name") or t.get("name") or "") for t in tools]
+                if (any("test-python_lorem" in n for n in names) and
+                        any("prompt_generate" in n for n in names)):
+                    # Settle: the discovery/registry update lags the async server spawn.
+                    time.sleep(3)
+                    return True
+            except Exception:
+                pass
+            time.sleep(2)
+        print(f"  [wf-test: test-python tools not registered yet (round {_round}/3) - re-enabling]")
     raise AssertionError("test-python_lorem / prompt_generate did not register after enable")
 
 def _wf_remove_test_python():
@@ -8673,12 +8675,81 @@ def _seg_22():
         return None
 
 
+    def _ensure_truncating_noop_full():
+        """Group-isolation fixture (F1 / GROUP 22): make the noop-full provider
+    REALLY return finish_reason='length' for model 'test-truncate'.
+
+    GROUP 22's truncation regression asserts that a truncated step response must
+    NOT mark the task done. The providers/noop-full source the suite deploys
+    only echoes prose for test-model-1/2, so once the provider subprocess was up
+    every workflow step completed normally and the task reached 'done' (test
+    fails). While the provider was unstartable the steps errored and the task
+    landed 'blocked', which satisfied the assertions for the WRONG reason (a
+    vacuous pass). The test-truncate model was introduced for this regression
+    (omniagent 5eb98dc) but is missing from the deployed plugin, so restore it
+    here: patch the bundled client (idempotent), force a provider respawn and
+    prove the new subprocess with a real PID."""
+        _ensure_bundled_provider_dir("noop-full")
+        client = f"{WORKSPACE}/plugins/providers/noop-full/client.py"
+        with open(client) as fh:
+            src = fh.read()
+        if "test-truncate" in src:
+            print("[truncation fixture: noop-full client.py already supports "
+                  "test-truncate]")
+        else:
+            anchor = ('    model = params.get("model", "test-model-1")\n'
+                      '    messages = params.get("messages", [])\n')
+            assert anchor in src, ("noop-full client.py layout changed - "
+                                   "update the truncation fixture")
+            branch = (
+                '    model = params.get("model", "test-model-1")\n'
+                '    if model == "test-truncate":\n'
+                '        # Deploy-test fixture (GROUP 22): a response truncated at\n'
+                '        # the token cap (finish_reason=length) carrying prose and\n'
+                '        # NO tool call, so the agent must retry/escalate instead\n'
+                '        # of treating the step as complete.\n'
+                '        return {\n'
+                '            "id": req_id,\n'
+                '            "result": {\n'
+                '                "content": "This response was cut off at the token limit" * 8,\n'
+                '                "reasoning": None,\n'
+                '                "tool_calls": [],\n'
+                '                "finish_reason": "length",\n'
+                '                "usage": {"prompt_tokens": 0, "completion_tokens": 0},\n'
+                '            },\n'
+                '        }\n'
+                '    messages = params.get("messages", [])\n'
+            )
+            src = src.replace(anchor, branch, 1)
+            src = src.replace('"models": ["test-model-1", "test-model-2"]',
+                              '"models": ["test-model-1", "test-model-2", "test-truncate"]')
+            with open(client, "w") as fh:
+                fh.write(src)
+            print("[truncation fixture: patched noop-full client.py for model "
+                  "test-truncate]")
+        # Force a respawn: the running subprocess still holds the OLD client code
+        # and the enable path is idempotent for a provider it believes is up.
+        for _src_name in ("bundled", "built-in", "remote"):
+            try:
+                api_post_body(f"/plugins/providers/{_src_name}/noop-full/restart",
+                              {}, timeout=120)
+                print(f"  [truncation fixture: noop-full restarted "
+                      f"(source={_src_name})]")
+                break
+            except Exception as e:
+                print(f"  [truncation fixture: restart source={_src_name} failed: "
+                      f"{str(e)[:100]}]")
+        assert ensure_provider_subprocess_any("noop-full"), \
+            "noop-full provider subprocess is not running after the fixture patch"
+
+
     def _wf_bootstrap_trunc_channel():
         """Create a SECOND dedicated channel for the truncation regression test,
     configured provider=noop-full model=test-truncate (the noop-full subprocess
     provider returns finish_reason=length with prose and NO tool call for that
     model). Never touches the noop/test-tool-caller dedicated channel (incident
     2026-08-09: never patch a channel for tests)."""
+        _ensure_truncating_noop_full()
         import time as _time
         MM = "http://mattermost:8065"
         admin_data = json.dumps({"login_id": "lucasbasquerotto", "password": _get_secret_value("MATTERMOST_ADMIN_PASSWORD", "Mattermost_Fresh_Start_1")}).encode()

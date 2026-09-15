@@ -719,9 +719,17 @@ def _run_mattermost_setup_with_retry(s, attempts=6, delay=30):
 DEV_EXCLUDED_SECRETS = {"TELEGRAM_TOKEN"}
 
 
+DEV_PROJECT_NAMES = {"omnidev", "omnideploy"}
+
+
 def _dev_excluded_secret(name, project_name):
-    """True when this secret must be skipped for this project setup."""
-    return project_name == "omnidev" and name in DEV_EXCLUDED_SECRETS
+    """True when this secret must be skipped for this project setup.
+
+    Dev stacks run under project name 'omnidev' (launcher chains) or
+    'omnideploy' (deploy.py dev, the omni-stack dev overlay) - both are dev
+    stacks and neither seeds the production-only platform secrets.
+    """
+    return project_name in DEV_PROJECT_NAMES and name in DEV_EXCLUDED_SECRETS
 
 
 def setup():
@@ -1100,8 +1108,32 @@ def verify_platform_inbound(stack_dir=None):
         print(f"  [verify-inbound] WARNING: could not read secrets from {pg_container} "
               f"(empty result) - DB secret checks below may be wrong")
 
+    # Platforms whose ONLY missing secrets are dev-excluded ones are not part of
+    # this project's environment (e.g. telegram in a dev stack: TELEGRAM_TOKEN is
+    # never seeded there by design). Their inbound-disabled log markers are
+    # expected as well, so drop those markers from the count instead of
+    # reporting a FAIL after an otherwise green dev deploy (thread 2016 GATE 4).
+    dev_skipped = set()
+    for _name, _meta in enabled.items():
+        _refs = list(_meta["refs"])
+        if _meta["access_token_name"]:
+            _refs.append(_meta["access_token_name"])
+        _missing = {ref for ref in _refs if ref and ref not in db_names}
+        if _missing and all(_dev_excluded_secret(ref, s.project_name)
+                            for ref in _missing):
+            dev_skipped.add(_name)
+    marker_pats = ["bot_token is EMPTY", "No access_token provided",
+                   "not found in secrets table"]
+    marker_platform = {"bot_token is EMPTY": "telegram"}
+    active_pats = [p for p in marker_pats
+                   if marker_platform.get(p) not in dev_skipped]
+    pat = "|".join(active_pats) if active_pats else "$^"
+    if dev_skipped:
+        print(f"  [verify-inbound] dev-excluded platform(s) "
+              f"{', '.join(sorted(dev_skipped))}: their inbound-disabled "
+              f"markers are not counted")
     logs = sh(f"docker logs --since 30m {omniagent_container} 2>&1 | grep -cE "
-              f"'bot_token is EMPTY|No access_token provided|not found in secrets table' || true")
+              f"'{pat}' || true")
     try:
         marker_count = int((logs.stdout or "0").strip() or "0")
     except ValueError:
@@ -1119,11 +1151,19 @@ def verify_platform_inbound(stack_dir=None):
         refs = list(meta["refs"])
         if meta["access_token_name"]:
             refs.append(meta["access_token_name"])
-        missing = sorted({ref for ref in refs if ref and ref not in db_names})
+        missing_all = sorted({ref for ref in refs if ref and ref not in db_names})
+        missing = [ref for ref in missing_all
+                   if not _dev_excluded_secret(ref, s.project_name)]
+        excluded = [ref for ref in missing_all
+                    if _dev_excluded_secret(ref, s.project_name)]
         if missing:
             print(f"  [verify-inbound] FAIL platform={name}: secret(s) referenced by config "
                   f"but missing from the DB secrets table: {', '.join(missing)}")
             fail = True
+        elif excluded:
+            print(f"  [verify-inbound] SKIP platform={name}: {', '.join(excluded)} "
+                  f"excluded from this project's secrets (DEV_EXCLUDED_SECRETS) - "
+                  f"platform intentionally disabled here")
         else:
             print(f"  [verify-inbound] OK   platform={name}: {len(refs)} secret reference(s) "
                   f"all present in the secrets table")
