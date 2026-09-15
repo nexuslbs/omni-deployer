@@ -9172,6 +9172,24 @@ def _seg_27():
         return last
 
 
+    def _h27_wait_pair_equal(pair, timeout=240, step=2):
+        """Wait for an ATOMIC sample of the (observer_delta, ground_delta) pair whose two
+    sides are EQUAL, then return that sample. Both values come from ONE sample, so the
+    assertion using them cannot be split by a late async message moving the SQL ground
+    truth between a convergence check and a second live re-read (that race flaked group
+    27 in ~50% of full deploy runs). On timeout the LAST sample is returned so the
+    assertion reports the non-converged values (real teeth: a broken event pipeline
+    never converges)."""
+        last = pair()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if last[0] == last[1]:
+                return last
+            time.sleep(step)
+            last = pair()
+        return last
+
+
     def _h27_logs(needle):
         """Best-effort log check. The dev stack logs via journald which DROPS messages
     under burst load (verified: threads created while 'discover' spam flooded the
@@ -9396,37 +9414,43 @@ def _seg_27():
             ground_n = _h27_quiesce(lambda: _h27_nonhook_ground(base))
             assert ground_n >= 1, f"no non-hook messages after quiescence (base={base})"
 
-            def _obs_ground_equal():
-                return (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base == _h27_nonhook_ground(base)
+            def _obs_ground_pair():
+                return ((_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base,
+                        _h27_nonhook_ground(base))
 
-            # observer DELTA must converge to the ground truth AND stay equal for
-            # stable_secs (async pipeline caught up, no events still in flight)
-            # The observer (async event pipeline) can lag the direct SQL inserts
-            # under load; the invariant is the FINAL equality, so wait for it and
-            # assert the delta directly instead of requiring a stability window.
-            ok = _h27_wait_until(_obs_ground_equal, timeout=240)
-            o1 = (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base
-            ground_1 = _h27_nonhook_ground(base)
+            # observer DELTA must converge to the ground truth. The observer (async
+            # event pipeline) can lag the direct SQL inserts under load; take BOTH
+            # assertion values from ONE atomic pair sample (equality held in that very
+            # sample) instead of re-reading them live after a convergence check, which
+            # raced with late async messages and flaked whole deploys.
+            o1, ground_1 = _h27_wait_pair_equal(_obs_ground_pair, timeout=240)
             assert o1 == ground_1, \
-                f"observer must equal non-hook messages exactly: obs_delta={o1} ground={ground_1} (converged={ok})"
+                f"observer must equal non-hook messages exactly: obs_delta={o1} ground={ground_1}"
             # trigger hook fired: hook-caused threads exist with the trigger prompt (new-only)
             ok = _h27_wait_until(lambda: _h27_new_threads("G27-TRIG", pre_trig) >= 1, timeout=120)
             assert ok, "thread_started count=1 hook must have triggered"
             # manual fire: another hook-caused thread; its messages must NOT move the
-            # observer. Snapshot ground truth IMMEDIATELY before the fire and assert
-            # delta-zero across it: this tolerates async streams that landed between
-            # the earlier ground_n snapshot and now (dispatcher role threads from
-            # earlier groups), while still catching the fire itself creating
-            # non-hook messages.
-            ground_before_fire = _h27_nonhook_ground(base)
+            # observer. Both the pre-fire and the post-fire values are single ATOMIC
+            # pair samples (observer delta and SQL ground truth read together), so a
+            # late async message from an earlier group's thread cannot split the reads.
+            o_bf, ground_before_fire = _h27_wait_pair_equal(_obs_ground_pair, timeout=120)
+            assert o_bf == ground_before_fire, \
+                f"observer must equal non-hook messages before the fire: obs_delta={o_bf} ground={ground_before_fire}"
+            pre_fire_threads, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0]
             st, resp = _h27_api("POST", f"/hooks/{hid_trig}/fire", {})
             assert st == 200, f"POST /hooks/{hid_trig}/fire -> {st}: {resp}"
-            ok = _h27_wait_until(_obs_ground_equal, timeout=120)
-            o2 = (_h27_counter_key(hid_obs, "global", "global") or 0) - obs_base
-            ground_after = _h27_nonhook_ground(base)
-            assert o2 == ground_after, f"after fire: obs_delta={o2} ground={ground_after} (converged={ok})"
-            assert ground_after == ground_before_fire, \
-                f"manual fire must not create non-hook messages: {ground_before_fire} -> {ground_after}"
+            o2, ground_after = _h27_wait_pair_equal(_obs_ground_pair, timeout=120)
+            assert o2 == ground_after, f"after fire: obs_delta={o2} ground={ground_after}"
+            # the manual fire may only create HOOK-caused threads; non-hook messages in
+            # threads created after it would prove a cascade. Attribute per NEW thread
+            # instead of comparing raw totals: unrelated async traffic from earlier
+            # tests keeps posting into threads that ALREADY existed, which made a raw
+            # total comparison flake (observed 442 -> 560 while the hook stayed quiet).
+            cascaded, = _h27_sql(
+                "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id "
+                "WHERE t.id > %s AND t.hook_caused = false", (pre_fire_threads,))[0]
+            assert cascaded == 0, \
+                f"manual fire must not create non-hook messages: {cascaded} message(s) in new threads"
             # hook-caused thread identity (infinite-loop protection markers)
             hc, = _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true")[0]
             assert hc >= 2, f"expected >= 2 hook threads (trigger + manual fire), got {hc}"
