@@ -14766,7 +14766,7 @@ def _seg_46():
 
 def _seg_47():
     """GROUP 47: Resolve fallback fields ONCE at load - kanban task defaults"""
-    global _g47_boards_enabled, _g47_boards_file, _g47_cleanup, _g47_history_comments, _g47_make_task, _g47_put_wf, _g47_req, _g47_sql, _g47_thread_rows, test_47_explicit_task_fields_win_over_board, test_47_redispatch_board_task, test_47_review_block_board_task, test_47_review_retest_board_task, test_47_review_rework_board_task, test_47_status_change_dispatch_board_task, test_47_unknown_board_fail_loud
+    global _g47_boards_file, _g47_cleanup, _g47_history_comments, _g47_make_task, _g47_put_wf, _g47_req, _g47_sql, _g47_thread_rows, test_47_explicit_task_fields_win_over_board, test_47_redispatch_board_task, test_47_review_block_board_task, test_47_review_retest_board_task, test_47_review_rework_board_task, test_47_status_change_dispatch_board_task, test_47_unknown_board_fail_loud
 
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -14787,8 +14787,11 @@ def _seg_47():
         return f"{WORKSPACE}/config/boards.yml"
 
 
-    def _g47_boards_enabled():
-        return os.path.exists(_g47_boards_file())
+    # Boards are ALWAYS enabled (no file-presence feature gate):
+    # task_omnidev_kanban_boards_always_enabled removed the old
+    # _g47_boards_enabled() file-existence guard, so the group-47 board tests
+    # below run unconditionally instead of silently skipping when
+    # boards.yml is absent (a missing file now uses the built-in default set).
 
 
     def _g47_sql(q, params=None):
@@ -14898,9 +14901,6 @@ def _seg_47():
     status running + NEW executor thread (workflow_step=running) with
     workflow/channel/profile/plan resolved from the BOARD; kanban_history
     shows 'Creating thread'. Before the fix: has_wf=false -> 'blocked'."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
@@ -14946,9 +14946,6 @@ def _seg_47():
     def test_47_review_retest_board_task():
         """47-B: board task + reviewer 'retest' -> status testing + NEW tester
     thread (workflow_step=testing) resolved from the board."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
@@ -14983,9 +14980,6 @@ def _seg_47():
     def test_47_review_block_board_task():
         """47-C: board task + reviewer explicit 'block' -> status blocked, NO
     new thread (block decision semantics unchanged)."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
@@ -15018,9 +15012,6 @@ def _seg_47():
         """47-D: status-change dispatch (PATCH status=running) on a board task
     with NULL workflow_id/channel_id -> the role thread resolves channel +
     workflow from the BOARD."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
@@ -15058,9 +15049,6 @@ def _seg_47():
     BOARD, finds the tester role, and creates a workflow_step='testing'
     thread. Before the fix the role gate read the RAW workflow_id (NULL) and
     answered {"redispatch": false, "reason": "no role to run"}."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
@@ -15098,9 +15086,6 @@ def _seg_47():
         """47-E: task with EXPLICIT channel/workflow on a board keeps the EXPLICIT
     values (task > board precedence - non-board behavior unchanged). Board
     says channel=kanban; task says channel=hooks; thread must be hooks."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
@@ -15138,9 +15123,6 @@ def _seg_47():
         """47-F: unknown/malformed board -> EXPLICIT error at resolution time
     (POST /review returns non-200 mentioning the board), never a silent
     empty fallback that changes behavior."""
-        if not _g47_boards_enabled():
-            print("SKIP: boards.yml absent (omnistable) - boards disabled")
-            return
         bfile = _g47_boards_file()
         with open(bfile) as f:
             orig = f.read()
