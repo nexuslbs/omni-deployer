@@ -13033,7 +13033,8 @@ def _seg_39():
 
     def test_39_plugins_yml_consolidated():
         """39-A: config/plugins.yml - query/metrics entries gone; search has
-    database_url; cron+kanban disabled; prompt built-in enabled."""
+    database_url; cron+kanban retired into the unified built-in tasks plugin;
+    prompt built-in enabled."""
         with open(f"{WORKSPACE}/config/plugins.yml", encoding="utf-8") as f:
             txt = f.read()
         tools_txt = txt.split("tools:")[1].split("providers:")[0]
@@ -13041,13 +13042,19 @@ def _seg_39():
         assert "metrics:" not in tools_txt, "metrics plugin entry must be gone from plugins.yml"
         assert "search:" in tools_txt and "database_url: $env:DATABASE_URL" in tools_txt, \
             "search must keep database_url config"
-        cron_txt = tools_txt.split("cron:")[1]
-        assert "enabled: false" in cron_txt, "cron must be disabled"
-        kanban_txt = tools_txt.split("kanban:")[1]
-        assert "enabled: false" in kanban_txt, "kanban must be disabled"
+        # The former standalone cron/kanban tool-plugin entries are RETIRED:
+        # both are served by the single built-in `tasks` plugin, so the seed
+        # carries no cron:/kanban: key any more (commit 8eb3d27 dropped them).
+        # Never split on those keys again - a missing key raised IndexError and
+        # failed this gate on an otherwise correct config (thread 2047).
+        assert "cron:" not in tools_txt, "cron entry must be retired (unified tasks plugin)"
+        assert "kanban:" not in tools_txt, "kanban entry must be retired (unified tasks plugin)"
+        assert "\n  tasks:\n    enabled: true\n    source: built-in\n" in tools_txt, \
+            "unified tasks plugin (enabled, built-in) missing from plugins.yml tools"
         prompt_txt = tools_txt.split("prompt:")[1]
         assert "source: built-in" in prompt_txt, "prompt must stay built-in"
-        print("PASS: plugins.yml - query/metrics gone, search w/ database_url, cron+kanban disabled")
+        print("PASS: plugins.yml - query/metrics/cron/kanban retired, search w/ database_url, "
+              "unified tasks enabled, prompt built-in")
 
 
     def test_39_live_plugins():

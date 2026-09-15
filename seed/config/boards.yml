@@ -1,8 +1,12 @@
-# Kanban boards (omnidev dev config - feature gate)
+# Kanban boards (deploy/omnideploy dev config)
 # A board groups kanban tasks and carries default execution options
-# (channel, profile, workflow, plan, ...). The kanban board feature is
-# ACTIVE only while this file exists; omnistable has no boards.yml, so
-# all kanban behavior there is unchanged.
+# (channel, profile, workflow, plan, ...). Boards are ALWAYS enabled:
+# there is NO feature-off state, and no code path may treat them as off.
+# When this file is missing, the agent falls back to the built-in default
+# board set ({main}) and reports a structured config_warning on GET /boards
+# (never a silent empty list); a present but EMPTY or invalid file is an
+# explicit error. A task's board is always required and validated against
+# the board set in use.
 #
 # Resolution order for a thread created from a kanban task:
 #   Workflow Role > Workflow > Kanban Task > Board > Channel > Global Settings
