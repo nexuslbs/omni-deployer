@@ -5933,11 +5933,30 @@ def _live_tool_names():
                 if isinstance(t, dict) else _tn(str(t)) for t in tools]
     return [_tn(k) for k in tools.keys()]
 
+def _live_tool_raw_names():
+    """Registry names EXACTLY as the live MCP registry reports them.
+
+    EXECUTION needs the real name: `_tn` collapses `{plugin}__{tool}` to
+    `{plugin}_{tool}` for comparisons, and that collapsed form is rejected by
+    the exposed-name grammar (omniagent c78e874 "adopt {plugin}__{tool}
+    grammar - validate, don't mangle"), so a normalized name can never be
+    executed. Group 45 regressed exactly there (sent `skills_list_skills`)."""
+    with urllib.request.urlopen(f"{BASE}/mcp/tools", timeout=10) as r:
+        tools = json.loads(r.read().decode("utf-8"))
+    if isinstance(tools, dict):
+        tools = tools.get("tools") or tools.get("data") or []
+    if isinstance(tools, list):
+        return [t.get("full_name") or t.get("name") or ""
+                if isinstance(t, dict) else str(t) for t in tools]
+    return [str(k) for k in tools.keys()]
+
+
 def _mcp_execute_tool(suffix, args):
-    """Execute a live tool by its plugin-agnostic suffix: tries the exact
-registry name(s) first, then the bare name, so the call works whether the
-executor expects `skills_list_skills` or `list_skills`."""
-    names = [n for n in _live_tool_names() if n.endswith(_tn(suffix))]
+    """Execute a live tool by its plugin-agnostic suffix: tries the EXACT
+registry name(s) first, then the legacy-normalized form and the bare name,
+so the call works whatever naming grammar the executor registered."""
+    names = [n for n in _live_tool_raw_names() if _tn(n).endswith(_tn(suffix))]
+    names += [n for n in _live_tool_names() if n.endswith(_tn(suffix))]
     names += [_tn(suffix), suffix]
     last = None
     seen = []
@@ -15277,10 +15296,31 @@ def _seg_49():
         """49-A: DB page 502 root cause - server/routes/db.ts forwards to the REAL
     MCP tool `search_database` (query_database does not exist on the backend)."""
         db_ts = _g49_read("server/routes/db.ts")
-        assert 'name: "search_database"' in db_ts, "49-A: db.ts must call search_database"
+        assert "/db/query" in db_ts, "49-A: db.ts must call the core /db/query endpoint"
+        assert "/db/tables" in db_ts, "49-A: db.ts must call the core /db/tables endpoint"
+        assert 'name: "search_database"' not in db_ts, \
+            "49-A: db.ts must not call the MCP tool by name (plugin dependency)"
         assert "query_database" not in db_ts, "49-A: stale query_database reference remains in db.ts"
-        print("  ✓ 49-A db.ts calls search_database (no query_database)")
-        print("PASS: 49-A DB tables route uses search_database (502 fixed)")
+        # runtime: the core DB API answers independently of any plugin state
+        import urllib.request as _ur, urllib.error as _ue, json as _json
+        with _ur.urlopen(f"{BASE}/db/tables", timeout=15) as r:
+            tresp = _json.loads(r.read().decode("utf-8"))
+        assert tresp.get("success") is True, f"49-A: core /db/tables failed: {tresp}"
+        tables = [t.get("table_name") for t in tresp.get("tables", [])]
+        assert tables, "49-A: core /db/tables returned no tables"
+        wbody = _json.dumps({"sql": "INSERT INTO threads (id) VALUES (999999)"}).encode()
+        wreq = _ur.Request(f"{BASE}/db/query", data=wbody, method="POST",
+                           headers={"Content-Type": "application/json"})
+        try:
+            with _ur.urlopen(wreq, timeout=15) as r:
+                wresp = _json.loads(r.read().decode("utf-8"))
+        except _ue.HTTPError as e:
+            wresp = _json.loads(e.read().decode("utf-8"))
+        assert wresp.get("success") is False, f"49-A: core /db/query accepted a write: {wresp}"
+        print(f"    core /db/tables -> {len(tables)} tables; core /db/query rejected the write "
+              f"({wresp.get('error_code')})")
+        print("  ✓ 49-A db.ts uses the core DB API (no MCP tool by name)")
+        print("PASS: 49-A DB page is plugin-independent (core /db/query + /db/tables)")
 
     def test_49_backend_serves_search_database():
         """49-A runtime: the omniagent backend must serve the `search_database` MCP
