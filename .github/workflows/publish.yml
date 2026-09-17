@@ -176,6 +176,10 @@ jobs:
           cd omni-dashboard
           npm ci
           npm run lint || true
+          # Frontend build is transpile-only (vite/esbuild): undefined
+          # identifiers would ship silently. tsc --noEmit fails the release
+          # build on them (regression: workflows page `_providerErrors`).
+          npm run typecheck
           npm run build
   
       - name: Build image
