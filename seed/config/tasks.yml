@@ -3,7 +3,7 @@ hooks:
   wiki-maintenance:
     enabled: true
     channel: hooks
-    event: thread_finished
+    event: thread_terminated
     scope: profile
     count: 10
     prompt: |-
@@ -20,7 +20,7 @@ hooks:
   channel-summaries:
     enabled: true
     channel: hooks
-    event: thread_finished
+    event: thread_terminated
     scope: channel
     count: 10
     prompt: |-

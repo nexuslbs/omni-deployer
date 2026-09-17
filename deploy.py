@@ -103,7 +103,7 @@ def clear_deploy_tasks():
     """Clear schedules/hooks from tasks.yml so the deploy never spawns real-LLM threads.
 
     The seeded tasks.yml (HEAD) carries live hooks (wiki-maintenance,
-    channel-summaries) that fire on `thread_finished` events. The deploy DB
+    channel-summaries) that fire on `thread_terminated` events. The deploy DB
     has NO LLM secrets - the `omni` profile pins deepseek, so any hook thread
     on the `hooks` channel 401s with "api key invalid" (the key resolves to a
     variable NAME, not a value). Those failures are parallel background noise

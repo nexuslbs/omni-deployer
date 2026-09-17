@@ -9366,12 +9366,12 @@ def _seg_27():
 
     # ═══════════════════════════════════════════════════════════════════════
     #  GROUP 27: Event-driven Hooks system (omniagent 9797aa6)
-    #  thread_started / thread_finished / new_message - counter trigger/reset,
+    #  thread_started / new_message / thread_terminated / per-status terminal - counter trigger/reset,
     #  scope filtering (channel/profile), infinite-loop protection, both
     #  execution modes (agentic + actions.yml action), error isolation.
     # ═══════════════════════════════════════════════════════════════════════
     print(f"\n{'=' * 60}")
-    print("GROUP 27: Event-driven Hooks (thread_started / thread_finished / new_message)")
+    print("GROUP 27: Event-driven Hooks (thread_started / new_message / thread_terminated / per-status terminal)")
     print(f"{'=' * 60}")
 
 
@@ -9824,16 +9824,27 @@ def _seg_27():
             _h27_cleanup()
 
 
-    def test_27_hooks_thread_finished():
-        """GROUP 27-E: thread_finished fires when a thread reaches a terminal state (complete/failed).
-    Robust to leftover hook threads from prior runs: only NEW G27-FIN hook threads count."""
+    def test_27_hooks_thread_terminated():
+        """GROUP 27-E: terminal lifecycle events fire when a thread reaches a terminal state.
+
+    `thread_finished` was REMOVED (no backward-compat alias): every terminal
+    transition now fires the catch-all `thread_terminated` PLUS the per-status
+    event (`thread_completed` / `thread_interrupted` / `thread_failed` /
+    `thread_skipped` / `thread_merged`) when the status has one.
+    Robust to leftover hook threads from prior runs: only NEW G27-FIN / G27-PS
+    hook threads count."""
         _h27_cleanup()
-        hid_fin = _h27_create_hook(name="g27-fin", event="thread_finished", scope="global",
+        hid_fin = _h27_create_hook(name="g27-fin", event="thread_terminated", scope="global",
                                    count=1, mode="agentic", prompt="G27-FIN", profile="omni")
+        # One probe per per-status event: exactly the status the test thread ends
+        # with may fire, so the assertion is "at least one per-status view fired".
+        for st in ("completed", "interrupted", "failed", "skipped", "merged"):
+            _h27_create_hook(name=f"g27-ps-{st}", event=f"thread_{st}", scope="global",
+                             count=1, mode="agentic", prompt=f"G27-PS-{st.upper()}", profile="omni")
         try:
             base_t, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads")[0]
             # leftover G27-FIN hook threads from interrupted runs are inert but present; only a
-            # NEW one (id above the max pre-existing) proves a fresh thread_finished event fired
+            # NEW one (id above the max pre-existing) proves a fresh thread_terminated event fired
             pre_fin, = _h27_sql("SELECT COALESCE(MAX(id),0) FROM threads WHERE hook_caused = true AND id IN "
                                 "(SELECT thread_id FROM messages WHERE content LIKE 'G27-FIN%')")[0]
             cid = _h27_run_cron("fin")
@@ -9841,19 +9852,27 @@ def _seg_27():
                 return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true AND id > %s "
                                 "AND id IN (SELECT thread_id FROM messages WHERE content LIKE 'G27-FIN%%')",
                                 (pre_fin,))[0][0]
+            def ps_thr_new():
+                return _h27_sql("SELECT COUNT(*) FROM threads WHERE hook_caused = true AND id > %s "
+                                "AND id IN (SELECT thread_id FROM messages WHERE content LIKE 'G27-PS-%%')",
+                                (base_t,))[0][0]
             ok = _h27_wait_until(lambda: fin_thr_new() >= 1, timeout=60)
-            assert ok, "thread_finished hook must trigger when a thread reaches a terminal state"
+            assert ok, "thread_terminated hook must trigger when a thread reaches a terminal state"
             # the source thread (cron thread created after base_t) must itself be terminal
             def term_cnt():
                 return _h27_sql("SELECT COUNT(*) FROM threads WHERE id > %s AND status IN "
-                                "('completed','failed','skipped','system')", (base_t,))[0][0]
+                                "('completed','failed','skipped','system','interrupted','merged')",
+                                (base_t,))[0][0]
             ok = _h27_wait_until(lambda: term_cnt() >= 1, timeout=60)
             assert ok, f"expected at least one terminal thread created during the test: {term_cnt()}"
+            ok = _h27_wait_until(lambda: ps_thr_new() >= 1, timeout=60)
+            assert ok, ("a per-status terminal event must fire too "
+                        "(thread_completed/interrupted/failed/skipped/merged)")
             time.sleep(2)
             cf = _h27_counter(hid_fin)
-            assert cf.get("global") == 0, f"thread_finished count=1 hook must trigger+reset: {cf}"
-            print(f"PASS: fin_triggers_new={fin_thr_new()} terminal_threads={term_cnt()} "
-                  f"counter={cf.get('global')}")
+            assert cf.get("global") == 0, f"thread_terminated count=1 hook must trigger+reset: {cf}"
+            print(f"PASS: fin_triggers_new={fin_thr_new()} ps_triggers_new={ps_thr_new()} "
+                  f"terminal_threads={term_cnt()} counter={cf.get('global')}")
         finally:
             _h27_cleanup()
 
@@ -9862,7 +9881,7 @@ def _seg_27():
     test(test_27_hooks_scope_channel_profile)
     test(test_27_hooks_infinite_loop_protection)
     test(test_27_hooks_error_isolation)
-    test(test_27_hooks_thread_finished)
+    test(test_27_hooks_thread_terminated)
 
     def _h27f_pre(content):
         """MAX thread id of hook-caused threads whose seq-0 message content starts with
