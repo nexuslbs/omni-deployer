@@ -179,20 +179,22 @@ def run_plugin_tests(compose, mode, passes=1):
 # ═══════════════════════════════════════════════════════════════════════
 
 def run_semantic_search_tests(compose, mode):
-    """Run the semantic_search plugin integration suite against a real Qdrant.
+    """Run the semantic_search plugin integration suites against a real Qdrant.
 
-    The suite lives in the omni-plugins checkout on the runner (the stack
-    containers do not mount that checkout), so it is copied into the omniagent
-    container first. Qdrant is part of the dev/CI compose profiles
+    The suites live in the omni-plugins checkout on the runner (the stack
+    containers do not mount that checkout), so they are copied into the
+    omniagent container first. Qdrant is part of the dev/CI compose profiles
     (shared.generate_env and generate_ci_env both request it) and is reachable
-    in-container through $QDRANT_URL. Embeddings are computed locally by the
-    plugin - no LLM and no embedding API is contacted.
+    in-container through $QDRANT_URL. The messages suite additionally reads
+    the omniagent DB through $DATABASE_URL (SELECT only; its live-DB smoke
+    test skips when the DB is unreachable). Embeddings are computed locally by
+    the plugin - no LLM and no embedding API is contacted.
     """
     src = os.path.join(OMNI_PLUGINS_DIR, "tools", "semantic_search")
     dest = "/tmp/semantic_search"
     if not os.path.isdir(src):
         raise RuntimeError(f"semantic_search plugin source not found: {src}")
-    print("\n[deploy_plugins] Running the semantic_search integration suite (real Qdrant)...")
+    print("\n[deploy_plugins] Running the semantic_search integration suites (real Qdrant)...")
     compose_check(compose, mode, "exec", "-T", "omniagent", "rm", "-rf", dest,
                   label="clean plugin copy")
     compose_check(compose, mode, "cp", src, f"omniagent:{dest}",
@@ -204,6 +206,13 @@ def run_semantic_search_tests(compose, mode):
     if r.returncode != 0:
         raise RuntimeError(f"semantic_search integration suite failed (exit={r.returncode})")
     print("  semantic_search integration suite PASSED")
+    r = compose_run(compose, mode, "exec", "-T", "omniagent",
+                    "python3", "-u", f"{dest}/tests/test_semantic_search_messages.py")
+    sys.stdout.write(r.stdout or "")
+    sys.stderr.write(r.stderr or "")
+    if r.returncode != 0:
+        raise RuntimeError(f"semantic_search messages integration suite failed (exit={r.returncode})")
+    print("  semantic_search messages integration suite PASSED")
 
 
 def _deploy_dev():
