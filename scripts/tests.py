@@ -3825,13 +3825,23 @@ def _pp(prompt: str, plan: bool = False) -> dict:
     return json.loads(r.read())
 
 def test_p1_basic_response_structure():
-    """Prompt preview returns system_prompt, messages, and plan fields"""
+    """Prompt preview returns the REAL prompt parts (system/memory/context/user/plan/messages)
+
+    The prompt endpoints return exactly what the configured prompt tool produced
+    (ONE assembly path, no local re-implementation), so the system text is the
+    `system` part; `plan` is the plugin's boolean plan decision and
+    `plan_requested` echoes the request flag. The old `system_prompt` field and
+    the plan-text semantics were removed with that change.
+    """
     resp = _pp("Hello", plan=False)
-    assert "system_prompt" in resp, f"Missing system_prompt in {resp}"
+    assert "system" in resp, f"Missing system in {resp}"
     assert "messages" in resp, f"Missing messages in {resp}"
     assert "plan" in resp, f"Missing plan in {resp}"
-    assert isinstance(resp["system_prompt"], str), "system_prompt not string"
-    assert len(resp["system_prompt"]) > 0, "system_prompt empty"
+    assert isinstance(resp["system"], str), "system not string"
+    assert len(resp["system"]) > 0, "system empty"
+    assert isinstance(resp["plan"], bool), f"plan should be bool, got {resp.get('plan')!r}"
+    assert resp.get("plan_requested") is False, \
+        f"plan_requested should echo the request (False), got {resp.get('plan_requested')!r}"
     assert isinstance(resp["messages"], list), "messages not list"
     system_msgs = [m for m in resp["messages"] if m.get("role") == "system"]
     assert len(system_msgs) >= 1, f"Expected >=1 system msg, got {len(system_msgs)}"
@@ -3840,35 +3850,39 @@ def test_p1_basic_response_structure():
         assert "content" in msg, f"Message missing content: {msg}"
 
 def test_p2_plan_true_attempts_llm():
-    """plan=true triggers LLM planning (response may be string or null)"""
+    """plan=true is echoed in plan_requested; plan stays a boolean decision"""
     resp = _pp("Implement a new feature", plan=True)
-    assert resp.get("plan") is None or isinstance(resp.get("plan"), str), \
-        f"plan=true should yield None or str, got {resp.get('plan')!r}"
+    assert resp.get("plan_requested") is True, \
+        f"plan=true should echo plan_requested=true, got {resp.get('plan_requested')!r}"
+    assert isinstance(resp.get("plan"), bool), f"plan should be bool, got {resp.get('plan')!r}"
 
 def test_p2_plan_false_returns_null():
-    """plan=false produces null plan"""
+    """plan=false is echoed in plan_requested (a preview writes no plan)"""
     resp = _pp("Implement a new feature", plan=False)
-    assert resp.get("plan") is None, f"plan=false should be null, got {resp.get('plan')!r}"
+    assert resp.get("plan_requested") is False, \
+        f"plan=false should echo plan_requested=false, got {resp.get('plan_requested')!r}"
+    assert isinstance(resp.get("plan"), bool), f"plan should be bool, got {resp.get('plan')!r}"
 
 def test_p2_short_message_with_plan():
-    """Short message + plan=true still attempts planning"""
+    """Short message + plan=true still echoes the requested flag"""
     resp = _pp("Hi", plan=True)
-    assert resp.get("plan") is None or isinstance(resp.get("plan"), str), \
-        f"Got {resp.get('plan')!r}"
+    assert resp.get("plan_requested") is True, \
+        f"Got plan_requested={resp.get('plan_requested')!r}"
 
 def test_p2_long_complex_no_plan():
-    """Long complex message + plan=false returns null"""
+    """Long complex message + plan=false echoes the requested flag"""
     resp = _pp(
         "Please implement a complete refactoring of the authentication system with "
         "JWT tokens, session management, and role-based access control.",
         plan=False
     )
-    assert resp.get("plan") is None, f"plan=false should be null, got {resp.get('plan')!r}"
+    assert resp.get("plan_requested") is False, \
+        f"plan_requested should be False, got {resp.get('plan_requested')!r}"
 
 def test_p3_system_prompt_content():
-    """System prompt contains OmniAgent identity and profile reference"""
+    """The system part contains the OmniAgent identity and profile reference"""
     resp = _pp("What's the weather?", plan=False)
-    sys = resp["system_prompt"]
+    sys = resp["system"]
     assert "OmniAgent" in sys, f"OmniAgent not in system prompt: {sys[:80]}"
 
 def test_p3_system_message_exists():
@@ -3880,45 +3894,43 @@ def test_p3_system_message_exists():
 def test_p4_greeting_with_plan():
     """Greeting with plan=true works"""
     resp = _pp("Hi there!", plan=True)
-    assert resp.get("plan") is None or isinstance(resp.get("plan"), str)
+    assert isinstance(resp.get("plan"), bool)
 
 def test_p4_code_request_no_plan():
-    """Code request with plan=false returns null plan"""
+    """Code request with plan=false echoes plan_requested=false"""
     resp = _pp("Write a Python function to sort a list", plan=False)
-    assert resp.get("plan") is None
+    assert resp.get("plan_requested") is False
 
 def test_p4_empty_prompt():
-    """Empty prompt returns a valid response"""
+    """Empty prompt returns a valid response with the system part"""
     resp = _pp("", plan=False)
-    assert "system_prompt" in resp
+    assert "system" in resp
 
 def test_p4_long_prompt_no_plan():
-    """Long prompt with plan=false returns null plan"""
+    """Long prompt with plan=false echoes plan_requested=false"""
     long_text = "Tell me about " + "artificial intelligence and machine learning, " * 50
     resp = _pp(long_text, plan=False)
-    assert resp.get("plan") is None
+    assert resp.get("plan_requested") is False
 
 def test_p4_multiline_prompt():
-    """Multiline prompt with plan=false returns null plan"""
+    """Multiline prompt with plan=false echoes plan_requested=false"""
     resp = _pp("Step 1: Do this\nStep 2: Do that\nStep 3: Profit", plan=False)
-    assert resp.get("plan") is None
+    assert resp.get("plan_requested") is False
 
 def test_p5_idempotent_plan_null():
-    """Same input produces same plan type across calls"""
+    """Same input produces the same plan decision across calls"""
     msg = "Create a new data pipeline for processing logs"
     resp1 = _pp(msg, plan=False)
     resp2 = _pp(msg, plan=False)
-    r1 = resp1.get("plan")
-    r2 = resp2.get("plan")
-    assert (r1 is None and r2 is None) or (isinstance(r1, str) and isinstance(r2, str)), \
-        f"Inconsistent: {r1!r} vs {r2!r}"
+    assert resp1.get("plan") == resp2.get("plan"), \
+        f"Inconsistent: {resp1.get('plan')!r} vs {resp2.get('plan')!r}"
 
 def test_p5_stable_system_prompt_length():
     """System prompt length is stable across identical calls"""
     msg = "Create a new data pipeline"
     resp1 = _pp(msg, plan=False)
     resp2 = _pp(msg, plan=False)
-    diff = abs(len(resp1["system_prompt"]) - len(resp2["system_prompt"]))
+    diff = abs(len(resp1["system"]) - len(resp2["system"]))
     assert diff < 50, f"Prompt length diff: {diff}"
 
 def test_p6_missing_fallback():
@@ -3934,7 +3946,7 @@ def test_p6_missing_fallback():
             timeout=10
         )
         resp = json.loads(r.read())
-        assert "system_prompt" in resp, f"Missing system_prompt in fallback response"
+        assert "system" in resp, f"Missing system in fallback response"
     except urllib.error.HTTPError as e:
         # Acceptable if the channel doesn't exist and server returns 400+
         assert e.code >= 400, f"Unexpected HTTP {e.code}"
