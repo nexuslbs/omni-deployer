@@ -15443,11 +15443,12 @@ def _seg_49():
 
     def test_49_red_cancel_opaque_modal():
         """49-F: Import Tools from remote.yml (and similar) modals - red Cancel button,
-    opaque modal (not transparent)."""
+    semi-transparent backdrop (rgba(0,0,0,0.6)) over an opaque modal card."""
         pi = _g49_read("src/lib/plugin-import.ts")
         assert 'class="btn btn-danger"' in pi, "49-F: Cancel must use red btn-danger styling"
         assert "color:#fb7185" in pi, "49-F: Cancel must use red text color"
-        assert "background:#0d0d1a" in pi, "49-F: modal backdrop must be opaque (not transparent)"
+        assert "background:rgba(0,0,0,0.6)" in pi, "49-F: modal backdrop must be the semi-transparent fill (rgba(0,0,0,0.6))"
+        assert "#0d0d1a" not in pi, "49-F: modal backdrop must not be the opaque #0d0d1a fill (semi-transparent by design)"
         assert "background:var(--bg-card,#1e1e2e)" in pi, "49-F: modal card must be opaque"
         hk = _g49_read("src/lib/hooks-detail.ts")
         assert "background:var(--bg-secondary)" in hk, "49-F: hook modal card must be opaque"
