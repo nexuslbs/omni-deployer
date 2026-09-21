@@ -97,7 +97,8 @@ def oc_curl(method, path, body=None):
         body_flag = ""
     r = oc("curl -sf -X " + method + " http://localhost:8080" + path + " " + body_flag)
     if r.returncode != 0:
-        raise RuntimeError(method + " " + path + " failed: " + (r.stderr or r.stdout[:200]))
+        detail = (r.stderr or "").strip() or (r.stdout or "").strip() or "no output (curl -s hides HTTP errors)"
+        raise RuntimeError(method + " " + path + " failed (curl rc=" + str(r.returncode) + "): " + detail)
     try:
         return json.loads(r.stdout) if r.stdout.strip() else {}
     except json.JSONDecodeError:
@@ -154,15 +155,51 @@ def api_patch(path, body=None, timeout=15):
         raise RuntimeError(f"PATCH {path} connection failed: {e.reason}")
 
 
+def _api_ready():
+    """True when a REAL API route (not just /health) is serving.
+
+    /health is registered as soon as the HTTP listener is up, but the
+    plugin/secret API routes are mounted only after the startup reload
+    completes - 30s+ when an external MCP server init times out (paperclip).
+    API calls made in that window get an HTTP 404 that `curl -sf` reports
+    silently (empty stderr), which is how the 2026-09-21 omnidev restore
+    aborted on POST .../mattermost/enable with an EMPTY error message while
+    /health was already 200. Probe a real route instead.
+    """
+    s = sett()
+    if s.use_api:
+        try:
+            urllib.request.urlopen(s.base_url + "/api/plugins", timeout=10).read()
+            return True
+        except Exception:
+            return False
+    r = oc("curl -sf -o /dev/null http://localhost:8080/api/plugins")
+    return r.returncode == 0
+
+
 def wait_for_health(label="omniagent", timeout=120):
-    """Wait for omniagent health endpoint via docker exec."""
+    """Wait until omniagent is healthy AND its API routes are serving.
+
+    /health alone is NOT a sufficient readiness gate for the setup sequence
+    that follows (secret refs, secrets, platform enable/config): those routes
+    are mounted after the startup reload, so gate on one of them too.
+    """
     for i in range(timeout // 2):
         r = oc("curl -sf http://localhost:8080/health")
         if r.returncode == 0:
             print("  " + label + " is healthy")
+            break
+        time.sleep(2)
+    else:
+        raise RuntimeError(label + " did not become healthy after " + str(timeout) + "s")
+
+    print("  Waiting for " + label + " API routes...")
+    for i in range(timeout // 2):
+        if _api_ready():
+            print("  " + label + " API is ready")
             return
         time.sleep(2)
-    raise RuntimeError(label + " did not become healthy after " + str(timeout) + "s")
+    raise RuntimeError(label + " API routes did not become ready after " + str(timeout) + "s")
 
 
 def wait_for_db(service, user, db, label="db"):
