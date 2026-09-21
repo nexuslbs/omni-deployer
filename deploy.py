@@ -725,6 +725,17 @@ def generate_env(mode):
             f.write("DASHBOARD_IMAGE=local/omni-dashboard:latest\n")
             f.write("TOOLBOX_IMAGE=local/omni-toolbox:latest\n")
 
+        if mode in ("ci", "hybrid"):
+            # Deploy-suite headroom (see omni-stack/docker-compose.yml:96). The
+            # suite's GROUP 17B spawns 50 parallel `docker compose` CLI
+            # processes INSIDE omnideploy-omniagent-1: ~660 MB peak on top of a
+            # ~400 MB baseline grown by PASS 1, which the 1 GiB default cap
+            # OOM-killed in PASS 2 of two consecutive hybrid runs (exit 137,
+            # CONSTRAINT_MEMCG). The compose default stays 1024m so the shipped
+            # stack budget (<= 4.5 GB) is untouched - a deploy run opts into the
+            # larger cap explicitly here (the dev overlay keeps its own 4g).
+            f.write("OMNIAGENT_MEM_LIMIT=2048m\n")
+
     print(f"[deploy] Generated {OMNI_ENV_PATH}")
 
     # The toolbox backup scripts REQUIRE {OMNI_DIR}/.env to exist (backup.sh
