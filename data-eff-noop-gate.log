@@ -1,0 +1,6 @@
+== EFFICIENCY NOOP GATE ==
+mm=omnidev-mattermost-1 agent=omnidev-omniagent-1 channel=test-channel pg=omnidev-postgres-1
+FAIL  could not post the noop script into 'test-channel' (Error: Unable to find channel 'test-channel')
+FAIL  GATE C static_ok=1 unit_ok=0 (see /tmp/eff-unit.log)
+
+== RESULT: 0 passed, 2 failed, 0 skipped ==

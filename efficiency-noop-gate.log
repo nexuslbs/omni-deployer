@@ -1,0 +1,17 @@
+== EFFICIENCY NOOP GATE ==
+mm=omnidev-mattermost-1 agent=omnidev-omniagent-1 toolbox=omnidev-toolbox-1 pg=omnidev-postgres-1 channel=omni:test-channel
+
+--- GATE C: fatal-provider classification + efficiency unit suite
+PASS  GATE C efficiency unit suite green (13 passed; 0 failed)
+PASS  GATE C fatal-provider classification present in src/agent/efficiency.rs
+
+--- GATE A: overlapping duplicate read returns a stub, counter > 0
+      posted scripted noop thread root=eqnr6axzctrbmmi38sq15haqte
+FAIL  GATE A no duplicate-read stub within 90s (last rows for the thread: 16 noop rows)
+
+--- GATE B: merged sub_cause on a LIVE noop thread raises LIVE INTERRUPT
+      posted long noop thread root=iaidtsgh9f8mmm4pms55ys55sy
+      merged-reply attempt: {"channel": "test-channel", "channel_id": "hdid1d57a3ni58iazaafcnzm1o", "post_id": "eep9sr15yiyypeogxtyhj7eubh", "len": 44}
+SKIP  GATE B no LIVE INTERRUPT within 90s (sub-prompt rows=0) - merge path may not be exercised on this channel
+
+== RESULT: 2 passed, 1 failed, 1 skipped ==

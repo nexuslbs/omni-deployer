@@ -1,0 +1,153 @@
+### newest 4 test-channel threads
+230 completed 2026-09-23 14:29:02.062522+00
+227 completed 2026-09-23 14:28:49.736523+00
+224 completed 2026-09-23 14:27:19.191409+00
+221 completed 2026-09-23 14:19:36.576598+00
+
+### per-thread role/msg_type counts (newest 4)
+T221: agent/summary=1, cause/Cause=1, system/prompt=1
+T224: agent/summary=1, agent/tool=2, agent/tool-result=1, cause/Cause=1, system/prompt=1
+T227: agent/summary=1, agent/tool=10, agent/tool-result=10, cause/Cause=1, system/prompt=1
+T230: agent/summary=1, cause/Cause=1, system/prompt=1
+
+### AGENT messages of newest 4 threads
+T221 s2 it=1
+This is a reply to your message from the **test provider** `noop` using the model **test-tool-caller**.
+Your original message:
+> why is this taking so long? stop and report.
+---
+T224 s2 it=2
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 0, "limit": 120}
+---
+T224 s3 it=2
+//! EFF-1: engine-level efficiency contract (root-cause fix for the
+//! re-read / no-progress / ignored-stop-signal loop
+
+[... truncated: showing chars 0-120 of 27734 total chars]
+---
+T224 s4 it=3
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 60, "limit": 120}
+---
+T224 s6 it=4
+This is a reply to your message from the **test provider** `noop` using the model **test-tool-caller**.
+All **2** tool call batch(es) completed.
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "//! EFF-1: engine-level efficiency contract (root-cause fix for the\n//! re-read / no-progress / ignored-stop-
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "Error executing tool 'filesystem__read': no tool result was produced. Retry the tool or handle this error."}
+---
+T227 s2 it=2
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 0, "limit": 40}
+---
+T227 s3 it=2
+//! EFF-1: engine-level efficiency contr
+
+[... truncated: showing chars 0-40 of 27734 total chars]
+---
+T227 s4 it=3
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 200, "limit": 40}
+---
+T227 s5 it=3
+ide-effect free so it can be
+//! unit-te
+
+[... truncated: showing chars 200-240 of 27734 total chars]
+---
+T227 s6 it=4
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 400, "limit": 40}
+---
+T227 s7 it=4
+s, iter)` - has this read *already* been
+
+[... truncated: showing chars 400-440 of 27734 total chars]
+---
+T227 s8 it=5
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 600, "limit": 40}
+---
+T227 s9 it=5
+erent
+//!    `offset`/`limit` (or a reor
+
+[... truncated: showing chars 600-640 of 27734 total chars]
+---
+T227 s10 it=6
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 800, "limit": 40}
+---
+T227 s11 it=6
+20x, varying limits).
+//! 2. `steering(i
+
+[... truncated: showing chars 800-840 of 27734 total chars]
+---
+T227 s12 it=7
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 1000, "limit": 40}
+---
+T227 s13 it=7
+ere is no hard cap and no silent truncat
+
+[... truncated: showing chars 1000-1040 of 27734 total chars]
+---
+T227 s14 it=8
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 1200, "limit": 40}
+---
+T227 s15 it=8
+ent balance /
+//!    auth failures are t
+
+[... truncated: showing chars 1200-1240 of 27734 total chars]
+---
+T227 s16 it=9
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 1400, "limit": 40}
+---
+T227 s17 it=9
+e_reads`, `readonly_streak`, `state_chan
+
+[... truncated: showing chars 1400-1440 of 27734 total chars]
+---
+T227 s18 it=10
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 1600, "limit": 40}
+---
+T227 s19 it=10
+ead` call.
+#[derive(Debug, Clone, Copy, 
+
+[... truncated: showing chars 1600-1640 of 27734 total chars]
+---
+T227 s20 it=11
+filesystem__read: {"path": "/app/src/agent/efficiency.rs", "offset": 1800, "limit": 40}
+---
+T227 s21 it=11
+ode::Chars => "chars",
+            Pagin
+
+[... truncated: showing chars 1800-1840 of 27734 total chars]
+---
+T227 s22 it=12
+This is a reply to your message from the **test provider** `noop` using the model **test-tool-caller**.
+All **10** tool call batch(es) completed.
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "//! EFF-1: engine-level efficiency contr\n\n[... truncated: showing chars 0-40 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "ide-effect free so it can be\n//! unit-te\n\n[... truncated: showing chars 200-240 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "s, iter)` - has this read *already* been\n\n[... truncated: showing chars 400-440 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "erent\n//!    `offset`/`limit` (or a reor\n\n[... truncated: showing chars 600-640 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "20x, varying limits).\n//! 2. `steering(i\n\n[... truncated: showing chars 800-840 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "ere is no hard cap and no silent truncat\n\n[... truncated: showing chars 1000-1040 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "ent balance /\n//!    auth failures are t\n\n[... truncated: showing chars 1200-1240 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "e_reads`, `readonly_streak`, `state_chan\n\n[... truncated: showing chars 1400-1440 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "ead` call.\n#[derive(Debug, Clone, Copy, \n\n[... truncated: showing chars 1600-1640 of 27734 total chars]"}
+  **Batch (1 tools):**
+    ✅ `filesystem__read` -> {"text": "ode::Chars => \"chars\",\n            Pagin\n\n[... truncated: showing chars 1800-1840 of 27734 total chars]"}
+---
+T230 s2 it=1
+This is a reply to your message from the **test provider** `noop` using the model **test-tool-caller**.
+Your original message:
+> why is this taking so long? stop and report.
+---
