@@ -85,6 +85,13 @@ Setup
   agent resolves `api_key: $secret:DEEPSEEK_API_KEY` from `config/models.yml:12`.
 - Dev agent container `omnidev-omniagent-1` runs the EFF build
   (`/target/release/omniagent`, `omniagent@a70cace`).
+- Provider identity evidence: the `eff-live` channel config pins `provider: deepseek` /
+  `model: deepseek-v4-flash`, the agent logs the eff-live channel handler starting at
+  16:28:18 and processing thread 294 with no provider/auth error, and the thread carries
+  real `token_usage` for all LLM turns. No explicit outbound `api.deepseek.com` log line is
+  emitted by the agent, so the serving model is taken from the channel config plus the
+  funded secret above (the dev noop provider's request log shows only health probes in
+  this window).
 
 Task (same work shape as the incident: one edit + one commit): *"Small edit task (LIVE
 efficiency measurement, one repo, no exploration needed): append `gamma` to
