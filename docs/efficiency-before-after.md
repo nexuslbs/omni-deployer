@@ -63,6 +63,65 @@ server-side A/B (`run-corpus-ab.py` on the real task with a real provider) is th
 measurement gate; the numbers to report are `duplicate_calls`, total tokens and
 time-to-first-commit from `scripts/efficiency-metrics.py`.
 
+## MEASURED AFTER (real provider, dev stack, omniagent@be645ea, 2026-09-23)
+
+Two independent real-provider measurements, taken after the corpus vehicle was repaired
+(see "Measurement vehicle" below).
+
+### 1. Live end-to-end on the canonical shape (the 2874 task, re-run)
+
+`/opt/workspace/tmp/eff-canary` was reset to the browser-**baked** state (`7330780`), then the guard
+binary `be645ea` ran the task through the MM dev-channel (thread **809**, deepseek-v4-flash, real LLM):
+
+| metric | 2874 (BEFORE, production) | thread 809 (AFTER, guard build) | factor |
+|---|---|---|---|
+| wall time | 87.2 min | **4.1 min** | 21x |
+| LLM calls / iterations | 247 | **30** | 8.2x |
+| prompt tokens | 14,726,047 | **1,161,297** | 12.7x |
+| completion tokens | 1,032,259 | 40,379 | 25.6x |
+| prompt tokens per state-changing op | 321,598 | **37,142** | 8.7x |
+| time to first commit | 56.5 min | **3.6 min** | 15.7x |
+| duplicate re-executions | `docker-compose.yml` read 20x (different offsets), `git status` 5x on an unchanged repo | **0** (`duplicate_calls=0`, `efficiency-metrics.py` exit 0) | - |
+| tool calls | 854 (378 read / 336 git / 140 grep) vs 3 edits | 77 vs 9 edits | 11x |
+| termination | provider **402 Insufficient Balance**, work unfinished | commit `8e660c8`, repo clean, Dockerfile + both compose files + workstation.yml changed | done |
+
+Small edit shape (`/opt/workspace/tmp/eff-live`: read `data.txt`, append `gamma`, one commit), thread
+**788** on the same guard build: **7 iterations, 0.9 min, 153,004 prompt + 2,260 completion tokens,
+1 commit, `duplicate_calls=0`, `tok/state-op` 18,399, grade OK**. The agent used 4 tool calls for the
+edit (read -> write -> `git add` -> `git commit`) and did not re-read or re-check anything.
+
+### 2. Canonical A/B corpus (runner, real provider)
+
+`run-corpus-ab.py --candidate <pre-guard ref> --tasks t02,t05 --skip-long` (side a = the guard build
+`be645ea`, side b = the same repo at a pre-guard ref), all real LLM traffic:
+
+| side b (baseline) | tasks PASS | A in_tok | B in_tok | A dup markers | B dup markers | A compactions | B compactions |
+|---|---|---|---|---|---|---|---|
+| `6c46b6e` (immediately pre-guard) | 2/2 vs 2/2 | 207,024 | 209,384 | 2 | 2 | 0 | 0 |
+| `3d5bce1` | 2/2 vs 2/2 | 208,656 | 259,645 | 2 | 3 | 0 | 1 |
+
+No success-rate loss, no token regression, no outcome divergence: the guard is behaviour-preserving on
+the verification shapes (t02 re-read-heavy corpus verification, t05 git-state verification) while
+removing the replays it is meant to remove. Run dirs: `/opt/workspace/tmp/corpus-ab/20260923-221621`
+(`6c46b6e`), `/opt/workspace/tmp/corpus-ab/20260923-220331` (`3d5bce1`).
+
+> Honest scope: the BEFORE column of table 1 is production thread 2874 (production settings, older
+> binary, its own prompt), the AFTER is the same task shape re-run in omnidev; table 2 is the
+> same-environment A/B (dev stack, side a vs side b). Table 1 shows the improvement on the shape the
+> operator complained about; table 2 shows the guard costs nothing measurable.
+
+### Measurement vehicle (why the corpus could not run before)
+
+The dev core resolves its config from its own `OMNI_DIR` = **`/opt/omni-stack/config`**
+(container-local; the dev overlay leaves `OMNI_DIR` at the base value). The runner defaulted to
+`/opt/omni/config`, so the toolset it wrote was never loaded: the running core stayed on its default
+config, the mattermost platform logged `No access_token_name configured` / `No access_token provided
+... without inbound capability`, and every corpus post was dropped (`status=timeout-no-thread` after
+1800 s). The dev `channels.yml` entry `mattermost-dev-channel` also carried the stale channel id
+`ff3j6p7j5jy1ickhoits4mo1pr`; the live dev-channel is `r88if3nhxjbgjd7n6jcn1e5rmy`. Fixed in
+`run-corpus-ab.py` (`AGENT_CONFIG_DIR=/opt/omni-stack/config`, `--mm-channel`/`CORPUS_MM_CHANNEL`,
+empty-profile fallback instead of aborting) and in the dev runtime `channels.yml`.
+
 ## How to reproduce every number above
 
 ```bash

@@ -21,10 +21,24 @@ efficiency-gate : 28 passed, 0 failed            (SKIP_TESTS=1)
 noop-gate       : 8 passed, 0 failed, 0 skipped  (GATE A 3 stubs / 1 executed; A2 executed; B LIVE INTERRUPT; C 10 unit tests)
 ```
 
-## Still open (tester scope)
+## Real-provider measurements (2026-09-23, omniagent@be645ea)
 
-The canonical A/B corpus (`scripts/run-corpus-ab.py`, browser-free-image task) with a
-real provider — it needs a resolvable candidate ref in `/opt/workspace/omniagent` and a
-corpus login path; the harness previously failed from the toolbox container
-(`git: not found`, login 403). Report `duplicate_calls`, total tokens and
-time-to-first-commit before/after.
+The canonical A/B corpus and the live end-to-end run are now MEASURED (dev stack, real
+DeepSeek provider); full tables in `docs/efficiency-before-after.md`.
+
+- **Live end-to-end, canonical 2874 shape** (browser-free workstation image, repo
+  `/opt/workspace/tmp/eff-canary` reset to the baked state): thread 809 - **4.1 min, 30
+  iterations, 1.16M prompt tokens, 0 duplicate calls, commit `8e660c8`**. Incidents 2874:
+  87.2 min / 247 calls / 14.7M prompt tokens / no commit.
+- **Small edit shape** (`/opt/workspace/tmp/eff-live`): thread 788 - **0.9 min, 7
+  iterations, 153k prompt tokens, 1 commit, `duplicate_calls=0`.**
+- **A/B corpus** `run-corpus-ab.py --tasks t02,t05 --skip-long`, side a = `be645ea`:
+  2/2 PASS on both sides, 0 compactions, duplicate markers 2 vs 2 (`6c46b6e`) and 2 vs 3
+  (`3d5bce1`) - no success-rate or token regression.
+
+Vehicle fix (this is why the harness had failed): the dev core reads its config from its
+own `OMNI_DIR` = `/opt/omni-stack/config`; the runner defaulted to `/opt/omni/config`, so
+its toolset was never loaded and every corpus post was dropped (`timeout-no-thread`). The
+default is corrected, `--mm-channel`/`CORPUS_MM_CHANNEL` was added, and an empty omni
+profile in the checkout now falls back to the empty profile instead of aborting. The dev
+runtime `channels.yml` also carried a stale dev-channel id and was corrected.
