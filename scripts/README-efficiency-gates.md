@@ -69,3 +69,32 @@ Balance`. So the scripted gates above prove the **mechanism**, but the token-red
 Re-run `scripts/run-corpus-ab.py` plus `scripts/efficiency-metrics.py --json` on the resulting
 thread ids once a funded key is available, and paste the two rows into
 `docs/efficiency-before-after.md`.
+
+## LIVE measurement (real provider) — 2026-09-23
+
+Gate: live end-to-end on the dev stack with a real provider on a small edit task.
+
+Recipe actually used:
+1. Fund/provide a provider key in the dev secret store (`secrets.name =
+   DEEPSEEK_API_KEY`, `config/models.yml:12` resolves `$secret:DEEPSEEK_API_KEY`).
+2. Point a dev channel at it (`eff-live`, `provider: deepseek`,
+   `model: deepseek-v4-flash`, `omni-root/config/channels.yml:151`) — see
+   `scripts/eff-live-setup.py` for the channel/fixture preparation, and
+   `scripts/post-by-channel-id.py` to post the task into the channel by id.
+3. Fixture repo `/opt/workspace/tmp/eff-live` (`data.txt`, commit `5e73dad`); task =
+   append `gamma` + commit.
+4. Measure: `PG_CONTAINER=omnidev-postgres-1 THREADS=<id> python3 efficiency-metrics.py --json`.
+
+Result — thread 294, `grade: OK` (exit 0): 8 tool calls, 1 read-only, 1 edit, 1 commit,
+**0 duplicate reads**, read:write **0.20**, 124,456 tokens, 24,891 tokens/state-op,
+0.8 min wall, time-to-first-commit 0.4 min. Commit `1449275` landed in the fixture repo
+inside the thread window. Before/after table: `docs/efficiency-before-after.md`.
+
+Note: a commit made through `git__run_command` argv (`git commit …`) is now counted as a
+commit by `efficiency-metrics.py`; before that fix the live thread was graded
+`BREACH: edits without commit` although the commit existed.
+
+Still open: the canonical A/B corpus (`scripts/run-corpus-ab.py`, browser-free-image
+task) is not run — it requires a resolvable candidate ref in `/opt/workspace/omniagent`
+and a corpus login path that currently fails from the toolbox container
+(`git: not found`, harness login 403).

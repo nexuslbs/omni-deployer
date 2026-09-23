@@ -70,3 +70,58 @@ PG_CONTAINER=omni-stack-postgres-1 THREADS=2874,2920 python3 scripts/efficiency-
 
 Exit code 1 + a `grade` column with the reason when a thread breaches
 `duplicate_reads > 0`, `r:w > 5`, `edits without commit`, or `tokens/state-op > 100k`.
+
+## Measured LIVE (real provider, dev stack) — 2026-09-23 16:28–16:29 UTC
+
+Gate: *"Live end-to-end on omnidev with a real provider on a small edit task: completes with
+no duplicate read/verify calls; report the measured time/tokens."*
+
+Setup
+- Channel `eff-live` (dev `omni-root/config/channels.yml:151`, `provider: deepseek`,
+  `model: deepseek-v4-flash`), fixture repo `/opt/workspace/tmp/eff-live`
+  (`data.txt` = alpha/beta, commit `5e73dad`).
+- Real provider credentials: the dev secret store (table `secrets`, name
+  `DEEPSEEK_API_KEY`) was populated at 16:14 UTC (35 chars, `sk-6…324`, funded); the
+  agent resolves `api_key: $secret:DEEPSEEK_API_KEY` from `config/models.yml:12`.
+- Dev agent container `omnidev-omniagent-1` runs the EFF build
+  (`/target/release/omniagent`, `omniagent@a70cace`).
+
+Task (same work shape as the incident: one edit + one commit): *"Small edit task (LIVE
+efficiency measurement, one repo, no exploration needed): append `gamma` to
+`data.txt` and commit."*
+
+Measured (thread 294, `scripts/efficiency-metrics.py` → `grade: OK`, exit 0):
+
+| metric | thread 2874 (BEFORE) | thread 294 (LIVE AFTER) |
+|---|---|---|
+| tool calls | 977 | 8 |
+| read-only | 580 | 1 |
+| edits | 8 | 1 |
+| commits | 6 | 1 |
+| duplicate reads | (loop, unmeasured) | **0** |
+| read:write ratio | 11.84 | **0.20** |
+| prompt + completion tokens | 14,726,047 + 1,032,259 = 15,758,306 | 122,630 + 1,826 = 124,456 |
+| tokens per state-changing op | 321,598 | **24,891** (~13x better) |
+| wall clock | 87.2 min | **0.8 min** |
+| time to first commit | 56.5 min | **0.4 min** |
+
+The commit `1449275 eff-live: add gamma` (16:29:17 UTC) landed inside the thread window
+(16:28:54 → 16:29:42 UTC), i.e. the thread ended in a verified state change, with zero
+duplicate reads and no status/diff loop (tool order: one `filesystem__read` → one
+`filesystem__write` → `git__run_command` add/commit → `git__run_command rev-parse`).
+
+Duplicate-read stub, live in the dev DB: threads 297 and 300 each carry 1 persisted
+`metadata.eff = "duplicate-read"` tool-result row (16 such rows in total in the dev DB).
+
+### Honest scope of this measurement
+- This is a **small-edit shape** measurement on a real provider, not the canonical
+  "reapply the browser-free image" A/B corpus (workstream T-4 /
+  `task_omodev_internal_plan_s11`), which is still **not run**: `scripts/run-corpus-ab.py`
+  needs a resolvable candidate ref in `/opt/workspace/omniagent` plus the corpus harness
+  login, which fails in the toolbox container (`git: not found`; harness login 403).
+  The token multiple above compares different task sizes, so it is **indicative**; the
+  ratio/timing/duplicate-read columns are directly comparable (same shape: read → edit →
+  commit).
+- `scripts/efficiency-metrics.py` counts a commit performed through
+  `git__run_command` argv (`git commit …`) as a commit; without that fix thread 294 was
+  reported as a false `BREACH: edits without commit` even though `1449275` exists.

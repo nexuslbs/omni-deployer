@@ -111,13 +111,17 @@ WITH t AS (
         OR content LIKE '[duplicate read%'
         OR content LIKE '%no payload re-injected%')) AS dup,
     count(*) FILTER (WHERE msg_type = 'tool-result'
-        AND msg_subtype IN ('git__commit_and_push','git__sync')) AS commits,
+        AND (msg_subtype IN ('git__commit_and_push','git__sync')
+             OR (msg_subtype = 'git__run_command'
+                 AND content LIKE '%"command":"git commit%'))) AS commits,
     COALESCE(SUM(COALESCE(NULLIF(token_usage::text, '{{}}')::jsonb ->> 'prompt_tokens', '0')::bigint), 0) AS ptok,
     COALESCE(SUM(COALESCE(NULLIF(token_usage::text, '{{}}')::jsonb ->> 'completion_tokens', '0')::bigint), 0) AS ctok,
     min(created_at) AS t0,
     max(created_at) AS t1,
     min(created_at) FILTER (WHERE msg_type = 'tool-result'
-        AND msg_subtype IN ('git__commit_and_push','git__sync')) AS t_commit
+        AND (msg_subtype IN ('git__commit_and_push','git__sync')
+             OR (msg_subtype = 'git__run_command'
+                 AND content LIKE '%"command":"git commit%'))) AS t_commit
   FROM messages
   WHERE {where}
   GROUP BY thread_id
