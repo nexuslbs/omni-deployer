@@ -67,3 +67,11 @@ id_ed25519
 **/sessions.json
 **/playwright-secrets.*
 **/pw-secrets.*
+
+# ─────────────────────────────────────────────
+# Efficiency gate scratch output (thread 2954): the noop gate writes dumps and
+# logs next to the repo root; they are generated artifacts and never committed.
+# ─────────────────────────────────────────────
+/gate-*.txt
+/t2[0-9]*.txt
+/*.log

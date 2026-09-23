@@ -32,11 +32,13 @@ TOOLBOX_CONTAINER="${TOOLBOX_CONTAINER:-$(find_ctr 'toolbox-1$')}"
 MM_TEAM="${MM_TEAM:-omni}"
 MM_CHANNEL="${MM_CHANNEL:-test-channel}"
 MM_LOGIN="${MM_LOGIN:-lucasbasquerotto}"
-MM_PASSWORD="${MM_PASSWORD:-Mattermost_Fresh_Start_1}"
+# The Mattermost login password is NEVER hardcoded here: export it (or the
+# repo-wide MATTERMOST_TEST_PASSWORD secret) before running the gate.
+MM_PASSWORD="${MM_PASSWORD:-${MATTERMOST_TEST_PASSWORD:-}}"
 DB_USER="${DB_USER:-omniagent}"
 DB_NAME="${DB_NAME:-omniagent}"
 TIMEOUT="${TIMEOUT:-180}"
-POST_PY="${POST_PY:-/opt/omni-stack/omni-deployer/scripts/noop-gate-post.py}"
+POST_PY="${POST_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/noop-gate-post.py}"
 
 pass=0; fail=0; skip=0
 ok()  { echo "PASS  $1"; pass=$((pass+1)); }
@@ -52,6 +54,12 @@ if [ -z "${MM_CONTAINER:-}" ] || [ -z "${AGENT_CONTAINER:-}" ] || [ -z "${TOOLBO
   sk "dev stack not fully up (mattermost/omniagent/toolbox container missing)"
   echo "== RESULT: $pass passed, $fail failed, $skip skipped =="
   exit 0
+fi
+
+if [ -z "$MM_PASSWORD" ]; then
+  echo "FAIL  MM_PASSWORD (or MATTERMOST_TEST_PASSWORD) is not set - the gate never hardcodes it"
+  echo "== RESULT: $pass passed, $fail failed, $skip skipped =="
+  exit 1
 fi
 
 # ---------------------------------------------------------------- helpers
@@ -81,10 +89,12 @@ post_reply() {
 READ_ARGS='{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}'
 SCRIPT_A="[[{\"name\":\"d1\",\"tool\":\"filesystem__read\",\"arguments\":$READ_ARGS}],[{\"name\":\"d2\",\"tool\":\"filesystem__read\",\"arguments\":$READ_ARGS}],[{\"name\":\"d3\",\"tool\":\"filesystem__read\",\"arguments\":$READ_ARGS}],[{\"name\":\"d4\",\"tool\":\"filesystem__read\",\"arguments\":$READ_ARGS}]]"
 
-# GATE A2: the same read, then a state change (notes write), then the same read
-# again - the third call must EXECUTE (the ledger was invalidated), i.e. it must
-# NOT return the duplicate stub.
-SCRIPT_A2='[[{"name":"w1","tool":"notes__note_write","arguments":{"name":"eff-gate.md","content":"state change"}}],[{"name":"e1","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}],[{"name":"e2","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}]]'
+# GATE A2: read -> SAME read -> state change (notes write) -> SAME read again.
+# The second call must be a stub (the guard is provably active for this exact
+# invocation), and the LAST call must EXECUTE because the state change
+# invalidated the ledger. The assertions are keyed on the ROW ID of the write,
+# so a read that ran BEFORE the change can never satisfy them.
+SCRIPT_A2='[[{"name":"r1","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}],[{"name":"r2","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}],[{"name":"w1","tool":"notes__note_write","arguments":{"name":"eff-gate.md","content":"state change"}}],[{"name":"r3","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}]]'
 
 # GATE B: MANY sequential batches keep the thread processing long enough for a
 # merged operator reply (live interrupt) to land mid-flight.
@@ -167,12 +177,16 @@ if [ -z "$ROOT_2_ID" ]; then
   bad "GATE A2 could not post the script (${ROOT_2})"
 else
   echo "      posted invalidation script root=$ROOT_2_ID"
-  # Wait until the read AFTER the note write landed; it must be an EXECUTED read.
-  ROW2=$(wait_for "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND msg_type='tool-result' AND msg_subtype='filesystem__read' AND NOT ($DUP_PRED) AND content LIKE '%efficiency%'" "$TIMEOUT")
-  if [ "${ROW2:-0}" -ge 1 ]; then
-    ok "GATE A2 the identical read after the state change EXECUTED (executed read rows=$ROW2)"
+  # Keyed on the ROW ID of the state-change row: the gate can never pass
+  # vacuously on a read that ran BEFORE the change.
+  W_ID=$(wait_for "SELECT id FROM messages WHERE created_at >= '$T1' AND msg_type='tool-result' AND msg_subtype LIKE '%note%write%' ORDER BY id LIMIT 1" "$TIMEOUT")
+  STUB_BEFORE=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id < ${W_ID:-0} AND msg_subtype='filesystem__read' AND ($DUP_PRED)")
+  AFTER_EXEC=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id > ${W_ID:-0} AND msg_type='tool-result' AND msg_subtype='filesystem__read' AND NOT ($DUP_PRED) AND length(content) > 200")
+  AFTER_DUP=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id > ${W_ID:-0} AND msg_subtype='filesystem__read' AND ($DUP_PRED)")
+  if [ "${STUB_BEFORE:-0}" -ge 1 ] && [ "${AFTER_EXEC:-0}" -ge 1 ] && [ "${AFTER_DUP:-0}" -eq 0 ]; then
+    ok "GATE A2 guard active before the change (stub rows=$STUB_BEFORE) AND the identical read AFTER the state change EXECUTED (executed=$AFTER_EXEC stubs_after=$AFTER_DUP)"
   else
-    bad "GATE A2 no executed read after the state change (rows=$ROW2)"
+    bad "GATE A2 invalidation not observable: stub_before=$STUB_BEFORE executed_after=$AFTER_EXEC stub_after=$AFTER_DUP (write row id=${W_ID:-<none>})"
   fi
 fi
 

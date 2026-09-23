@@ -9,7 +9,7 @@ server rejects ("could not find the page /api/v4/posts"), so the harness uses
 Env:
   MM_URL            base URL              (default http://mattermost:8065)
   MM_LOGIN          login id              (default lucasbasquerotto)
-  MM_PASSWORD       password              (default Mattermost_Fresh_Start_1)
+  MM_PASSWORD       password              (required; MATTERMOST_TEST_PASSWORD accepted)
   MM_TEAM           team name             (default omni)
   MM_CHANNEL        channel name          (default test-channel)
   MM_MESSAGE_FILE   file with the message (default: stdin)
@@ -23,7 +23,7 @@ import urllib.request
 
 MM_URL = os.environ.get("MM_URL", "http://mattermost:8065").rstrip("/")
 LOGIN = os.environ.get("MM_LOGIN", "lucasbasquerotto")
-PASSWORD = os.environ.get("MM_PASSWORD", "Mattermost_Fresh_Start_1")
+PASSWORD = os.environ.get("MM_PASSWORD") or os.environ.get("MATTERMOST_TEST_PASSWORD") or ""
 TEAM = os.environ.get("MM_TEAM", "omni")
 CHANNEL = os.environ.get("MM_CHANNEL", "test-channel")
 MESSAGE_FILE = os.environ.get("MM_MESSAGE_FILE", "")
@@ -45,6 +45,9 @@ def req(path, body=None, token=None):
 
 def login():
     """Mattermost returns the session token in the `Token` response header."""
+    if not PASSWORD:
+        raise SystemExit(
+            "MM_PASSWORD (or MATTERMOST_TEST_PASSWORD) must be set - it is never hardcoded")
     body, headers = req("/api/v4/users/login", {"login_id": LOGIN, "password": PASSWORD})
     tok = headers.get("Token") or headers.get("token") or body.get("token")
     if not tok:
