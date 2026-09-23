@@ -49,6 +49,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CORPUS_DIR = os.path.join(SCRIPT_DIR, "corpus")
 DEFAULT_OUTROOT = "/opt/workspace/tmp/corpus-ab"
 OMNIAGENT_CONTAINER = "omnidev-omniagent-1"
+# The dev core keeps its runtime config in the agent container's OMNI_DIR
+# (/opt/omni/config). The old harness hard-coded /opt/omni-stack/config (the
+# PROD mount) and therefore never saw or wrote the dev stack's config.
+AGENT_CONFIG_DIR = os.environ.get("AGENT_CONFIG_DIR", "/opt/omni/config")
+# Host path of the SAME dir (container /opt/omni == omni-root on the host for the
+# omnidev stack); used for local reads of profiles.yml / toolsets.yml so the
+# harness never reads the production config checkout at host /opt/omni.
+HOST_AGENT_CONFIG = os.environ.get(
+    "HOST_AGENT_CONFIG", "/opt/workspace/omni-root/config")
 POSTGRES_CONTAINER = "omnidev-postgres-1"
 API_BASE = "http://omnidev-omniagent-1:8080"
 MM_BASE = "http://mattermost:8065"
@@ -310,7 +319,7 @@ def _toolset_yaml():
 
 
 def read_plugins_yml():
-    r = oc(OMNIAGENT_CONTAINER, "cat /opt/omni-stack/config/plugins.yml 2>/dev/null")
+    r = oc(OMNIAGENT_CONTAINER, "cat %s/plugins.yml 2>/dev/null" % AGENT_CONFIG_DIR)
     return r.stdout if r.returncode == 0 else None
 
 
@@ -318,14 +327,15 @@ def write_plugins_yml(content, run):
     tmp = os.path.join(run["outdir"], "plugins.yml.tmp")
     with open(tmp, "w") as f:
         f.write(content)
-    r = sh("docker cp %s %s:/opt/omni-stack/config/plugins.yml" % (tmp, OMNIAGENT_CONTAINER))
+    r = sh("docker cp %s %s:%s/plugins.yml" % (tmp, OMNIAGENT_CONTAINER,
+                                               AGENT_CONFIG_DIR))
     if r.returncode != 0:
         raise RuntimeError("could not write plugins.yml into container: " + r.stderr[:300])
     os.unlink(tmp)
 
 
 def read_profiles_yml():
-    r = oc(OMNIAGENT_CONTAINER, "cat /opt/omni-stack/config/profiles.yml 2>/dev/null")
+    r = oc(OMNIAGENT_CONTAINER, "cat %s/profiles.yml 2>/dev/null" % AGENT_CONFIG_DIR)
     return r.stdout if r.returncode == 0 else None
 
 
@@ -333,8 +343,8 @@ def write_profiles_yml(content, run):
     tmp = os.path.join(run["outdir"], "profiles.yml.tmp")
     with open(tmp, "w") as f:
         f.write(content)
-    r = sh("docker cp %s %s:/opt/omni-stack/config/profiles.yml" %
-           (tmp, OMNIAGENT_CONTAINER))
+    r = sh("docker cp %s %s:%s/profiles.yml" %
+           (tmp, OMNIAGENT_CONTAINER, AGENT_CONFIG_DIR))
     if r.returncode != 0:
         raise RuntimeError("could not write profiles.yml into container: " +
                            r.stderr[:300])
@@ -347,7 +357,8 @@ def _repo_allowlist():
     runs never depend on a hard-coded checkout path. Corpus threads only get
     the tools the profile declares (profiles.yml allowed_tools); mirroring the
     runtime allowlist keeps the dev profile identical to production."""
-    candidates = ["/opt/omni/config/profiles.yml"]
+    candidates = [os.path.join(HOST_AGENT_CONFIG, "profiles.yml"),
+                  os.path.join(AGENT_CONFIG_DIR, "profiles.yml")]
     if os.environ.get("OMNI_SOURCE_CONFIG"):
         candidates.append(os.environ["OMNI_SOURCE_CONFIG"])
     for p in candidates:
@@ -359,6 +370,22 @@ def _repo_allowlist():
         m = re.search(r"profiles:\s*\n\s+omni:\s*\n(?P<body>(?:[ \t].*\n|\n)*)", txt)
         if not m:
             continue
+        tools = re.findall(r"^\s+-\s+(\S+)\s*$", m.group("body"), re.M)
+        if tools:
+            return tools
+    # Fallback: the omni repo no longer ships a config/profiles.yml carrying
+    # allowed_tools, but toolsets.yml IS the runtime toolset source of truth
+    # (toolsets.all). Mirror that instead of aborting the whole corpus run.
+    ts = os.environ.get("OMNI_TOOLSETS",
+                        os.path.join(HOST_AGENT_CONFIG, "toolsets.yml"))
+    try:
+        with open(ts) as f:
+            txt = f.read()
+    except Exception:
+        return None
+    m = re.search(r"^toolsets:\s*\n\s+all:\s*\n(?P<body>(?:[ \t].*\n|\n)*)",
+                  txt, re.M)
+    if m:
         tools = re.findall(r"^\s+-\s+(\S+)\s*$", m.group("body"), re.M)
         if tools:
             return tools
@@ -1042,7 +1069,9 @@ def main(argv):
 
     mm_token = mm_login()
     team_id = mm_get("/api/v4/users/me/teams", mm_token)[0]["id"]
-    mm_channel_id = mm_find_channel(mm_token, team_id, "dev-channel")
+    mm_channel_name = os.environ.get("MM_CHANNEL", "dev-channel")
+    mm_channel_id = os.environ.get("MM_CHANNEL_ID") or mm_find_channel(
+        mm_token, team_id, mm_channel_name)
     if not mm_channel_id:
         raise SystemExit("MM channel dev-channel not found")
     # make sure testuser is a member of the channel (best effort)
@@ -1051,7 +1080,8 @@ def main(argv):
                 {"user_id": mm_get("/api/v4/users/me", mm_token)["id"]}, mm_token)
     except Exception:
         pass
-    print("mm channel: dev-channel (%s)" % mm_channel_id)
+    print("mm channel: %s (%s)" % (os.environ.get("MM_CHANNEL",
+          "dev-channel"), mm_channel_id))
 
     # Optional candidate build for side b (done up-front so side a is never
     # disturbed by the build; side a always runs the deployed baseline).

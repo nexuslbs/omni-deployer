@@ -47,6 +47,14 @@ DB_USER = os.environ.get("DB_USER", "omniagent")
 DB_NAME = os.environ.get("DB_NAME", "omniagent")
 PG_USER_ENV = os.environ.get("PG_USER_ENV", "POSTGRES_USER")
 
+# EXPECT_EDIT=1 marks the measured thread(s) as EDIT-SHAPED: a task whose whole
+# point was to change a file and land a commit. Without it, `edits == 0 &&
+# commits == 0` cannot be graded (a pure Q&A thread is legitimately edit-free),
+# which is exactly the blind spot that graded the canonical non-delivery thread
+# OK. With it, non-delivery is a BREACH.
+EXPECT_EDIT = (os.environ.get("EXPECT_EDIT") or os.environ.get("EXPECT") or "").strip().lower() in (
+    "1", "true", "yes", "edit", "edit-shaped", "edit_shaped")
+
 READ_ONLY = (
     "filesystem__read",
     "filesystem__list",
@@ -178,6 +186,8 @@ def main() -> int:
         per_state = (toks / st) if st else float(toks)
         grade = "OK"
         reasons = []
+        if EXPECT_EDIT and edits == 0 and commits == 0:
+            reasons.append("edit-shaped task with no edit and no commit (non-delivery)")
         if dup > 0:
             reasons.append("%d duplicate read(s)" % dup)
         if st and ratio > 5:
