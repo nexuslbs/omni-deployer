@@ -90,6 +90,35 @@ Small edit shape (`/opt/workspace/tmp/eff-live`: read `data.txt`, append `gamma`
 1 commit, `duplicate_calls=0`, `tok/state-op` 18,399, grade OK**. The agent used 4 tool calls for the
 edit (read -> write -> `git add` -> `git commit`) and did not re-read or re-check anything.
 
+### 1b. Same-environment BEFORE (dev stack, identical prompt, real provider)
+
+The same canonical task was re-run on the dev stack with the binary swapped in place (worktree build
+of the ref, `/target/release/omniagent` replaced and restarted), so the ONLY difference is the agent
+build:
+
+| metric | BEFORE `6c46b6e` (no guard) thr 829 | BEFORE `3d5bce1` (old guard) thr 826 | AFTER `be645ea` (CallLedger) thr 809 | production 2874 |
+|---|---|---|---|---|
+| wall time | 10.9 min | 2.0 min | **4.1 min** | 87.2 min |
+| iterations | 64 | 13 | 30 | 247 |
+| prompt tokens | 3,004,068 | 513,655 | **1,161,297** | 14,726,047 |
+| completion tokens | 111,373 | 18,692 | 40,379 | 1,032,259 |
+| tool calls | 146 | 41 | 77 | 854 |
+| `filesystem__read` calls | 150 | 18 | 24 | 378 |
+| `git__run_command` calls | 89 | 11 | 24 | 336 |
+| tokens per state-changing op | **104,924 (BREACH)** | 18,472 | 37,142 (OK) | 321,598 |
+| time to first commit | 10.2 min | 1.8 min | 3.6 min | 56.5 min |
+| commits | 2 | 1 | 1 | 0 |
+| outcome | PASS, commit `a124c89` | PASS, commit `af22e70` | PASS, commit `8e660c8` | provider 402, unfinished |
+
+Reading it honestly: against the immediately pre-guard build (`6c46b6e`) the guard build cuts wall
+time 2.7x, prompt tokens 2.6x, tool calls 1.9x and pulls `tok/state-op` back under the breach
+threshold (105k -> 37k) while the no-guard run breaches it. But the older in-tree guard build
+(`3d5bce1`) happened to finish the same task faster (2.0 min / 514k tokens), i.e. **one sample per
+side and the run-to-run variance of this shape is of the same order as the effect**; the same build
+was also the one whose guard never fired (no byte-identical replay in that run). The guard is a
+safety net against replay, not a general speed-up, and these three runs are the only same-environment
+evidence - do not read 21x off the production column, which differs in environment, prompt and age.
+
 ### 2. Canonical A/B corpus (runner, real provider)
 
 `run-corpus-ab.py --candidate <pre-guard ref> --tasks t02,t05 --skip-long` (side a = the guard build
