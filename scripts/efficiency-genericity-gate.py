@@ -61,6 +61,46 @@ EXEMPT_PATHS = (
     "scripts/",
 )
 
+CFG_TEST = re.compile(r"#\[cfg\(test\)\]")
+MOD_OPEN = re.compile(r"\s*(?:pub\s+)?mod\s+[A-Za-z0-9_]+\s*\{")
+
+
+def test_module_ranges(path: str) -> list[tuple[int, int]]:
+    """1-based [start, end] line ranges of `#[cfg(test)] mod ... { }` blocks.
+
+    A unit-test module inside a production file is TEST code: it legitimately
+    names the tools it exercises (an assertion string is not core behaviour).
+    Tracking the module braces is what makes this a contract rather than a
+    convenience - a PRODUCTION line is never exempted by this.
+    """
+    try:
+        with open(os.path.join(REPO, path), "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return []
+    ranges: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lines):
+        if CFG_TEST.match(lines[i].strip()):
+            j = i + 1
+            while j < len(lines) and not MOD_OPEN.match(lines[j].rstrip("\n")):
+                nxt = lines[j].strip()
+                if nxt and not nxt.startswith("#[") and not nxt.startswith("//"):
+                    break
+                j += 1
+            if j < len(lines) and MOD_OPEN.match(lines[j].rstrip("\n")):
+                depth = 0
+                k = j
+                while k < len(lines):
+                    depth += lines[k].count("{") - lines[k].count("}")
+                    if k > j and depth <= 0:
+                        break
+                    k += 1
+                ranges.append((j + 1, k + 1))
+                i = k
+        i += 1
+    return ranges
+
 
 def git(*args: str) -> str:
     out = subprocess.run(["git", "-C", REPO, *args], capture_output=True, text=True)
@@ -96,13 +136,16 @@ def main() -> int:
         return 0
 
     violations: list[str] = []
+    skipped_test_lines = 0
+    ranges_cache: dict[str, list[tuple[int, int]]] = {}
     for path, lineno, text in hits:
         if any(path.startswith(p) for p in EXEMPT_PATHS):
             continue
-        stripped = text.strip()
-        if stripped.startswith("//") and "TODO" not in stripped:
-            # comments are still core code: they must not name a tool either
-            pass
+        if path not in ranges_cache:
+            ranges_cache[path] = test_module_ranges(path)
+        if any(a <= lineno <= b for a, b in ranges_cache[path]):
+            skipped_test_lines += 1
+            continue
         m = QUALIFIED.search(text)
         if m:
             violations.append("%s:%d qualified tool-name literal `%s`" % (path, lineno, m.group(0)))
@@ -113,6 +156,9 @@ def main() -> int:
 
     print("genericity-gate: %d added production line(s) scanned from %s...HEAD in %s" % (
         sum(1 for p, _, _ in hits if not any(p.startswith(x) for x in EXEMPT_PATHS)), BASE, REPO))
+    if skipped_test_lines:
+        print("genericity-gate: %d added line(s) inside #[cfg(test)] modules ignored (test code)"
+              % skipped_test_lines)
     if violations:
         print("FAIL - the core diff mentions plugins/tools:")
         for v in violations:
