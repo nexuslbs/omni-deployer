@@ -397,8 +397,12 @@ def _repo_allowlist():
 def _profiles_yaml():
     tools = _repo_allowlist()
     if not tools:
-        raise RuntimeError("could not read omni allowed_tools from repo "
-                           "config/profiles.yml")
+        # The dev core runs with an empty omni profile (verified: real agentic
+        # dev threads get the enabled toolset), so an absent allowlist in the
+        # checkout must not abort the measured run.
+        print("  [toolset] no omni allowed_tools in the checkout; "
+              "using the empty profile", flush=True)
+        return "profiles:\n  omni: {}\n"
     lines = ["profiles:", "  omni:", "    allowed_tools:"]
     for t in tools:
         lines.append("    - " + t)
