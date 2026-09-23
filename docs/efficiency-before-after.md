@@ -132,3 +132,62 @@ Duplicate-read stub, live in the dev DB: threads 297 and 300 each carry 1 persis
 - `scripts/efficiency-metrics.py` counts a commit performed through
   `git__run_command` argv (`git commit …`) as a commit; without that fix thread 294 was
   reported as a false `BREACH: edits without commit` even though `1449275` exists.
+
+## Canonical live run (thread 2921, 2026-09-23 16:33-16:37) - measured, deliverable NOT produced
+
+The canonical "reapply the browser-free image" task (the same shape as thread 2874)
+was posted LIVE into the dev `eff-live` channel (real provider via
+`$secret:DEEPSEEK_API_KEY`, funded) against a fixture clone of this repo at
+`/opt/workspace/tmp/eff-canon`, reset to `7a204e4^` (i.e. Chromium libs present;
+`7a204e4` is the canonical fix commit: config/workstation.yml 11, docker-compose.dev.yml 18,
+docker-compose.yml 43, services/workstation/Dockerfile 78 lines changed).
+
+| metric | thread 2874 (BEFORE) | thread 309 (canonical, AFTER) |
+| --- | --- | --- |
+| tools | 977 | 15 |
+| read-only / state-changing | 580 / 341 | 3 / 7 |
+| read:write | 11.84 | **0.43** |
+| duplicate reads | n/a (unmetered) | **0** |
+| edits | 8 | 0 |
+| commits | 6 | 0 |
+| prompt + completion tokens | 15,758,306 | 84,457 |
+| tokens / state-changing op | 321,598 | 12,065 |
+| wall minutes | 87.2 | 3.1 |
+| time to first commit | 56.5 min | n/a (none) |
+| grade | BREACH (r:w, tok/state-op) | OK |
+
+Honest reading: the loop-class symptoms are gone on this run (no duplicate reads, r:w 0.43,
+~186x fewer tokens than the BEFORE baseline) **but the deliverable was not produced** -
+`edits = 0`, `commits = 0`, the fixture repo HEAD is unchanged, so the grade is a false
+"OK": `efficiency-metrics.py` currently only breaches on `edits > 0 && commits = 0`, which
+a run that never edits cannot trigger. That blind spot is a real finding of this thread
+(grade must also fail an edit-shaped task with zero edits) and is NOT yet fixed.
+
+A sibling attempt on the same channel (thread 307) shows the counter has teeth when the
+loop does occur: tools 33, read-only 21, duplicate reads **10** (each persisted as a
+`metadata.eff = "duplicate-read"` stub row), edits 1, commits 0 -> `BREACH: 10 duplicate
+read(s); edits without commit`.
+
+## Why the SCRIPTED canonical A/B corpus is still not run
+
+`scripts/run-corpus-ab.py` (the no-real-LLM A/B harness) still cannot start on this stack:
+
+- `_repo_allowlist()` parses the omni profile `allowed_tools` list out of a **repo**
+  `config/profiles.yml`; neither `/opt/workspace/omni` (no `config/` dir) nor the runtime
+  `/opt/omni/config/profiles.yml` (content: `profiles:\n  omni: {}`) carries it, so the
+  runner aborts with `could not read omni allowed_tools from repo config/profiles.yml`
+  (exit 1) before any corpus task is posted. The harness also `docker cp`s the mutated
+  `profiles.yml`/`plugins.yml` into `/opt/omni-stack/config` (the PROD mount) and looks up
+  a channel named `dev-channel` while the dev team's channel is `mattermost-dev-channel`.
+- Consequence: the scripted BEFORE/AFTER gate comparison table (T-4) is still unmeasured.
+
+## What is measured and green
+
+1. `scripts/efficiency-noop-gate.sh` on the dev stack: 5 passed / 0 failed (GATE A
+   duplicate-read stub + per-thread counter; GATE B LIVE INTERRUPT on a merged sub-cause;
+   GATE C efficiency unit suite + 402/401 fast-fail classification).
+2. `scripts/efficiency-gate.sh` (asset gate): 20 passed / 0 failed.
+3. LIVE real-provider small-edit run (thread 294): 8 tools, duplicate reads 0,
+   122,630 prompt + 1,826 completion tokens, 48 s, commit `1449275` landed -> grade OK.
+4. Duplicate-read stubs exist as real rows in the dev DB (17 messages with
+   `metadata.eff = "duplicate-read"`), i.e. the guard is observable, not just logged.
