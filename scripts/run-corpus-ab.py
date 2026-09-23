@@ -50,9 +50,11 @@ CORPUS_DIR = os.path.join(SCRIPT_DIR, "corpus")
 DEFAULT_OUTROOT = "/opt/workspace/tmp/corpus-ab"
 OMNIAGENT_CONTAINER = "omnidev-omniagent-1"
 # The dev core keeps its runtime config in the agent container's OMNI_DIR
-# (/opt/omni/config). The old harness hard-coded /opt/omni-stack/config (the
-# PROD mount) and therefore never saw or wrote the dev stack's config.
-AGENT_CONFIG_DIR = os.environ.get("AGENT_CONFIG_DIR", "/opt/omni/config")
+# (/opt/omni-stack/config, container-local: the dev overlay leaves OMNI_DIR at
+# the base value). Writing the toolset anywhere else leaves the running core on
+# its default config: the mattermost platform logs "No access_token provided ...
+# without inbound capability" and every corpus post is dropped.
+AGENT_CONFIG_DIR = os.environ.get("AGENT_CONFIG_DIR", "/opt/omni-stack/config")
 # Host path of the SAME dir (container /opt/omni == omni-root on the host for the
 # omnidev stack); used for local reads of profiles.yml / toolsets.yml so the
 # harness never reads the production config checkout at host /opt/omni.
@@ -1073,7 +1075,7 @@ def main(argv):
     mm_channel_id = os.environ.get("MM_CHANNEL_ID") or mm_find_channel(
         mm_token, team_id, mm_channel_name)
     if not mm_channel_id:
-        raise SystemExit("MM channel dev-channel not found")
+        raise SystemExit("MM channel %s not found" % mm_channel_name)
     # make sure testuser is a member of the channel (best effort)
     try:
         mm_post("/api/v4/channels/%s/members" % mm_channel_id,
