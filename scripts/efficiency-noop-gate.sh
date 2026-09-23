@@ -97,15 +97,14 @@ SCRIPT_A="[[{\"name\":\"d1\",\"tool\":\"filesystem__read\",\"arguments\":$READ_A
 SCRIPT_A2='[[{"name":"r1","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}],[{"name":"r2","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}],[{"name":"w1","tool":"notes__note_write","arguments":{"name":"eff-gate.md","content":"state change"}}],[{"name":"r3","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":60}}]]'
 
 # GATE B: MANY sequential batches keep the thread processing long enough for a
-# merged operator reply (live interrupt) to land mid-flight.
-SCRIPT_B="$(python3 - <<'PY'
-import json
-calls = [[{"name": "b%d" % i, "tool": "filesystem__read",
-          "arguments": {"path": "/app/src/agent/efficiency.rs", "offset": i * 20, "limit": 20}}]
-         for i in range(40)]
-print(json.dumps(calls, separators=(",", ":")))
-PY
-)"
+# merged operator reply (live interrupt) to land mid-flight. Built in pure bash
+# (no python, no heredoc): the harness must not depend on a helper interpreter.
+SCRIPT_B=""
+for i in $(seq 0 39); do
+  ONE="[{\"name\":\"b${i}\",\"tool\":\"filesystem__read\",\"arguments\":{\"path\":\"/app/src/agent/efficiency.rs\",\"offset\":$((i * 20)),\"limit\":20}}]"
+  if [ -z "$SCRIPT_B" ]; then SCRIPT_B="$ONE"; else SCRIPT_B="$SCRIPT_B,$ONE"; fi
+done
+SCRIPT_B="[$SCRIPT_B]"
 
 post_id_of() { printf '%s' "$1" | sed -n 's/.*"post_id": *"\([^"]*\)".*/\1/p'; }
 
@@ -181,7 +180,11 @@ else
   # vacuously on a read that ran BEFORE the change.
   W_ID=$(wait_for "SELECT id FROM messages WHERE created_at >= '$T1' AND msg_type='tool-result' AND msg_subtype LIKE '%note%write%' ORDER BY id LIMIT 1" "$TIMEOUT")
   STUB_BEFORE=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id < ${W_ID:-0} AND msg_subtype='filesystem__read' AND ($DUP_PRED)")
-  AFTER_EXEC=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id > ${W_ID:-0} AND msg_type='tool-result' AND msg_subtype='filesystem__read' AND NOT ($DUP_PRED) AND length(content) > 200")
+  # A real read persists the file payload (excerpted by the engine) while a
+  # stub persists the tiny `[duplicate call ...` text: NOT ($DUP_PRED) plus the
+  # payload marker separates them. Combined with `id > $W_ID` this can only be
+  # satisfied by the read that came AFTER the state change.
+  AFTER_EXEC=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id > ${W_ID:-0} AND msg_type='tool-result' AND msg_subtype='filesystem__read' AND NOT ($DUP_PRED) AND content LIKE '%efficiency%'")
   AFTER_DUP=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T1' AND id > ${W_ID:-0} AND msg_subtype='filesystem__read' AND ($DUP_PRED)")
   if [ "${STUB_BEFORE:-0}" -ge 1 ] && [ "${AFTER_EXEC:-0}" -ge 1 ] && [ "${AFTER_DUP:-0}" -eq 0 ]; then
     ok "GATE A2 guard active before the change (stub rows=$STUB_BEFORE) AND the identical read AFTER the state change EXECUTED (executed=$AFTER_EXEC stubs_after=$AFTER_DUP)"
