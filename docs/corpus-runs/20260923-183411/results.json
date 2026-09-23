@@ -1,0 +1,291 @@
+{
+ "meta": {
+  "run_id": "corpus-20260923-183411",
+  "ts": "20260923-183411",
+  "candidate": null,
+  "outdir": "/opt/workspace/tmp/corpus-ab/20260923-183411",
+  "tasks": [
+   "t02-verification-corpus-files"
+  ]
+ },
+ "side_a": {
+  "key": "a",
+  "label": "main",
+  "binary_sha": "a70cace0af0bc43e38af6204ab4362207a68dc98",
+  "token": "s3-a-604390",
+  "witness": "w7-a-604390-2bf8",
+  "wprefix": "w7-a-604390-",
+  "prompts": {
+   "t02-verification-corpus-files": "Canonical corpus task (id t02, shape: re-read-heavy verification). The corpus directory is /opt/workspace/omni-deployer/scripts/corpus (host path /opt/workspace/omni-deployer/scripts/corpus, readable). Verify these four claims about it and report one line per claim with PASS or FAIL:\n1. The directory contains between 5 and 10 .json task files.\n2. Every .json file's 'id' field starts with 't' and matches the file name prefix (the part of the file name before the first '-' and after the leading 'tNN-' is not required to match, only the 't' prefix and a two-digit number).\n3. The README.md in that directory mentions the plan workstream 'T-4'.\n4. A runner script named run-corpus-ab.py exists one directory up (scripts/) and starts with the line '#!/usr/bin/env python3'.\nMethod: list the directory once, then read each .json file ONCE (they are small); keep a running checklist in your working notes with notes_note-write / notes_note-append; never re-read a file, consult your notes if you need a fact again. Do not modify anything.\nExpected final answer: the four claim lines with PASS or FAIL, then a closing line 'verified N of 4' with the number of claims you verified as passing."
+  },
+  "tasks": [
+   {
+    "task": "t02-verification-corpus-files",
+    "shape": "re-read-heavy-verification",
+    "status": "completed",
+    "thread_id": 314,
+    "outcome": "PASS",
+    "detail": {
+     "matched": [
+      "run-corpus-ab.py"
+     ],
+     "regex": "4",
+     "regex_ok": true,
+     "token_ok": true,
+     "pass": true
+    },
+    "metrics": {
+     "thread_id": 314,
+     "messages_total": 27,
+     "duplicate_markers": 1,
+     "compaction_events": 0,
+     "retrieval_calls": 0,
+     "grounded_total": 1,
+     "grounded_hits": 1,
+     "avg_prompt_per_call": 16693,
+     "max_prompt_per_call": 23025,
+     "status": "completed",
+     "iterations": 7,
+     "duration_ms": 24121,
+     "input_tokens": 147114,
+     "cached_tokens": 117120,
+     "output_tokens": 4018,
+     "started_at": "2026-09-23 18:37:02.172596+00",
+     "ended_at": "2026-09-23 18:37:26.293848+00"
+    },
+    "duration_s": 27,
+    "final_excerpt": "Verification of the four claims about `/opt/workspace/omni-deployer/scripts/corpus` (each file read exactly once; nothing modified):\n1. **PASS** \u2014 the directory contains 8 `.json` task files (`t01`\u2026`t08`), which is between 5 and 10.\n2. **PASS** \u2014 every `.json` file's `\"id\"` starts with `t` + a two-digit number and matches its file-name prefix: `t01-layout-discovery`, `t02-verification-corpus-files"
+   }
+  ],
+  "by_id": {
+   "t02-verification-corpus-files": {
+    "task": "t02-verification-corpus-files",
+    "shape": "re-read-heavy-verification",
+    "status": "completed",
+    "thread_id": 314,
+    "outcome": "PASS",
+    "detail": {
+     "matched": [
+      "run-corpus-ab.py"
+     ],
+     "regex": "4",
+     "regex_ok": true,
+     "token_ok": true,
+     "pass": true
+    },
+    "metrics": {
+     "thread_id": 314,
+     "messages_total": 27,
+     "duplicate_markers": 1,
+     "compaction_events": 0,
+     "retrieval_calls": 0,
+     "grounded_total": 1,
+     "grounded_hits": 1,
+     "avg_prompt_per_call": 16693,
+     "max_prompt_per_call": 23025,
+     "status": "completed",
+     "iterations": 7,
+     "duration_ms": 24121,
+     "input_tokens": 147114,
+     "cached_tokens": 117120,
+     "output_tokens": 4018,
+     "started_at": "2026-09-23 18:37:02.172596+00",
+     "ended_at": "2026-09-23 18:37:26.293848+00"
+    },
+    "duration_s": 27,
+    "final_excerpt": "Verification of the four claims about `/opt/workspace/omni-deployer/scripts/corpus` (each file read exactly once; nothing modified):\n1. **PASS** \u2014 the directory contains 8 `.json` task files (`t01`\u2026`t08`), which is between 5 and 10.\n2. **PASS** \u2014 every `.json` file's `\"id\"` starts with `t` + a two-digit number and matches its file-name prefix: `t01-layout-discovery`, `t02-verification-corpus-files"
+   }
+  },
+  "timeout_scale": 1.0,
+  "toolset": {
+   "enabled": true,
+   "status": "written",
+   "registered": {
+    "filesystem_info": true,
+    "search_messages": true,
+    "notes_note-list": true,
+    "git_status": true,
+    "memory_list-memories": false,
+    "subtasks_get-subtask-counts": true
+   }
+  },
+  "res_before": {
+   "db_size_bytes": 48741399,
+   "rel_messages_bytes": 1081344,
+   "rel_threads_bytes": 49152,
+   "rel_summaries_bytes": 0,
+   "data_dir_bytes": null,
+   "spill_bytes": null,
+   "rss": {
+    "omnidev-omniagent-1": "34.09MiB / 7.752GiB",
+    "omnidev-postgres-1": "119.4MiB / 7.752GiB"
+   }
+  },
+  "res_after": {
+   "db_size_bytes": 49282071,
+   "rel_messages_bytes": 1138688,
+   "rel_threads_bytes": 49152,
+   "rel_summaries_bytes": 0,
+   "data_dir_bytes": null,
+   "spill_bytes": null,
+   "rss": {
+    "omnidev-omniagent-1": "40.72MiB / 7.752GiB",
+    "omnidev-postgres-1": "156.6MiB / 7.752GiB"
+   }
+  },
+  "probes": {
+   "search_messages_p50_ms": null,
+   "search_messages_p95_ms": null,
+   "search_wiki_p50_ms": null,
+   "search_wiki_p95_ms": null,
+   "prompt_build_ms_avg": 7.7,
+   "prompt_build_samples": [
+    {
+     "thread_id": 314,
+     "ms": 7.7,
+     "chars": 17106
+    }
+   ]
+  }
+ },
+ "side_b": {
+  "key": "b",
+  "label": "main-identity",
+  "binary_sha": "a70cace0af0bc43e38af6204ab4362207a68dc98",
+  "token": "s3-b-36a967",
+  "witness": "w7-b-36a967-9bc3",
+  "wprefix": "w7-b-36a967-",
+  "prompts": {
+   "t02-verification-corpus-files": "Canonical corpus task (id t02, shape: re-read-heavy verification). The corpus directory is /opt/workspace/omni-deployer/scripts/corpus (host path /opt/workspace/omni-deployer/scripts/corpus, readable). Verify these four claims about it and report one line per claim with PASS or FAIL:\n1. The directory contains between 5 and 10 .json task files.\n2. Every .json file's 'id' field starts with 't' and matches the file name prefix (the part of the file name before the first '-' and after the leading 'tNN-' is not required to match, only the 't' prefix and a two-digit number).\n3. The README.md in that directory mentions the plan workstream 'T-4'.\n4. A runner script named run-corpus-ab.py exists one directory up (scripts/) and starts with the line '#!/usr/bin/env python3'.\nMethod: list the directory once, then read each .json file ONCE (they are small); keep a running checklist in your working notes with notes_note-write / notes_note-append; never re-read a file, consult your notes if you need a fact again. Do not modify anything.\nExpected final answer: the four claim lines with PASS or FAIL, then a closing line 'verified N of 4' with the number of claims you verified as passing."
+  },
+  "tasks": [
+   {
+    "task": "t02-verification-corpus-files",
+    "shape": "re-read-heavy-verification",
+    "status": "completed",
+    "thread_id": 317,
+    "outcome": "PASS",
+    "detail": {
+     "matched": [
+      "run-corpus-ab.py"
+     ],
+     "regex": "4",
+     "regex_ok": true,
+     "token_ok": true,
+     "pass": true
+    },
+    "metrics": {
+     "thread_id": 317,
+     "messages_total": 26,
+     "duplicate_markers": 1,
+     "compaction_events": 0,
+     "retrieval_calls": 0,
+     "grounded_total": 1,
+     "grounded_hits": 1,
+     "avg_prompt_per_call": 15517,
+     "max_prompt_per_call": 21045,
+     "status": "completed",
+     "iterations": 7,
+     "duration_ms": 18876,
+     "input_tokens": 135843,
+     "cached_tokens": 126080,
+     "output_tokens": 2846,
+     "started_at": "2026-09-23 18:40:06.630926+00",
+     "ended_at": "2026-09-23 18:40:25.507281+00"
+    },
+    "duration_s": 22,
+    "final_excerpt": "**Corpus verification \u2014 /opt/workspace/omni-deployer/scripts/corpus** (each file read exactly once; nothing modified)\n1. **PASS** \u2014 the directory contains 8 `.json` task files (`t01`\u2013`t08`), which is within the 5\u201310 range.\n2. **PASS** \u2014 every `.json` file's `id` starts with `t` + a two-digit number matching the file-name prefix: `t01-layout-discovery`, `t02-verification-corpus-files`, `t03-search-"
+   }
+  ],
+  "by_id": {
+   "t02-verification-corpus-files": {
+    "task": "t02-verification-corpus-files",
+    "shape": "re-read-heavy-verification",
+    "status": "completed",
+    "thread_id": 317,
+    "outcome": "PASS",
+    "detail": {
+     "matched": [
+      "run-corpus-ab.py"
+     ],
+     "regex": "4",
+     "regex_ok": true,
+     "token_ok": true,
+     "pass": true
+    },
+    "metrics": {
+     "thread_id": 317,
+     "messages_total": 26,
+     "duplicate_markers": 1,
+     "compaction_events": 0,
+     "retrieval_calls": 0,
+     "grounded_total": 1,
+     "grounded_hits": 1,
+     "avg_prompt_per_call": 15517,
+     "max_prompt_per_call": 21045,
+     "status": "completed",
+     "iterations": 7,
+     "duration_ms": 18876,
+     "input_tokens": 135843,
+     "cached_tokens": 126080,
+     "output_tokens": 2846,
+     "started_at": "2026-09-23 18:40:06.630926+00",
+     "ended_at": "2026-09-23 18:40:25.507281+00"
+    },
+    "duration_s": 22,
+    "final_excerpt": "**Corpus verification \u2014 /opt/workspace/omni-deployer/scripts/corpus** (each file read exactly once; nothing modified)\n1. **PASS** \u2014 the directory contains 8 `.json` task files (`t01`\u2013`t08`), which is within the 5\u201310 range.\n2. **PASS** \u2014 every `.json` file's `id` starts with `t` + a two-digit number matching the file-name prefix: `t01-layout-discovery`, `t02-verification-corpus-files`, `t03-search-"
+   }
+  },
+  "timeout_scale": 1.0,
+  "toolset": {
+   "enabled": true,
+   "status": "already-restarted",
+   "registered": {
+    "filesystem_info": true,
+    "search_messages": true,
+    "notes_note-list": true,
+    "git_status": true,
+    "memory_list-memories": false,
+    "subtasks_get-subtask-counts": true
+   }
+  },
+  "res_before": {
+   "db_size_bytes": 49937431,
+   "rel_messages_bytes": 1196032,
+   "rel_threads_bytes": 49152,
+   "rel_summaries_bytes": 0,
+   "data_dir_bytes": null,
+   "spill_bytes": null,
+   "rss": {
+    "omnidev-omniagent-1": "42.05MiB / 7.752GiB",
+    "omnidev-postgres-1": "166.5MiB / 7.752GiB"
+   }
+  },
+  "res_after": {
+   "db_size_bytes": 50519063,
+   "rel_messages_bytes": 1269760,
+   "rel_threads_bytes": 49152,
+   "rel_summaries_bytes": 0,
+   "data_dir_bytes": null,
+   "spill_bytes": null,
+   "rss": {
+    "omnidev-omniagent-1": "42.85MiB / 7.752GiB",
+    "omnidev-postgres-1": "170.7MiB / 7.752GiB"
+   }
+  },
+  "probes": {
+   "search_messages_p50_ms": null,
+   "search_messages_p95_ms": null,
+   "search_wiki_p50_ms": null,
+   "search_wiki_p95_ms": null,
+   "prompt_build_ms_avg": 8.4,
+   "prompt_build_samples": [
+    {
+     "thread_id": 317,
+     "ms": 8.4,
+     "chars": 17032
+    }
+   ]
+  }
+ }
+}
