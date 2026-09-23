@@ -46,4 +46,10 @@ own `OMNI_DIR` = `/opt/omni-stack/config`; the runner defaulted to `/opt/omni/co
 its toolset was never loaded and every corpus post was dropped (`timeout-no-thread`). The
 default is corrected, `--mm-channel`/`CORPUS_MM_CHANNEL` was added, and an empty omni
 profile in the checkout now falls back to the empty profile instead of aborting. The dev
-runtime `channels.yml` also carried a stale dev-channel id and was corrected.
+runtime `channels.yml` also carried a stale dev-channel id and was corrected. When the omnidev
+agent container is recreated its container-local data dir comes back empty (no config, no
+profiles tree): `ensure_toolset` now seeds both from the mounted checkout, so the corpus posts are
+accepted AND the generated prompt still carries the profile memory (the efficiency contract, which
+lives in `profiles/omni/MEMORY.md`). Re-verified end to end on a wiped data dir: seeding reported
+`plugins.yml=yes profiles_omni=yes` and the run completed `t02` PASS on both sides
+(`/opt/workspace/tmp/corpus-ab/20260923-231046`).
