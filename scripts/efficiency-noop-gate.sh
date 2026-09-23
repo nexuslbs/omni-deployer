@@ -88,7 +88,14 @@ SCRIPT_A2='[[{"name":"w1","tool":"notes__note_write","arguments":{"name":"eff-ga
 
 # GATE B: MANY sequential batches keep the thread processing long enough for a
 # merged operator reply (live interrupt) to land mid-flight.
-SCRIPT_B='[[{"name":"b1","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":0,"limit":30}}],[{"name":"b2","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":200,"limit":30}}],[{"name":"b3","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":400,"limit":30}}],[{"name":"b4","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":600,"limit":30}}],[{"name":"b5","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":800,"limit":30}}],[{"name":"b6","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":1000,"limit":30}}],[{"name":"b7","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":1200,"limit":30}}],[{"name":"b8","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":1400,"limit":30}}],[{"name":"b9","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":1600,"limit":30}}],[{"name":"b10","tool":"filesystem__read","arguments":{"path":"/app/src/agent/efficiency.rs","offset":1800,"limit":30}}]]'
+SCRIPT_B="$(python3 - <<'PY'
+import json
+calls = [[{"name": "b%d" % i, "tool": "filesystem__read",
+          "arguments": {"path": "/app/src/agent/efficiency.rs", "offset": i * 20, "limit": 20}}]
+         for i in range(40)]
+print(json.dumps(calls, separators=(",", ":")))
+PY
+)"
 
 post_id_of() { printf '%s' "$1" | sed -n 's/.*"post_id": *"\([^"]*\)".*/\1/p'; }
 
@@ -179,11 +186,26 @@ if [ -z "$ROOT_B_ID" ]; then
   bad "GATE B could not post the long noop script (${ROOT_B})"
 else
   echo "      posted long noop thread root=$ROOT_B_ID"
-  sleep 1
-  REP=$(post_reply "$ROOT_B_ID" "why is this taking so long? stop and report.")
+  # Wait until the thread is demonstrably RUNNING (first tool result persisted),
+  # then post the operator reply, retrying until the engine merges it as a
+  # sub_cause row on the SAME thread (the dev MM channel sometimes treats the
+  # reply as a fresh thread root instead of a sub-prompt).
+  LIVE_DEADLINE=$(( $(date +%s) + 30 ))
+  while [ "$(date +%s)" -lt "$LIVE_DEADLINE" ]; do
+    RUNNING=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T2' AND msg_type='tool-result'")
+    [ "${RUNNING:-0}" -ge 1 ] && break
+    sleep 1
+  done
+  REP=""
+  for attempt in 1 2 3 4 5; do
+    REP=$(post_reply "$ROOT_B_ID" "why is this taking so long? stop and report. (attempt $attempt)")
+    sleep 3
+    MERGED=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T2' AND msg_type='sub_cause'")
+    [ "${MERGED:-0}" -ge 1 ] && break
+  done
   echo "      merged-reply attempt: $(printf '%s' "$REP" | head -c 140)"
   SUB_N=$(psql_q "SELECT count(*) FROM messages WHERE created_at >= '$T2' AND (content LIKE '%Sub-Prompt%' OR msg_type='sub_cause')")
-  INT_LINE=$(docker logs --since 10m "$AGENT_CONTAINER" 2>&1 | grep -m1 "LIVE INTERRUPT" | head -c 130)
+  INT_LINE=$(docker logs --since 15m "$AGENT_CONTAINER" 2>&1 | grep -m1 "LIVE INTERRUPT" | head -c 130)
   if [ -n "$INT_LINE" ] && [ "${SUB_N:-0}" -ge 1 ]; then
     ok "GATE B LIVE INTERRUPT raised (sub-prompt rows=$SUB_N) :: ${INT_LINE:0:110}"
   elif [ "${SUB_N:-0}" -ge 1 ]; then
