@@ -1,0 +1,42 @@
+{
+ "side": "b",
+ "tasks": [
+  {
+   "task": "t02-verification-corpus-files",
+   "shape": "re-read-heavy-verification",
+   "status": "completed",
+   "thread_id": 317,
+   "outcome": "PASS",
+   "detail": {
+    "matched": [
+     "run-corpus-ab.py"
+    ],
+    "regex": "4",
+    "regex_ok": true,
+    "token_ok": true,
+    "pass": true
+   },
+   "metrics": {
+    "thread_id": 317,
+    "messages_total": 26,
+    "duplicate_markers": 1,
+    "compaction_events": 0,
+    "retrieval_calls": 0,
+    "grounded_total": 1,
+    "grounded_hits": 1,
+    "avg_prompt_per_call": 15517,
+    "max_prompt_per_call": 21045,
+    "status": "completed",
+    "iterations": 7,
+    "duration_ms": 18876,
+    "input_tokens": 135843,
+    "cached_tokens": 126080,
+    "output_tokens": 2846,
+    "started_at": "2026-09-23 18:40:06.630926+00",
+    "ended_at": "2026-09-23 18:40:25.507281+00"
+   },
+   "duration_s": 22,
+   "final_excerpt": "**Corpus verification \u2014 /opt/workspace/omni-deployer/scripts/corpus** (each file read exactly once; nothing modified)\n1. **PASS** \u2014 the directory contains 8 `.json` task files (`t01`\u2013`t08`), which is within the 5\u201310 range.\n2. **PASS** \u2014 every `.json` file's `id` starts with `t` + a two-digit number matching the file-name prefix: `t01-layout-discovery`, `t02-verification-corpus-files`, `t03-search-"
+  }
+ ]
+}
