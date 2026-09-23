@@ -430,9 +430,10 @@ def seed_dev_data_dir(verbose=True):
         "echo -n \" profiles_omni=\"; [ -f \"$d/../profiles/omni/MEMORY.md\" ] && echo yes "
         "|| echo no"
     ) % AGENT_CONFIG_DIR
-    out = oc(OMNIAGENT_CONTAINER, script) or ""
+    proc = oc(OMNIAGENT_CONTAINER, script)
+    out = (getattr(proc, "stdout", "") or "").strip()
     if verbose:
-        print("  [seed] dev data dir: %s" % out.strip(), flush=True)
+        print("  [seed] dev data dir: %s" % out, flush=True)
     return out
 
 
