@@ -409,6 +409,33 @@ def _profiles_yaml():
     return "\n".join(lines) + "\n"
 
 
+def seed_dev_data_dir(verbose=True):
+    """Make the dev core's data dir usable before a measured run.
+
+    The omnidev agent container keeps its runtime state in a container-local dir
+    (OMNI_DIR, default /opt/omni-stack). When that container is recreated the dir
+    comes back EMPTY: no plugins.yml/channels.yml (the mattermost platform then
+    logs "No access_token_name configured" / "No access_token provided ...
+    without inbound capability" and drops every inbound post) and no profiles
+    tree (the generated prompt then loses MEMORY.md, so the efficiency contract
+    is absent). Seed whatever is missing from the mounted checkout at /opt/omni
+    - files that exist are left untouched.
+    """
+    script = (
+        "d=%s; mkdir -p \"$d\"; "
+        "[ -f \"$d/plugins.yml\" ] || cp -a /opt/omni/config/. \"$d/\" 2>/dev/null; "
+        "[ -d \"$d/../profiles\" ] || cp -a /opt/omni/profiles \"$d/../profiles\" "
+        "2>/dev/null; "
+        "echo -n \"plugins.yml=\"; [ -f \"$d/plugins.yml\" ] && echo -n yes || echo -n no; "
+        "echo -n \" profiles_omni=\"; [ -f \"$d/../profiles/omni/MEMORY.md\" ] && echo yes "
+        "|| echo no"
+    ) % AGENT_CONFIG_DIR
+    out = oc(OMNIAGENT_CONTAINER, script) or ""
+    if verbose:
+        print("  [seed] dev data dir: %s" % out.strip(), flush=True)
+    return out
+
+
 def ensure_toolset(run, verbose=True):
     """Enable the standard tool plugins on the omnidev core for the run.
     Backs up the original plugins.yml (first call) into run['toolset_backup'].
@@ -416,6 +443,7 @@ def ensure_toolset(run, verbose=True):
     if run.get("no_toolset"):
         return {"enabled": False, "reason": "--no-toolset"}
     if run.get("toolset_backup") is None:
+        seed_dev_data_dir(verbose)
         run["toolset_backup"] = read_plugins_yml()
         if run["toolset_backup"]:
             with open(os.path.join(run["outdir"], "plugins.yml.original"), "w") as f:
