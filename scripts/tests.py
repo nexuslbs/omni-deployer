@@ -5640,6 +5640,33 @@ WF_SCRIPT_OK = json.dumps([{"name": "ok", "tool": "test-python_lorem", "argument
 
 WF_SCRIPT_FAIL_RUNNING = json.dumps([{"name": "fail", "tool": "core__fail_thread", "arguments": {"workflow_step": "running"}}])
 
+def _wf_ensure_test_templates():
+    """Provide the profile role-template FIXTURES the workflow tests reference.
+
+The tester/reviewer roles of the temp workflows used by GROUP 22/41/47 carry
+`template: wf_tester.md` / `wf_reviewer.md` (the server-side workflow
+validation requires a template when the role is present), and the prompt
+builder resolves such a name as profiles/<profile>/templates/<name>.md. Since
+b88b4b7 (operator directive 2026-09-24: templates must be PROFILE templates,
+never a silent fallback) a MISSING template file is a HARD error - the tester
+step thread fails and the task lands 'blocked' instead of 'review'. The tests
+therefore ship their own fixture (harness isolation contract: everything a
+test needs is defined by the test / its group setup).
+Idempotent; the deploy's end-of-run cleanup removes the whole profiles/ dir."""
+    tdir = f"{WORKSPACE}/profiles/omni/templates"
+    try:
+        os.makedirs(tdir, exist_ok=True)
+        for _name in ("wf_tester", "wf_reviewer"):
+            _p = f"{tdir}/{_name}.md"
+            if not os.path.exists(_p):
+                with open(_p, "w") as _fh:
+                    _fh.write(
+                        f"Deploy test fixture role template ({_name}) - exercised "
+                        f"by the workflow routing tests.\n")
+                print(f"  [wf-test: wrote profile role-template fixture {_p}]")
+    except Exception as e:
+        print(f"  [wf-test: template fixture write failed: {str(e)[:120]}]")
+
 def _wf_ensure_test_python():
     """Enable the bundled test-python tool so WF_SCRIPT_OK (test-python_lorem) executes.
 Mirrors G12's enable sequence; GROUP 22 scripts call test-python_lorem and fail with
@@ -5649,6 +5676,7 @@ also wait for prompt_generate AND settle for the async MCP server spawn: the
 plugin reload respawns ALL MCP servers asynchronously and the /mcp/tools registry
 fills in gradually - without this, 40-C/D/E hit 'Unknown tool: prompt_generate' /
 'Unknown tool: test-python_lorem' right after the enable reload."""
+    _wf_ensure_test_templates()
     ensure_bundled_plugin("test-python", "tools")
     # Self-containment (GROUP 22): prompt_generate comes from the BUILT-IN prompt
     # tool plugin, which the dev prep enables but an ISOLATED group run does not.
@@ -14882,6 +14910,7 @@ def _seg_47():
     tester/reviewer get templates (server-side validation requires them when
     the role is present). NO plan_mode - so a role with plan_mode unset falls
     back to the task's resolved plan (the board's plan flag propagates)."""
+        _wf_ensure_test_templates()
         roles = {
             "executor": {"provider": "noop", "model": "test-tool-caller"},
             "tester": {"provider": "noop", "model": "test-tool-caller", "template": "wf_tester.md"},
