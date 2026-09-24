@@ -13566,11 +13566,28 @@ def _seg_41():
         return False
 
 
-    def _wf41_roles_exec_action_tester_agent():
+    def _wf41_tester_template(script):
+        """Fixture template whose CONTENT is the tester's tool-call script.
+
+For a tester/reviewer step the role template IS the user prompt (inverse
+mapping: `apply_workflow_mapping` sets user = template for 'testing'/'review'),
+and the noop test-tool-caller provider executes the JSON script it finds in the
+prompt. A prose template here silently turns a failing tester step into 'Tester
+passed', so the script the tester must run lives in the template file itself."""
+        name = "wf41tpl_" + uuid.uuid4().hex[:8]
+        tdir = f"{WORKSPACE}/profiles/omni/templates"
+        os.makedirs(tdir, exist_ok=True)
+        with open(f"{tdir}/{name}.md", "w") as fh:
+            fh.write(script.strip() + "\n")
+        return name
+
+    def _wf41_roles_exec_action_tester_agent(script):
         """Action-mode executor (hindsight_populator - succeeds instantly) + agent-mode
-    tester (noop/test-tool-caller - runs the body script)."""
+    tester (noop/test-tool-caller - runs the tester script carried by the role
+template, since for a tester step the template IS the user prompt)."""
         return {"executor": {"mode": "action", "action_id": "builtin_hindsight_populator"},
-                "tester": {"provider": "noop", "model": "test-tool-caller", "template": "wf_tester.md"}}
+                "tester": {"provider": "noop", "model": "test-tool-caller",
+                           "template": _wf41_tester_template(script)}}
 
 
     def test_41_executor_f0_rerun_vs_review():
@@ -13619,7 +13636,7 @@ def _seg_41():
         key_t = "wf41t0r_" + uuid.uuid4().hex[:8]
         tids = []
         try:
-            roles = _wf41_roles_exec_action_tester_agent()
+            roles = _wf41_roles_exec_action_tester_agent(WF_SCRIPT_FAIL_F0)
             put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False, "roles": roles})
             tid = _wf_create_task("wf41-t0", key_f, WF_SCRIPT_FAIL_F0, cid)
             tids.append(tid)
@@ -13628,7 +13645,7 @@ def _seg_41():
             st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
             assert st == "blocked", f"41-B: flag=false tester F0 retry-limit must end blocked, got {st}: {gd}"
             put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
-                                             "review_on_fail": True, "roles": roles})
+                                             "review_on_fail": True, "roles": _wf41_roles_exec_action_tester_agent(WF_SCRIPT_FAIL_F0)})
             tid2 = _wf_create_task("wf41-t0r", key_t, WF_SCRIPT_FAIL_F0, cid)
             tids.append(tid2)
             post_json("/kanban/dispatch", {})
@@ -13651,14 +13668,14 @@ def _seg_41():
         key_t = "wf41r1r_" + uuid.uuid4().hex[:8]
         tids = []
         try:
-            roles = _wf41_roles_exec_action_tester_agent()
+            roles = _wf41_roles_exec_action_tester_agent(WF_SCRIPT_FAIL_RUNNING)
             put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False, "roles": roles})
             tid = _wf_create_task("wf41-r1", key_f, WF_SCRIPT_FAIL_RUNNING, cid)
             tids.append(tid)
             post_json("/kanban/dispatch", {})
             assert _wf41_wait_retry(tid), f"41-C: F1 (explicit running) must re-run executor (flag false), history={_wf_history_rows(tid)}"
             put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
-                                             "review_on_fail": True, "roles": roles})
+                                             "review_on_fail": True, "roles": _wf41_roles_exec_action_tester_agent(WF_SCRIPT_FAIL_RUNNING)})
             tid2 = _wf_create_task("wf41-r1r", key_t, WF_SCRIPT_FAIL_RUNNING, cid)
             tids.append(tid2)
             post_json("/kanban/dispatch", {})
@@ -13679,7 +13696,7 @@ def _seg_41():
         key_t = "wf41blr_" + uuid.uuid4().hex[:8]
         tids = []
         try:
-            roles = _wf41_roles_exec_action_tester_agent()
+            roles = _wf41_roles_exec_action_tester_agent(WF_SCRIPT_FAIL_BLOCKED)
             put_json(f"/workflows/{key_f}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False, "roles": roles})
             tid = _wf_create_task("wf41-bl", key_f, WF_SCRIPT_FAIL_BLOCKED, cid)
             tids.append(tid)
@@ -13687,7 +13704,7 @@ def _seg_41():
             st, gd = _wf_wait_status(tid, {"blocked", "review", "done"}, timeout=120)
             assert st == "blocked", f"41-D: flag=false explicit blocked must block, got {st}: {gd}"
             put_json(f"/workflows/{key_t}", {"retries": 1, "plan_mode": "off", "clear_executions_on_review": False,
-                                             "review_on_fail": True, "roles": roles})
+                                             "review_on_fail": True, "roles": _wf41_roles_exec_action_tester_agent(WF_SCRIPT_FAIL_BLOCKED)})
             tid2 = _wf_create_task("wf41-blr", key_t, WF_SCRIPT_FAIL_BLOCKED, cid)
             tids.append(tid2)
             post_json("/kanban/dispatch", {})
