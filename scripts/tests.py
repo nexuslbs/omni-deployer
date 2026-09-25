@@ -485,8 +485,12 @@ def ensure_bundled_plugin(name, plugin_type="tools"):
         cp(repo_src, target, recursive=True)
         return
 
-    # Fall back to the .remote/ clone (remote→bundled collision tests), but
-    # only when it is a COMPLETE source and flatten it afterwards.
+    # Fall back to the .remote/ clone (remote→bundled collision tests). That
+    # tree is NESTED (`<name>/<plugin_type>/<name>/`) and the CI runner does not
+    # bind-mount the omni-plugins workspace repo, so this branch is the one CI
+    # takes: copy the INNER directory's contents so the manifest ends up at the
+    # target ROOT (a nested copy leaves plugin.json one level too deep and the
+    # plugin then reports status=not_found).
     remote_src = f"{DATA_DIR}/plugins/{plugin_type}/.remote/{name}/{plugin_type}/{name}"
     if exists(remote_src) and _plugin_dir_has_manifest(remote_src):
         rm_rf(target)
@@ -8084,6 +8088,13 @@ def _seg_19():
                 resp = api_post_body(f"/plugins/platforms/bundled/{plat_name}/disable", {})
                 assert resp.get("success"), f"Setup disable '{plat_name}' failed: {resp}"
                 _wait_for_platform_subprocess(plat_name, False, timeout=10)
+                # RE-ASSERT the source immediately before the enable below: the
+                # earlier remote-plugin groups register AND remove a plugin of
+                # the same name, and a disable can leave the source gone (the
+                # enable then answers 200 with status 'not_found', "Plugin
+                # source not found on disk"). The fixture must own its
+                # precondition at the moment it is used.
+                ensure_bundled_plugin(plat_name, "platforms")
                 print(f"  [setup: bundled {plat_name} installed + disabled]")
             except Exception as e:
                 print(f"  [SETUP FAILED for {plat_name}: {str(e)[:120]}]")
