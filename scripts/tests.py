@@ -423,17 +423,29 @@ def restore_remote_yml():
 # These ensure a plugin exists in the desired state so the test
 # preconditions are always met, regardless of previous test runs.
 
+def _plugin_dir_has_manifest(path):
+    """A plugin directory is only USABLE when its manifest is present.
+
+    The remote-plugin groups remove a plugin named `test-python` (the same
+    name/type as the bundled platform fixture) and a half-removed leftover can
+    leave the directory in place with plugin.json gone. Discovery then reports
+    the plugin as `not_found` ("Plugin source not found on disk") even though
+    the path exists, so "the directory exists" is NOT a valid precondition.
+    """
+    return exists(os.path.join(path, "plugin.json"))
+
+
 def ensure_bundled_plugin(name, plugin_type="tools"):
-    """Ensure a bundled plugin directory exists.
+    """Ensure a bundled plugin directory exists COMPLETE (manifest included).
     Sources (checked in order):
-      1. Already exists at target path
+      1. Already exists at target path WITH plugin.json
       2. .remote/ directory (for remote→bundled collision tests)
       3. omni-plugins repo (/opt/workspace/omni-plugins/)
     NOTE: there is NO omni-stack git fallback - omni-stack is a seed repo and
     tracks zero plugins, so there is nothing to restore from its git history.
     """
     target = f"{DATA_DIR}/plugins/{plugin_type}/{name}"
-    if exists(target):
+    if exists(target) and _plugin_dir_has_manifest(target):
         return  # already exists
 
     # Try .remote/ source (remote→bundled collision tests)
