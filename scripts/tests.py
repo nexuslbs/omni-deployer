@@ -8095,6 +8095,26 @@ def _seg_19():
                 # source not found on disk"). The fixture must own its
                 # precondition at the moment it is used.
                 ensure_bundled_plugin(plat_name, "platforms")
+                # VERIFY the precondition the enable below depends on: the agent
+                # must DISCOVER the bundled source on disk. A directory that
+                # exists but is not discovered (unreadable manifest, discovery
+                # race) makes the enable answer 200 with the synthetic YAML-only
+                # status 'not_found' ("Plugin source not found on disk") even
+                # though the config was applied. Check via the API (the agent's
+                # view), not via the filesystem, and re-seed with a bounded
+                # retry; fail LOUDLY when the source can never be discovered.
+                seen = None
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    seen = _get_platform_detail(plat_name)
+                    if seen and seen.get("has_source_code"):
+                        break
+                    remove_bundled_plugin(plat_name, "platforms")
+                    ensure_bundled_plugin(plat_name, "platforms")
+                    time.sleep(1)
+                assert seen and seen.get("has_source_code"), (
+                    f"agent does not DISCOVER the bundled source for '{plat_name}' "
+                    f"({DATA_DIR}/plugins/platforms/{plat_name}): {seen}")
                 print(f"  [setup: bundled {plat_name} installed + disabled]")
             except Exception as e:
                 print(f"  [SETUP FAILED for {plat_name}: {str(e)[:120]}]")
