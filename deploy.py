@@ -224,6 +224,9 @@ def compose_cmd(mode):
     # Local S3 (MinIO) service for the S3 backup/restore/checkpoint test -
     # every deploy mode carries it so the S3 test can round-trip locally.
     # The overlay lives in THIS repo (omni-deployer), resolved via SCRIPT_DIR.
+    # It pins OUR OWN image (ghcr.io/nexuslbs/omni-images/minio, built and
+    # published by the nexuslbs/omni-images repo), so CI and hybrid pull the
+    # exact same image - see the provenance block in docker-compose.minio.yml.
     # Guarded: an omni-deployer checkout without the overlay still deploys;
     # the S3 test then skips (see test_s3_backup_restore).
     if os.path.exists(os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")):
