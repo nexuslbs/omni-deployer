@@ -435,36 +435,68 @@ def _plugin_dir_has_manifest(path):
     return exists(os.path.join(path, "plugin.json"))
 
 
+def _flatten_nested_plugin_dir(target, name, plugin_type):
+    """Move a NESTED tree (target/<plugin_type>/<name>/) up to the target root.
+
+    The remote-plugin groups clone into `.remote/<name>/<plugin_type>/<name>/`
+    and `ensure_bundled_plugin` historically copied that whole nested tree into
+    the flat bundled path, leaving plugin.json one level too deep: the plugin
+    then starts (the YAML entry is registered) but DISCOVERY finds no source and
+    reports `status: not_found`, "Plugin source not found on disk".
+    """
+    inner = os.path.join(target, plugin_type, name)
+    if not _plugin_dir_has_manifest(inner):
+        return False
+    for entry in os.listdir(inner):
+        src = os.path.join(inner, entry)
+        dst = os.path.join(target, entry)
+        if os.path.exists(dst):
+            rm_rf(dst)
+        shutil.move(src, dst)
+    rm_rf(os.path.join(target, plugin_type))
+    return True
+
+
 def ensure_bundled_plugin(name, plugin_type="tools"):
-    """Ensure a bundled plugin directory exists COMPLETE (manifest included).
+    """Ensure a bundled plugin directory exists COMPLETE (manifest at its root).
     Sources (checked in order):
       1. Already exists at target path WITH plugin.json
-      2. .remote/ directory (for remote→bundled collision tests)
-      3. omni-plugins repo (/opt/workspace/omni-plugins/)
+      2. omni-plugins repo (/opt/workspace/omni-plugins/) - canonical, flat
+      3. .remote/ directory (for remote→bundled collision tests)
     NOTE: there is NO omni-stack git fallback - omni-stack is a seed repo and
     tracks zero plugins, so there is nothing to restore from its git history.
     """
     target = f"{DATA_DIR}/plugins/{plugin_type}/{name}"
     if exists(target) and _plugin_dir_has_manifest(target):
         return  # already exists
+    if exists(target):
+        _flatten_nested_plugin_dir(target, name, plugin_type)
+        if _plugin_dir_has_manifest(target):
+            return
 
-    # Try .remote/ source (remote→bundled collision tests)
-    remote_src = f"{DATA_DIR}/plugins/{plugin_type}/.remote/{name}/{plugin_type}/{name}"
-    if exists(remote_src):
-        shutil.copytree(remote_src, target, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("target"))
-        return
-
-    # Try local omni-plugins repo (used for remote plugin installs)
+    # Canonical source FIRST: the omni-plugins repo is always a complete FLAT
+    # plugin tree, unlike a leftover `.remote/` clone (nested layout, possibly
+    # half-removed by the remote-plugin groups). Overwrite the leftover so a
+    # stale tree cannot shadow the re-seeded manifest.
     repo_src = f"{REMOTE_REPO}/{plugin_type}/{name}"
-    if exists(repo_src):
+    if exists(repo_src) and _plugin_dir_has_manifest(repo_src):
+        rm_rf(target)
         mkdir_p(f"{DATA_DIR}/plugins/{plugin_type}")
         cp(repo_src, target, recursive=True)
         return
 
+    # Fall back to the .remote/ clone (remote→bundled collision tests), but
+    # only when it is a COMPLETE source and flatten it afterwards.
+    remote_src = f"{DATA_DIR}/plugins/{plugin_type}/.remote/{name}/{plugin_type}/{name}"
+    if exists(remote_src) and _plugin_dir_has_manifest(remote_src):
+        rm_rf(target)
+        shutil.copytree(remote_src, target, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("target"))
+        return
+
     raise RuntimeError(
         f"Cannot create bundled plugin '{name}' in {plugin_type}: "
-        f"no source found in .remote/ or {REMOTE_REPO}"
+        f"no COMPLETE source (with plugin.json) found in {REMOTE_REPO} or .remote/"
     )
 
 def remove_bundled_plugin(name, plugin_type="tools"):
