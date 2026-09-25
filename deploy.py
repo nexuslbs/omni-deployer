@@ -231,11 +231,12 @@ def compose_cmd(mode):
     # the S3 test then skips (see test_s3_backup_restore).
     if os.path.exists(os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")):
         cmd += ["-f", os.path.join(SCRIPT_DIR, "docker-compose.minio.yml")]
-    # hybrid and ci use no overlay - base docker-compose.yml + omni.env.
-    # The base compose is image-only (no build sections): hybrid builds the
-    # three images locally with the omni.env tags BEFORE `up` (see Step 0b),
-    # ci pulls pre-built images, omnistable pulls GHCR. run/exec/up all go
-    # through docker compose.
+    # hybrid and ci use the SAME file set: base docker-compose.yml + the minio
+    # overlay + omni.env, no dev overlay. The base compose is image-only (no
+    # build sections): CI loads the images its build jobs produced and exports
+    # their `sha-<7>` references; a local hybrid run builds the same
+    # Dockerfiles from the same checkouts and exports the SAME references
+    # (export_local_ci_image_refs). run/exec/up all go through docker compose.
     return cmd
 
 
@@ -717,16 +718,18 @@ def generate_env(mode):
         f.write(f"S3_BUCKET={s3_bucket}\n")
         f.write(f"S3_PATH={s3_path}\n")
 
-        if mode == "ci":
+        if mode in ("ci", "hybrid"):
+            # ONE branch for both modes: neither knows where the layers came
+            # from. CI exports the build jobs' `sha-<7>` tags; a local hybrid
+            # run exports byte-identical references for the images it built
+            # itself (export_local_ci_image_refs runs before this).
             for var in ["OMNIAGENT_IMAGE", "DASHBOARD_IMAGE", "TOOLBOX_IMAGE"]:
                 val = os.environ.get(var)
                 if not val:
-                    raise RuntimeError(f"CI mode requires {var} env var")
+                    raise RuntimeError(
+                        f"{mode} mode requires {var} env var (hybrid: "
+                        f"export_local_ci_image_refs sets it)")
                 f.write(f"{var}={val}\n")
-        elif mode == "hybrid":
-            f.write("OMNIAGENT_IMAGE=local/omniagent:latest\n")
-            f.write("DASHBOARD_IMAGE=local/omni-dashboard:latest\n")
-            f.write("TOOLBOX_IMAGE=local/omni-toolbox:latest\n")
 
         if mode in ("ci", "hybrid"):
             # Deploy-suite headroom (see omni-stack/docker-compose.yml:96). The
@@ -837,6 +840,62 @@ def remove_data_volumes():
         removed.append(vol)
     if removed:
         print(f"[deploy] Removed data volumes: {', '.join(removed)}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CI image references (hybrid == CI parity)
+# ═══════════════════════════════════════════════════════════════════════
+# The release workflow (publish.yml) builds omniagent, omni-dashboard and
+# toolbox in three separate jobs and hands the integration job
+# OMNIAGENT_IMAGE / DASHBOARD_IMAGE / TOOLBOX_IMAGE carrying the build jobs'
+# `sha-<7>` tags (docker/metadata-action, type=sha,format=short). A local
+# hybrid run has no CI artifacts, so it builds the same Dockerfiles from the
+# same checkouts and tags them with the SAME reference: the deploy and the
+# suite then resolve an IDENTICAL image reference in both modes.
+CI_IMAGE_REPOS = {
+    "OMNIAGENT_IMAGE": "ghcr.io/nexuslbs/omni-deployer/omniagent",
+    "DASHBOARD_IMAGE": "ghcr.io/nexuslbs/omni-deployer/dashboard",
+    "TOOLBOX_IMAGE": "ghcr.io/nexuslbs/omni-deployer/toolbox",
+}
+
+
+def ci_source_dirs():
+    """Build context per image - exactly the context CI's build job uses."""
+    return {
+        "OMNIAGENT_IMAGE": OMNIAGENT_DIR,
+        "DASHBOARD_IMAGE": os.path.join(WORKSPACE_DIR, "omni-dashboard"),
+        "TOOLBOX_IMAGE": os.path.join(OMNI_STACK_DIR, "services", "toolbox"),
+    }
+
+
+def _head_short_sha(repo_dir):
+    """First 7 chars of the checkout's HEAD, byte-identical to the tag CI's
+    docker/metadata-action emits (type=sha,format=short)."""
+    r = subprocess.run(["git", "-C", repo_dir, "rev-parse", "HEAD"],
+                       capture_output=True, text=True)
+    sha = r.stdout.strip()
+    if r.returncode != 0 or len(sha) < 7:
+        raise RuntimeError(f"cannot resolve HEAD of {repo_dir}: {sha!r}")
+    return sha[:7]
+
+
+def export_local_ci_image_refs():
+    """hybrid ONLY: export the image references the CI run exports.
+
+    Runs BEFORE generate_env so the generated omni.env, compose_cmd and every
+    later deploy step are the ci code path with ci's exact references. The
+    checkouts hashed here are proven clean origin/main HEADs by the hybrid
+    preflight (Step 0.4) - the same state CI's build jobs check out.
+    """
+    dirs = ci_source_dirs()
+    refs = {}
+    for var, repo in CI_IMAGE_REPOS.items():
+        refs[var] = f"{repo}:sha-{_head_short_sha(dirs[var])}"
+        os.environ[var] = refs[var]
+    print("[deploy] hybrid image refs (identical to the CI integration env):")
+    for var in sorted(refs):
+        print(f"  {var}={refs[var]}")
+    return refs
 
 
 def _deploy(mode, group_retries=3, start_group="", pretest_cache=True):
@@ -974,6 +1033,12 @@ def _deploy(mode, group_retries=3, start_group="", pretest_cache=True):
     # side-by-side since host ports are dev-overlay-only.)
     shared.stop_other_stacks("omnideploy", mode=mode)
 
+    # Step 0.7 (hybrid): export the image references the CI integration job
+    # gets (the build jobs' `sha-<7>` tags) BEFORE generate_env, so omni.env,
+    # compose_cmd and every later step run the ci code path unchanged.
+    if mode == "hybrid":
+        export_local_ci_image_refs()
+
     generate_env(mode)
     compose = compose_cmd(mode)
 
@@ -991,14 +1056,11 @@ def _deploy(mode, group_retries=3, start_group="", pretest_cache=True):
     print("\n[deploy] Clearing tasks.yml (deploy-only, no real-LLM threads)...")
     clear_deploy_tasks()
 
-    # ── Step 0 (hybrid): Stop old containers first ────────────────
-    if mode == "hybrid":
-        print("\n[deploy] Stopping old services...")
-        run_compose(compose, "down")
-        print("[deploy] Removing data volumes...")
-        remove_data_volumes()
-
-    # Step 1: Stop containers (don't use -v to preserve cargo build cache)
+    # Step 1: Stop containers (don't use -v to preserve cargo build cache).
+    # This is the ONLY teardown: the old hybrid-only pre-teardown (a second
+    # `down` + remove_data_volumes immediately before this one) was a duplicate
+    # of the two calls below and was removed for parity - CI performs no such
+    # step.
     print("\n[deploy] Stopping services...")
     run_compose(compose, "down")
 
@@ -1007,10 +1069,12 @@ def _deploy(mode, group_retries=3, start_group="", pretest_cache=True):
     remove_data_volumes()
 
     # Step 0b (hybrid): Build the images locally like CI would, tagged with
-    # the exact names omni.env references (local/omniagent:latest,
-    # local/omni-dashboard:latest, local/omni-toolbox:latest). The base
-    # compose is image-only - services consume pre-built images by tag, so
-    # the images MUST exist before `up`. All three are built with plain
+    # the EXACT references the CI integration job exports (the build jobs'
+    # ghcr.io/nexuslbs/omni-deployer/<name>:sha-<7> tags), read from
+    # OMNIAGENT_IMAGE / DASHBOARD_IMAGE / TOOLBOX_IMAGE as set by
+    # export_local_ci_image_refs. The base compose is image-only - services
+    # consume pre-built images by tag, so the images MUST exist before `up`.
+    # All three are built with plain
     # `docker build -t <tag>` (no compose build sections in the base
     # compose; source builds live in the dev overlay). The omniagent build is
     # done with --no-cache (see build_image): its builder-stage RUN gates must
@@ -1055,15 +1119,16 @@ def _deploy(mode, group_retries=3, start_group="", pretest_cache=True):
                 print(r.stderr[-1000:] if r.stderr else "")
                 raise RuntimeError(f"image build failed for {tag}")
 
-        build_image("local/omniagent:latest",
+        _dirs = ci_source_dirs()
+        build_image(os.environ["OMNIAGENT_IMAGE"],
                     dockerfile=os.path.join(OMNIAGENT_DIR, "Dockerfile"),
-                    context=OMNIAGENT_DIR,
+                    context=_dirs["OMNIAGENT_IMAGE"],
                     no_cache=True,
                     build_args=["OMNIAGENT_BUILD_MODE=release"])
-        build_image("local/omni-dashboard:latest",
-                    context=os.path.join(WORKSPACE_DIR, "omni-dashboard"))
-        build_image("local/omni-toolbox:latest",
-                    context=os.path.join(OMNI_STACK_DIR, "services", "toolbox"))
+        build_image(os.environ["DASHBOARD_IMAGE"],
+                    context=_dirs["DASHBOARD_IMAGE"])
+        build_image(os.environ["TOOLBOX_IMAGE"],
+                    context=_dirs["TOOLBOX_IMAGE"])
 
     # Step 2 (dev): Build images
     if mode == "dev":
@@ -1501,10 +1566,12 @@ def deploy(mode, group_retries=3, start_group="", pretest_cache=True):
     (SIGKILL/OOM) can still skip this finally; Step 0.5's untracked-residue
     sweep covers that case.
     """
-    # dev/hybrid run against the live data dir: preserve its runtime config so
-    # a deploy cycle never wipes platform secret refs (telegram bot_token,
-    # mattermost $secret refs). ci is a throwaway checkout - seed semantics.
-    preserve_live_config = mode in ("dev", "hybrid")
+    # EVERY non-dev mode (ci AND hybrid) runs the seed-checkout semantics CI
+    # runs: the checkout is runtime state that the deploy generates and the
+    # final cleanup_runtime_state removes. Hybrid used to preserve + restore a
+    # live runtime config here, which made its end state differ from CI's and
+    # is removed for parity.
+    preserve_live_config = mode == "dev"
     if preserve_live_config:
         preserve_runtime_config()
     try:
