@@ -12967,7 +12967,7 @@ def _seg_37():
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(content)
         # F1 isolation (thread 1972): the deploy omni_dir is a SEED checkout
-        # whose profiles/ is not tracked, so profiles/omni/wiki may not exist
+        # whose profiles/ is not tracked, so wiki/ may not exist
         # when this group runs in isolation and the actions plugin answers
         # "No wiki directory found" instead of writing the index. Create it
         # here (tracked, so the finally prunes exactly what THIS test made).
@@ -16267,7 +16267,7 @@ def _seg_53():
     # the accessibility tree, no screenshots), bound the token cost of that
     # canonical task, and prove a failing navigation is a bounded error - not a
     # hang. The group SKIPs when the plugin is not installed (other stacks).
-    # Reference: profiles/omni/wiki/Reference/Omniagent/Playwright-MCP.md
+    # Reference: wiki/Reference/Omniagent/Playwright-MCP.md
 
     G53_TOOLS = ("browser-navigate", "browser-snapshot", "browser-find",
                  "browser-click", "browser-type", "browser-fill-form")
@@ -16524,7 +16524,7 @@ def _seg_55():
     # Checklist (code plan 6.4): a failure surfaces as a bounded tool error (never a
     # panic/crash/hang), every blocking external call has an explicit bound, parallel
     # calls keep the stdout protocol clean, no in-flight work is left behind.
-    # Reference: profiles/omni/wiki/Projects/Omniagent/Omniagent-External-Improvement-Plan.md
+    # Reference: wiki/Projects/Omniagent/Omniagent-External-Improvement-Plan.md
     #            (candidate X6), Omniagent-Code-Improvement-Plan.md sections 6.2-6.4
 
 
