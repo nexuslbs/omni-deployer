@@ -22,7 +22,7 @@ from shared import BORD
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/opt/workspace")
-# The omnidev stack runs its data dir (config/profiles/wiki/memories) from the
+# The omnidev stack runs its data dir (config/wiki/profiles/memories) from the
 # omni-root mirror repo, NOT omni-stack. omni-stack stays the deploy/omnideploy
 # data dir (deploy.py). Both repos are kept identical in content; the stack just
 # binds the omni-root checkout.

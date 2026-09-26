@@ -32,7 +32,7 @@ mcp-config.json, with PW_STATE_FILE / PW_SECRET_* injected the way the plugin
 a tool response. The group SKIPs when mcp-playwright is not installed.
 
 Reference: profiles/omni/skills/web-interaction/SKILL.md (recipe),
-           profiles/omni/wiki/Reference/Omniagent/Playwright-MCP.md.
+           wiki/Reference/Omniagent/Playwright-MCP.md.
 
 Run standalone:  python3 scripts/x5_session_auth.py [--only 54b,54c]
 """

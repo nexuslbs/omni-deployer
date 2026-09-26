@@ -27,7 +27,7 @@ tools:
       # files); no literal host/port is committed here.
       qdrant_url: $env:QDRANT_URL
       collection: wiki_semantic
-      corpus_roots: profiles/{profile}/wiki
+      corpus_roots: wiki
       corpus_globs: '**/*.md'
       embedding_backend: hash
       embedding_model: BAAI/bge-small-en-v1.5

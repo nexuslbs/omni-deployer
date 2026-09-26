@@ -153,7 +153,7 @@ have "$OMNI_DIR/profiles/omni/templates/daily-report-template.md" "Step 6b" \
 # ----------------------------------------------------------------- skill + wiki
 [ -f "$OMNI_DIR/profiles/omni/skills/general/agent-efficiency-read-once/SKILL.md" ] \
   && ok "read-once skill present" || bad "read-once skill missing"
-[ -f "$OMNI_DIR/profiles/omni/wiki/Reference/Omniagent/Efficiency-Contract.md" ] \
+[ -f "$OMNI_DIR/wiki/Reference/Omniagent/Efficiency-Contract.md" ] \
   && ok "wiki Reference/Omniagent/Efficiency-Contract.md present" \
   || bad "efficiency contract wiki page missing"
 

@@ -510,7 +510,7 @@ def generate_env(mode="dev"):
         # default /opt/omni covers bare `docker compose up`.
         f.write(f"HOST_OMNI_DIR={s.omni_stack_dir}\n")
         # The qdrant profile IS enabled for omnidev: the semantic_search
-        # plugin (omni-plugins) indexes the profile wiki into Qdrant with a
+        # plugin (omni-plugins) indexes the shared wiki into Qdrant with a
         # LOCAL vectorizer - no LLM / embedding API is involved. hindsight
         # stays disabled (no LLM key is wired for it in the omni-root compose).
         profiles = "noop,mattermost,qdrant"

@@ -225,7 +225,7 @@ def check_prereqs_and_sms_deferral():
     assert not sms_tools and not cli, (
         "an SMS backend appeared (tools=%s cli=%s): X2 was DEFERRED, so X6 must "
         "now add the SMS robustness case (timeout/hang/failure/cleanup)" % (sms_tools, cli))
-    # Setup-agnostic: instead of cross-checking a hand-authored profile wiki
+    # Setup-agnostic: instead of cross-checking a hand-authored wiki
     # page (which only exists in some setups and forced a checkout fallback),
     # probe the SMS-capable tool SURFACE the agent actually sees. Only a tool
     # whose NAME carries sms/twilio counts as an X2 backend: a generic http

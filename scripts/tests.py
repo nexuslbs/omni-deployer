@@ -1938,7 +1938,7 @@ def check_git_clean():
     dirty = _git_status(OMNI_STACK_DIR)
     if dirty:
         # Known transient test artifacts that tests may leave behind on the
-        # bind-mounted host directory (profiles/omni/wiki/relevant-index.md
+        # bind-mounted host directory (wiki/relevant-index.md
         # rewritten by the relevance-indexer tests; untracked/ignored
         # plugins/ residue). config/* is runtime-only now - it never appears
         # in git status (untracked), so it is not part of this check.
@@ -6100,9 +6100,9 @@ def _mcp_text(resp):
     return resp.get("content") or resp.get("output") or json.dumps(resp)
 
 def _seed_wiki_page(marker, stem="G45-Guidance"):
-    """Seed a labelled wiki page in the agent's profile wiki; return
+    """Seed a labelled page in the SHARED wiki at the omni-dir root; return
 (page_path, [(created_dirs)])."""
-    page = f"{WORKSPACE}/profiles/omni/wiki/Reference/{stem}-{marker}.md"
+    page = f"{WORKSPACE}/wiki/Reference/{stem}-{marker}.md"
     created = _makedirs_tracked(os.path.dirname(page))
     with open(page, "w", encoding="utf-8") as f:
         f.write(f"# {stem} {marker}\n\n"
@@ -7972,7 +7972,7 @@ finally:
 
         marker = f"g25wiki{uuid.uuid4().hex[:8]}"
         page_rel = f"Reference/Group25-{marker}.md"
-        page_path = f"{WORKSPACE}/profiles/omni/wiki/{page_rel}"
+        page_path = f"{WORKSPACE}/wiki/{page_rel}"
         try:
             os.makedirs(os.path.dirname(page_path), exist_ok=True)
             with open(page_path, "w") as f:
@@ -12800,7 +12800,7 @@ def _seg_37():
     #  API: relevance_indexer rewrites relevant-index.md, hindsight_populator
     #  advances hindsight_watermark.json, setup_knowledge_pipeline creates the
     #  tasks.yml knowledge_pipeline schedule idempotently. Side-effect files
-    #  (config/actions.yml, config/tasks.yml, profiles/omni/wiki/relevant-index.md,
+    #  (config/actions.yml, config/tasks.yml, wiki/relevant-index.md,
     #  hindsight_watermark.json) are backed up and restored.
     # ═══════════════════════════════════════════════════════════════════════
     print(f"\n{'=' * 60}")
@@ -12945,12 +12945,12 @@ def _seg_37():
     def test_37_live_actions():
         """37-E: run the REAL actions end-to-end via the API and assert the same
     side effects as the old Rust plugin:
-      - relevance_indexer rewrites profiles/omni/wiki/relevant-index.md
+      - relevance_indexer rewrites wiki/relevant-index.md
       - hindsight_populator advances hindsight_watermark.json
       - setup_knowledge_pipeline creates the tasks.yml knowledge_pipeline
         schedule, idempotently (2nd run reports already exists)
     Backs up and restores config/actions.yml, config/tasks.yml,
-    profiles/omni/wiki/relevant-index.md and hindsight_watermark.json."""
+    wiki/relevant-index.md and hindsight_watermark.json."""
         def _rd(p):
             try:
                 with open(p, encoding="utf-8") as f:
@@ -12971,16 +12971,16 @@ def _seg_37():
         # when this group runs in isolation and the actions plugin answers
         # "No wiki directory found" instead of writing the index. Create it
         # here (tracked, so the finally prunes exactly what THIS test made).
-        wiki_dirs_created = _makedirs_tracked(f"{WORKSPACE}/profiles/omni/wiki")
+        wiki_dirs_created = _makedirs_tracked(f"{WORKSPACE}/wiki")
         files = ["config/actions.yml", "config/tasks.yml",
-                 "profiles/omni/wiki/relevant-index.md", "hindsight_watermark.json"]
+                 "wiki/relevant-index.md", "hindsight_watermark.json"]
         backup = {f: _rd(f"{WORKSPACE}/{f}") for f in files}
         try:
             # relevance_indexer
             r = post_json("/actions/builtin_relevance_indexer/run")
             assert isinstance(r, dict) and r.get("is_error") is False, f"relevance run: {r}"
             assert "Relevance indexer complete" in r.get("result", ""), r
-            idx = _rd(f"{WORKSPACE}/profiles/omni/wiki/relevant-index.md") or ""
+            idx = _rd(f"{WORKSPACE}/wiki/relevant-index.md") or ""
             assert idx.startswith("# Relevant Wiki Pages"), "relevant-index.md not written"
             # hindsight_populator (fresh watermark -> starts from 0, creates file)
             r = post_json("/actions/builtin_hindsight_populator/run")
@@ -14002,9 +14002,9 @@ def _seg_42():
                                         "confidence": "high"}, profile_name="omni")
             assert not is_error, f"promote failed: {text}"
             assert base in text, f"promote result must reference the omni_dir config path: {text}"
-            mem_files = _g42_glob.glob(f"{base}/profiles/*/wiki/Memory/Promoted/g42-mem.md")
+            mem_files = _g42_glob.glob(f"{base}/wiki/Memory/Promoted/g42-mem.md")
             assert mem_files, \
-                f"promoted memory not under omni_dir config path: {base}/profiles/*/.../g42-mem.md"
+                f"promoted memory not under omni_dir config path: {base}/wiki/.../g42-mem.md"
             text, is_error = _g38_tool(proc, "list_memories", {}, profile_name="omni")
             assert not is_error and "g42-mem" in text, f"list_memories: {text}"
 
@@ -14016,13 +14016,13 @@ def _seg_42():
                                        {"name": "g42-mem2", "content": "y",
                                         "confidence": "low"}, profile_name="omni")
             assert not is_error, f"promote (config-first) failed: {text}"
-            assert _g42_glob.glob(f"{base}/profiles/*/wiki/Memory/Promoted/g42-mem2.md"), \
+            assert _g42_glob.glob(f"{base}/wiki/Memory/Promoted/g42-mem2.md"), \
                 "omni_dir config must win over OMNI_DIR env"
-            assert not _g42_glob.glob(f"{base2}/profiles/*/wiki/Memory/Promoted/g42-mem2.md"), \
+            assert not _g42_glob.glob(f"{base2}/wiki/Memory/Promoted/g42-mem2.md"), \
                 "OMNI_DIR env must NOT win over omni_dir config"
 
             # actions: relevance_indexer writes relevant-index.md under custom dir
-            wiki = f"{base}/profiles/omni/wiki"
+            wiki = f"{base}/wiki"
             os.makedirs(wiki, exist_ok=True)
             with open(f"{wiki}/page.md", "w", encoding="utf-8") as f:
                 f.write("# Page\n")
@@ -14624,7 +14624,7 @@ def _seg_45():
         assert _g24_wait_for_tool("search_wiki"), "search_wiki not registered"
         marker = uuid.uuid4().hex[:8]
         page, created = _seed_wiki_page(marker, stem="G45-Smoke")
-        wiki_dir = f"{WORKSPACE}/profiles/omni/wiki"
+        wiki_dir = f"{WORKSPACE}/wiki"
         log_path = f"{wiki_dir}/G45-log-{marker}.md"
         created += _makedirs_tracked(wiki_dir)
         try:
