@@ -7,6 +7,13 @@ himalaya (X1 email read), mcp-playwright (X4/X5 web), the SMS backend (X2, DEFER
 and oathtool/pyotp (X3 TOTP), plus the tool boundary the agent uses to run the
 toolbox CLIs (the docker plugin).
 
+The X1 cases run in the container THIS stack deploys himalaya in - `toolbox`
+(the legacy/dev layout: omni-root still ships it there) or the profile-gated
+`workstation-tools` service (omni-stack 80eb783, operator 2026-09-26, threads
+3165/3166) - resolved BY CAPABILITY in `himalaya_container()`. A stack that
+deploys neither (deploy.py ci/hybrid: COMPOSE_PROFILES carries no `workstation`
+profile) prints a loud SKIP carrying that reason. X2/X3 stay on the toolbox.
+
 Checklist (code plan 6.2-6.4):
   * a failure surfaces as a tool error - never a panic, crash or hang
   * every blocking external call has an explicit bound
@@ -90,8 +97,9 @@ def pw_chars(env):
     return c
 
 
-def toolbox_name():
-    """Name of this stack's toolbox container (compose label filter, no hardcoded names)."""
+def _compose_container(service):
+    """Name of THIS stack's running container for COMPOSE SERVICE `service`
+    (compose label filter - no hardcoded container or project name)."""
     project = ""
     try:
         project = sh("docker inspect $(hostname) --format "
@@ -105,7 +113,7 @@ def toolbox_name():
         return ""
     import urllib.parse
     filters = json.dumps({"label": [f"com.docker.compose.project={project}",
-                                    "com.docker.compose.service=toolbox"]})
+                                    f"com.docker.compose.service={service}"]})
     rc = sh(f"curl -s --unix-socket /var/run/docker.sock "
             f"'http://localhost/containers/json?filters={urllib.parse.quote(filters)}'",
             timeout=30)
@@ -115,6 +123,45 @@ def toolbox_name():
         return ""
     running = [c for c in containers if c.get("State") == "running"]
     return running[0]["Names"][0].lstrip("/") if running else ""
+
+
+def toolbox_name():
+    """Name of this stack's toolbox container (backup/cron/utility service)."""
+    return _compose_container("toolbox")
+
+
+def has_binary(container, binary):
+    """True when `binary` resolves inside `container` (docker exec, read-only)."""
+    if not container:
+        return False
+    r = sh(f"docker exec {container} sh -c 'command -v {binary}'", timeout=30)
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+# Containers that may host the himalaya CLI, newest layout first: the X1 tool
+# moved OUT of the toolbox image into the profile-gated `workstation-tools`
+# service (omni-stack `80eb783` "workstation-tools service + browser image from
+# omni-images; toolbox drops himalaya", operator 2026-09-26, threads
+# 3165/3166), reached by the workstation through the `container` transport
+# (omni config: himalaya -> workstation-tools).
+HIMALAYA_HOSTS = ("toolbox", "workstation-tools")
+
+
+def himalaya_container():
+    """Name of THIS stack's container that hosts himalaya ("" when it deploys none).
+
+    Resolved by CAPABILITY, never by a hardcoded service name: `toolbox` first
+    (the legacy/dev layout omni-root still ships), then `workstation-tools`
+    (the layout omni-stack moved it to). A stack that deploys neither -
+    deploy.py ci/hybrid, whose COMPOSE_PROFILES is
+    mattermost,noop,paperclip,qdrant - has no himalaya at all; the X1 cases then
+    SKIP LOUDLY with that reason instead of asserting a layout that no longer
+    exists in that stack."""
+    for service in HIMALAYA_HOSTS:
+        name = _compose_container(service)
+        if name and has_binary(name, "himalaya"):
+            return name
+    return ""
 
 
 def skip():
@@ -128,10 +175,10 @@ def skip():
     return False
 
 
-def tb_exec(cmd, timeout=45):
-    """Run `sh -c cmd` inside the toolbox with a hard client-side bound.
-    Returns (rc, stdout, stderr, elapsed, timed_out)."""
-    tb = toolbox_name()
+def tb_exec(cmd, timeout=45, container=None):
+    """Run `sh -c cmd` inside the toolbox - or `container` when given - with a
+    hard client-side bound. Returns (rc, stdout, stderr, elapsed, timed_out)."""
+    tb = container or toolbox_name()
     t0 = time.time()
     try:
         r = subprocess.run(["docker", "exec", tb, "sh", "-c", cmd],
@@ -145,14 +192,14 @@ def tb_exec(cmd, timeout=45):
         return None, _txt(e.stdout), _txt(e.stderr), time.time() - t0, True
 
 
-def tb_parallel(cmds, timeout=30):
+def tb_parallel(cmds, timeout=30, container=None):
     """Run the commands concurrently; results come back in input order."""
     import threading
     res = {}
 
     def _one(i, c):
         try:
-            res[i] = tb_exec(c, timeout=timeout)
+            res[i] = tb_exec(c, timeout=timeout, container=container)
         except Exception as e:  # pragma: no cover - defensive
             res[i] = (None, "", str(e), 0.0, True)
 
@@ -164,7 +211,7 @@ def tb_parallel(cmds, timeout=30):
     return [res[i] for i in range(len(cmds))]
 
 
-def tb_pids(token, include_init=False):
+def tb_pids(token, include_init=False, container=None):
     """pids inside the toolbox whose command line contains `token`.
     The token is passed as a bracketed REGEX ('[1]2345'), so neither the sh
     wrapper nor the grep of the probe itself can match its own argv.
@@ -174,7 +221,7 @@ def tb_pids(token, include_init=False):
     shows up there) - container infrastructure, not in-flight work."""
     br = "[" + token[0] + "]" + token[1:]
     rc, out, err, dt, to = tb_exec("ps -eo pid,args 2>/dev/null | grep -- %s || true" % br,
-                                   timeout=20)
+                                   timeout=20, container=container)
     assert not to, f"probe for leftover processes hung (token {token})"
     pids = []
     for line in out.splitlines():
@@ -190,10 +237,10 @@ def tb_pids(token, include_init=False):
     return pids
 
 
-def assert_no_proc(token, what, baseline=None):
+def assert_no_proc(token, what, baseline=None, container=None):
     """No process matching `token` may be left behind. `baseline` is the set of
     matches seen BEFORE the check started: only NEW matches count as leftovers."""
-    left = tb_pids(token)
+    left = tb_pids(token, container=container)
     if baseline is not None:
         left = [p for p in left if p not in set(baseline)]
     assert not left, f"leftover process(es) for {what}: {left} (baseline {baseline})"
@@ -207,12 +254,29 @@ def check_prereqs_and_sms_deferral():
     backend appears, so its robustness case cannot be silently forgotten."""
     if skip():
         return
-    rc, out, err, dt, to = tb_exec("for t in himalaya oathtool python3; do command -v $t; done",
+    tb = toolbox_name()
+    hx = himalaya_container()
+    rc, out, err, dt, to = tb_exec("for t in oathtool python3; do command -v $t; done",
                                    timeout=30)
     assert not to and rc == 0, f"toolbox probe failed: rc={rc} {err!r}"
-    missing = [t for t in ("himalaya", "oathtool", "python3")
+    missing = [t for t in ("oathtool", "python3")
                if not any(p.rstrip().endswith("/" + t) for p in out.splitlines())]
     assert not missing, f"toolbox misses external tool(s) {missing}: {out!r}"
+    if hx:
+        # X1: himalaya must exist in the container THIS stack deploys it in,
+        # and must NOT be duplicated back into the toolbox once it moved out.
+        if hx != tb:
+            assert not has_binary(tb, "himalaya"), (
+                f"himalaya is back in the toolbox ({tb}) although this layout "
+                f"moved it to the workstation-tools service - the X1 tool "
+                f"boundary exercised would no longer be the deployed one")
+        hx_note = f"himalaya present in {hx}"
+    else:
+        hx_note = ("X1 himalaya half SKIPPED: this stack deploys no himalaya "
+                   "host - himalaya left the toolbox image for the "
+                   "profile-gated `workstation-tools` service (omni-stack "
+                   "80eb783), which deploy.py ci/hybrid does not start")
+        print("NOTE: " + hx_note)
     rc, out, err, dt, to = tb_exec(
         "python3 -c \"import pyotp,base64;print(len(base64.b32decode('%s')))\"" % TOTP_SECRET,
         timeout=30)
@@ -238,7 +302,7 @@ def check_prereqs_and_sms_deferral():
         "SMS-capable tool surfaced in the live registry (%s): X2 was DEFERRED, "
         "so X6 must now add the SMS robustness case "
         "(timeout/hang/failure/cleanup)" % surface)
-    print("PASS: 55-A himalaya/oathtool/pyotp present; no SMS tool and no "
+    print(f"PASS: 55-A oathtool/pyotp present; {hx_note}; no SMS tool and no "
           "gammu/mmcli backend -> X2 deferral holds (live tool surface clean)")
 
 
@@ -248,11 +312,20 @@ def check_himalaya():
     calls stay protocol-clean; nothing is left behind."""
     if skip():
         return
-    base = tb_pids("himalaya")   # pre-existing matches are not our leftovers
+    hx = himalaya_container()
+    if not hx:
+        print("SKIP: 55-B this stack deploys no himalaya host - himalaya moved "
+              "out of the toolbox image into the profile-gated "
+              "`workstation-tools` service (omni-stack 80eb783), which "
+              "deploy.py ci/hybrid does not start; the X1 robustness case runs "
+              "on the stacks that DO deploy it (deploy.py dev / workstation "
+              "profile) - nothing to test here")
+        return
+    base = tb_pids("himalaya", container=hx)   # pre-existing matches are not our leftovers
     import base64
     # (1) FAILURE: no config -> bounded, non-zero exit, loud diagnostic.
     rc, out, err, dt, to = tb_exec("himalaya -c /tmp/x6-no-such-config.toml account list",
-                                   timeout=25)
+                                   timeout=25, container=hx)
     assert not to, f"missing-config himalaya hung ({dt:.1f}s)"
     assert rc not in (0, None), f"missing config must fail: rc={rc} out={out!r}"
     assert (out + err).strip(), "missing-config failure printed nothing at all"
@@ -270,7 +343,7 @@ def check_himalaya():
     rc, out, err, dt, to = tb_exec(
         "echo %s | base64 -d > /tmp/x6-himalaya.toml && "
         "timeout 12 himalaya -c /tmp/x6-himalaya.toml envelope list -a x6 -o json" % b64,
-        timeout=30)
+        timeout=30, container=hx)
     assert not to, "the harness bound fired - the explicit 12s bound did not contain himalaya"
     assert rc not in (0, None), \
         f"unreachable IMAP host must not succeed: rc={rc} err={err[-200:]!r}"
@@ -280,13 +353,13 @@ def check_himalaya():
         hang_note = f"hung then killed by the explicit 12s bound (rc={rc}, {dt:.1f}s)"
     else:
         hang_note = f"refused fast ({dt:.1f}s, rc={rc}) - still bounded"
-    assert_no_proc("himalaya", "himalaya", base)
+    assert_no_proc("himalaya", "himalaya", base, container=hx)
     # (3) PARALLEL: 4 concurrent invocations. Each call appends its OWN marker,
     # so a call that received another call's bytes (interleaving) or lost its
     # marker (truncation) turns this RED, while the intact multi-line banner is
     # still required from every single call.
     res = tb_parallel(["himalaya --version; echo X6-MARK-%d" % i for i in range(4)],
-                      timeout=30)
+                      timeout=30, container=hx)
     banners = []
     for i, (rc, out, err, dt, to) in enumerate(res):
         assert not to and rc == 0, f"parallel himalaya call failed: rc={rc} {err!r}"
@@ -299,7 +372,7 @@ def check_himalaya():
     assert len(set(banners)) == 1, f"parallel himalaya calls disagree: {banners}"
     assert banners[0].startswith("himalaya v") and "build:" in banners[0], \
         f"parallel invocation returned a garbled banner: {banners[0]!r}"
-    assert_no_proc("himalaya", "himalaya", base)
+    assert_no_proc("himalaya", "himalaya", base, container=hx)
     print(f"PASS: 55-B himalaya failure bounded ({fail_dt:.1f}s, loud) + black-holed IMAP "
           f"{hang_note} + 4 parallel calls clean (1 line each) + no leftover process")
 
