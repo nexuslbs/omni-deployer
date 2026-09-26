@@ -2166,7 +2166,13 @@ def test_disable_source(name, source, expected_success=True):
         ensure_remote_plugin(name, ptype)
     pre_remote = _remote_yml_snapshot()
     if expected_success:
-        resp = api_post_body(f"/plugins/{ptype}/{source}/{name}/disable", {})
+        # Same tolerance as the enable path: a plugin toggle is IDEMPOTENT, so a
+        # client-side timeout under load (PASS 2 re-runs the whole suite against
+        # the same stack) must not fail the group - retry the transient timeout
+        # instead of giving up on the 15s default (hybrid v0.4.0 run 4,
+        # 2026-09-26: "t6 disable provider" timed out at 15.1s in PASS 2 while
+        # PASS 1 was 305/305 green).
+        resp = api_post_body_retry(f"/plugins/{ptype}/{source}/{name}/disable", {})
         _assert_yaml_state(name, ptype, expect_enabled=False, expect_source=source)
         _assert_remote_yml_unchanged(pre_remote)
     else:
