@@ -14,19 +14,23 @@ payload-free duplicate-call stub as an agent message with
 `metadata.eff = "duplicate-call"`, so a regression shows up in the daily report /
 dashboard WITHOUT the operator having to complain.
 
-ROLE CALIBRATION (2026-10-03, thread 3995 - the 'edits without commit' class).
-The daily report flagged 19 threads with `edits > 0 and commits == 0`, plus 60
-threads with `tok/state-op > 100k`. Attribution of all 19 (evidence in thread
-3995): 14 were `testing`-step threads, 1 `review`, 2 `running` (one of those DID
-commit), 2 non-kanban; 12 wrote only `/opt/workspace/tester-report.md` (outside
-every repository), the rest only scratch probes under `/opt/workspace/tmp/` or an
-unversioned report under the omni data dir. ZERO had lost repository work. So the
-two delivery rules (edits without commit, tok/state-op > 100k) are now GATED on
-threads that carry a real delivery contract - an executor thread with a kanban
-task - and are merely REPORTED (WATCH, no exit-code impact) for
-verification/ad-hoc threads. Every counter stays visible for every thread, so
-nothing is hidden; only the gate stops reading a tester's report artifact as
-lost work.
+ROLE CALIBRATION + 'edits without commit' REMOVAL (threads 3995 -> 4257).
+The 2026-10-03 report flagged 19 threads with `edits > 0 and commits == 0`;
+attribution (thread 3995) showed every one of them was a tester/reviewer report
+or scratch artifact - ZERO lost repository work. The rule was first calibrated to
+gate delivery threads only, then REMOVED outright by operator directive
+(2026-10-07, thread 4256): "make sure that omnidev does not such verification in
+core. That's not very helpful and have lots of false positives". The edits /
+commits counters are still REPORTED (nothing hidden), but a thread with edits and
+no commit is neither a WATCH nor a BREACH. What still gates: `duplicate_calls >
+0` (every thread) and `tok/state-op > 100k` (BREACH on delivery threads, WATCH on
+verification/adhoc).
+
+SKIPPED WORK IS NOT MEASURED (same directive): "skipped tasks should not be
+considered either, as the lack of commit may be due to the skip that is normally
+not the agent fault". A thread whose status is `skipped` (or `merged`: folded
+into another prompt by the sub-prompt merge) and a thread whose kanban task is
+`skipped`/`cancelled` are excluded from the report entirely.
 
 Metrics per thread (last HOURS, default 24):
   tools       tool-result messages (executed or answered with a stub)
@@ -47,17 +51,19 @@ Metrics per thread (last HOURS, default 24):
   tokens      prompt+completion tokens spent in the thread
   tok/st      tokens per state-changing op               (target < 100k)
   ttc         minutes from thread start to the first commit/push (time to first
-              commit; a thread with edits but no commit is flagged)
+              commit; '-' when the thread never committed)
 
 Thread classes (from the thread row): `delivery` = a kanban task on an executor
 step; `verification` = workflow step `testing` / `review`; `adhoc` = no kanban
 task (operator / hook / cron thread).
 
-Exit code is 1 when a DELIVERY thread breaks a threshold (edits > 0 and no
-commit, or tok/st > 100k), when ANY thread re-issued a duplicate call
-(dedup > 0), or when EXPECT_EDIT marks a thread as edit-shaped and it produced
-neither edit nor commit - so the script doubles as a GATE. Over-threshold
-verification/ad-hoc threads are printed as WATCH (informational) only.
+Exit code is 1 when a DELIVERY thread breaks a threshold (tok/st > 100k), when
+ANY thread re-issued a duplicate call (dedup > 0), or when EXPECT_EDIT marks a
+thread as edit-shaped and it produced neither edit nor commit - so the script
+doubles as a GATE. Over-threshold verification/ad-hoc threads are printed as
+WATCH (informational) only. `edits > 0 and commits == 0` is NOT a rule any more
+(removed 2026-10-07: false positives), and skipped/merged threads plus
+skipped/cancelled kanban tasks are excluded from the metric entirely.
 
 Usage (inside the toolbox container, or any host with docker access):
   python3 efficiency-metrics.py                       # last 24h, dev stack
@@ -126,6 +132,13 @@ COMMITS = ("m.msg_subtype IN ('git__commit_and_push','git__sync') "
 # delivery contract, so their counter overruns are reported, not gated.
 VERIFICATION_STEPS = ("testing", "review")
 
+# Excluded from the metric entirely (operator directive 2026-10-07): a skipped
+# thread owes nothing (the skip is normally not the agent's fault) and a merged
+# thread was folded into another prompt by the sub-prompt merge. A kanban task in
+# a skipped/cancelled state is likewise out of scope.
+SKIP_THREAD_STATUS = ("skipped", "merged")
+SKIP_TASK_STATUS = ("skipped", "cancelled")
+
 SQL = """
 WITH t AS (
   SELECT
@@ -150,10 +163,15 @@ SELECT t.thread_id, t.tools, t.st_w, t.st_x, t.edits, t.dedup, t.commits, t.ptok
        round(EXTRACT(EPOCH FROM (COALESCE(t.t1, now()) - t.t0)) / 60.0, 1) AS wall_min,
        round(EXTRACT(EPOCH FROM (t.t_commit - t.t0)) / 60.0, 1) AS ttc_min,
        th.workflow_step,
-       th.task_id
+       th.task_id,
+       th.status AS thread_status,
+       kt.status AS task_status
 FROM t
 LEFT JOIN threads th ON th.id = t.thread_id
+LEFT JOIN kanban_tasks kt ON kt.id = th.task_id
 WHERE t.tools > 0
+  AND COALESCE(lower(th.status), '') NOT IN ({skip_thread})
+  AND COALESCE(lower(kt.status), '') NOT IN ({skip_task})
 ORDER BY t.t1 DESC;
 """
 
@@ -172,6 +190,17 @@ def psql(sql: str) -> list[list[str]]:
         sys.stderr.write("psql failed (container=%s db=%s):\n%s\n" % (PG_CONTAINER, DB_NAME, out.stderr.strip()))
         sys.exit(2)
     return [ln.split("|") for ln in out.stdout.splitlines() if ln.strip()]
+
+
+def skipped(thread_status, task_status) -> bool:
+    """True when the metric must ignore the row entirely.
+
+    A skipped/merged thread, or a thread whose kanban task is skipped/cancelled,
+    is not the agent's deliverable: the absence of a commit there says nothing
+    about work loss (operator directive 2026-10-07).
+    """
+    return ((thread_status or "").strip().lower() in SKIP_THREAD_STATUS
+            or (task_status or "").strip().lower() in SKIP_TASK_STATUS)
 
 
 def thread_class(workflow_step, task_id) -> str:
@@ -199,13 +228,17 @@ def main() -> int:
 
     sql = SQL.format(st_w=sql_list(WRITE_CLASS), st_x=sql_list(EXEC_CLASS),
                      st_like=WRITE_LIKE, edits=sql_list(EDITS), dup=DUP_PREDICATE,
-                     commit=COMMITS, where=where)
+                     commit=COMMITS, where=where,
+                     skip_thread=sql_list(SKIP_THREAD_STATUS),
+                     skip_task=sql_list(SKIP_TASK_STATUS))
     rows = psql(sql)
 
     report, failures, watch = [], [], []
     for r in rows:
         (tid, tools, st_w, st_x, edits, dedup, commits, ptok, ctok,
-         started, wall, ttc, step, task) = r
+         started, wall, ttc, step, task, thread_status, task_status) = r
+        if skipped(thread_status, task_status):
+            continue
         tools, st_w, st_x, edits, dedup, commits = (int(x) for x in
                                                    (tools, st_w, st_x, edits, dedup, commits))
         ptok, ctok = int(ptok), int(ctok)
@@ -227,8 +260,6 @@ def main() -> int:
             reasons.append("edit-shaped task with no edit and no commit (non-delivery)")
         if dedup > 0:
             reasons.append("%d duplicate call(s) re-issued with no state change" % dedup)
-        if edits > 0 and commits == 0:
-            note("edits without commit")
         if st and per_state > 100_000:
             note("tok/state-op %.0fk > 100k" % (per_state / 1000))
 
@@ -243,6 +274,8 @@ def main() -> int:
 
         report.append({
             "thread_id": int(tid), "thread_class": cls,
+            "thread_status": (thread_status or None),
+            "task_status": (task_status or None),
             "tools": tools, "state_changing": st,
             "state_writes": st_w, "state_execs": st_x,
             "edits": edits, "duplicate_calls": dedup, "commits": commits,

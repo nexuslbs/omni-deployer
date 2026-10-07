@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Self-test for scripts/efficiency-metrics.py (role calibration, thread 3995).
+"""Self-test for scripts/efficiency-metrics.py (role calibration + REVISION 2).
 
 The 2026-10-03 daily report flagged 19 threads as 'edits > 0 and commits == 0'.
 Attribution (thread 3995) proved that class was a METRIC ARTIFACT, not lost work:
 12 of the threads wrote only /opt/workspace/tester-report.md (outside every git
-repo) and the rest only scratch probes / reverted config probes. The bounded fix
-therefore calibrated the report instead of adding a commit-pressure guard.
+repo) and the rest only scratch probes / reverted config probes. The rule was
+first calibrated to delivery threads, then REMOVED outright (operator directive
+2026-10-07, thread 4256: 'not very helpful and have lots of false positives').
 
-This self-test pins the behaviour that fix introduced:
+This self-test pins the behaviour that revision introduced:
 
   * role classification - `delivery` (kanban task, non-verification step) /
     `verification` (workflow step testing|review) / `adhoc` (no kanban task) is
     derived from the thread row ALONE (no tool-name heuristics);
-  * the two DELIVERY rules ('edits without commit', 'tok/state-op > 100k') gate
-    DELIVERY threads and are merely WATCHed (exit-code free) for the others;
+  * `edits > 0 and commits == 0` is gone: it is never a WATCH, never a BREACH
+    and never touches the exit code (the counters stay visible);
+  * skipped threads (status `skipped` / `merged`) and threads whose kanban task
+    is `skipped` / `cancelled` are excluded from the metric entirely - a skip is
+    normally not the agent's fault;
+  * the remaining DELIVERY rule ('tok/state-op > 100k') gates DELIVERY threads
+    and is merely WATCHed (exit-code free) for the others;
   * `duplicate_calls > 0` still gates EVERY thread class (no exemption);
   * `st = st_w + st_x`, so splitting the counter does not shift historical
     tok/state-op and no read-only classification is reintroduced;
-  * the JSON exposes thread_class / state_writes / state_execs /
-    tokens_per_write_op.
+  * the JSON exposes thread_class / thread_status / task_status / state_writes /
+    state_execs / tokens_per_write_op.
 
 The DB is stubbed (the module-level `psql` helper is monkeypatched), so the test
 needs no container, no stack and no database - it exercises the real report/gate
@@ -55,10 +61,12 @@ MOD = _load()
 
 
 def row(tid, st_w=0, st_x=0, edits=0, dedup=0, commits=0, ptok=0, ctok=0,
-        step="running", task="task_x", wall=1.0, ttc=""):
+        step="running", task="task_x", wall=1.0, ttc="",
+        thread_status="completed", task_status="done"):
     return [str(tid), str(st_w + st_x + edits), str(st_w), str(st_x),
             str(edits), str(dedup), str(commits), str(ptok), str(ctok),
-            "10-03 00:00", str(wall), str(ttc), step, task]
+            "10-03 00:00", str(wall), str(ttc), step, task,
+            thread_status, task_status]
 
 
 def run(rows, argv=None, expect_edit=False):
@@ -99,20 +107,63 @@ def t_class():
     assert MOD.thread_class("testing", "  ") == "adhoc"
 
 
-@case("DELIVERY + edits>0 & commits==0 -> BREACH, exit 1")
-def t_delivery_edits():
+@case("edits>0 & commits==0 is NOT a rule any more (delivery -> OK, exit 0)")
+def t_delivery_edits_removed():
     code, out = run([row(1, st_w=1, edits=2, commits=0, step="running", task="task_x")])
-    assert code == 1, out
-    assert "thread 1 [delivery]" in out and "edits without commit" in out, out
-    assert out.count("BREACH") >= 1, out
+    assert code == 0, out
+    assert "| 1 | delivery |" in out, out
+    assert "edits without commit" not in out, out
+    assert "WATCH" not in out and "BREACH" not in out, out
+    assert "| OK |" in out, out
 
 
-@case("verification (testing) + edits>0 & commits==0 -> WATCH only, exit 0")
-def t_verification_edits():
+@case("edits>0 & commits==0 on a verification thread -> OK too, exit 0")
+def t_verification_edits_removed():
     code, out = run([row(2, st_w=1, edits=2, commits=0, step="testing", task="task_x")])
     assert code == 0, out
-    assert "thread 2 [verification]" in out and "edits without commit" in out, out
-    assert "WATCH" in out and "BREACH" not in out, out
+    assert "| 2 | verification |" in out and "| OK |" in out, out
+    assert "WATCH" not in out and "BREACH" not in out, out
+
+
+@case("the script carries no 'edits without commit' rule any more")
+def t_rule_gone():
+    with open(SCRIPT, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "if edits > 0 and commits == 0:" not in src, "rule line still present"
+    assert 'note("edits without commit")' not in src, "note() call still present"
+    assert "SKIP_THREAD_STATUS" in src and "SKIP_TASK_STATUS" in src, src[:0]
+
+
+@case("skipped / merged threads are excluded from the metric entirely")
+def t_skipped_threads_excluded():
+    rows = [row(60, st_w=1, edits=2, commits=0, thread_status="skipped"),
+            row(61, st_w=1, edits=2, commits=0, thread_status="merged"),
+            row(62, st_w=1, edits=2, commits=0, thread_status="completed")]
+    code, out = run(rows)
+    assert code == 0, out
+    assert "| 60 |" not in out and "| 61 |" not in out, out
+    assert "| 62 | delivery |" in out, out
+
+
+@case("a skipped / cancelled kanban task is excluded too")
+def t_skipped_task_excluded():
+    rows = [row(70, st_w=1, edits=1, commits=1, task="task_a", task_status="skipped"),
+            row(71, st_w=1, edits=1, commits=1, task="task_b", task_status="cancelled"),
+            row(72, st_w=1, edits=1, commits=1, task="task_c", task_status="done")]
+    code, out = run(rows)
+    assert code == 0, out
+    assert "| 70 |" not in out and "| 71 |" not in out, out
+    assert "| 72 | delivery |" in out, out
+
+
+@case("skipped() helper matches the exclusion contract")
+def t_skipped_helper():
+    assert MOD.skipped("skipped", "done") and MOD.skipped("MERGED", None)
+    assert MOD.skipped(None, "skipped") and MOD.skipped("completed", "Cancelled")
+    assert not MOD.skipped("completed", "done")
+    assert not MOD.skipped("", "") and not MOD.skipped(None, None)
+    assert "skipped" in MOD.SKIP_THREAD_STATUS and "merged" in MOD.SKIP_THREAD_STATUS
+    assert "cancelled" in MOD.SKIP_TASK_STATUS
 
 
 @case("verification (review) + tok/state-op>100k -> WATCH only, exit 0")
@@ -174,6 +225,7 @@ def t_json_fields():
     assert code == 0, out
     m = json.loads(out)[0]
     assert m["thread_class"] == "delivery", m
+    assert m["thread_status"] == "completed" and m["task_status"] == "done", m
     assert m["state_writes"] == 2 and m["state_execs"] == 3, m
     assert m["state_changing"] == 5, m
     assert "tokens_per_write_op" in m, m
