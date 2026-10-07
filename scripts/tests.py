@@ -8010,6 +8010,80 @@ finally:
             if os.path.exists(page_path):
                 os.remove(page_path)
 
+    def _g25_pg(sql):
+        """Run one SQL statement in the toolbox container and return the rows as JSON.
+
+    The toolbox has psycopg2 + PGHOST/PGUSER/PGPASSWORD/PGDATABASE, so it
+    reaches the same postgres the agent under test uses.
+    """
+        toolbox = _g25_toolbox_name()
+        script = r'''
+import json, os
+import psycopg2
+
+conn = psycopg2.connect()
+conn.autocommit = True
+cur = conn.cursor()
+cur.execute(os.environ["G25_SQL"])
+rows = cur.fetchall() if cur.description else []
+print(json.dumps(rows, default=str))
+'''
+        r = subprocess.run(
+            ["docker", "exec", "-e", f"G25_SQL={sql}", toolbox, "python3", "-c", script],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert r.returncode == 0, (
+            f"toolbox SQL failed (rc={r.returncode}): {r.stdout[:300]} {r.stderr[:300]}"
+        )
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+    def test_fn_25_pending_embeddings_index():
+        """GROUP 25: the pending-embeddings probe is index-served and sub-second.
+
+    Regression guard for the partial index `idx_messages_embedding_vec_null`
+    (startup migration `create_vector_support`). The MessageVectorizer probe
+    `SELECT id, content FROM messages WHERE embedding_vec IS NULL ORDER BY id LIMIT $1`
+    has no usable index without it (the HNSW index only covers rows that HAVE a
+    vector), so it degrades to a Seq Scan + Sort over the whole messages table
+    (prod 2026-10-07: 1.0-1.6 s typical, 78.04 s worst, 349 slow-statement
+    WARNs/24h). Sub-second (<100 ms) execution is the acceptance criterion.
+    """
+        print("GROUP 25: pending-embeddings probe uses the partial index (sub-second)")
+        rows = _g25_pg(
+            "SELECT indexdef FROM pg_indexes WHERE tablename='messages' "
+            "AND indexname='idx_messages_embedding_vec_null'"
+        )
+        assert rows, (
+            "idx_messages_embedding_vec_null is missing from pg_indexes - the "
+            "startup migration did not create the pending-embeddings partial index"
+        )
+        indexdef = str(rows[0][0])
+        assert "embedding_vec IS NULL" in indexdef.replace("\n", " "), (
+            f"unexpected partial index definition: {indexdef}"
+        )
+        print(f"  \u2713 {indexdef}")
+
+        plan_doc = _g25_pg(
+            "EXPLAIN (ANALYZE, FORMAT JSON, BUFFERS) "
+            "SELECT id, content FROM messages WHERE embedding_vec IS NULL ORDER BY id LIMIT 100"
+        )[0][0]
+        if isinstance(plan_doc, list):
+            plan_doc = plan_doc[0]
+        plan_json = json.dumps(plan_doc)
+        assert "idx_messages_embedding_vec_null" in plan_json, (
+            f"probe plan does not use the partial index: {plan_json[:400]}"
+        )
+        exec_ms = float(plan_doc["Execution Time"])
+        assert exec_ms < 100.0, (
+            f"pending-embeddings probe took {exec_ms:.3f} ms (>100 ms target)"
+        )
+        print(
+            f"  \u2713 Index Scan on idx_messages_embedding_vec_null, "
+            f"Execution Time {exec_ms:.3f} ms (<100 ms)"
+        )
+
+    test(test_fn_25_pending_embeddings_index)
     test(test_fn_25_db_vectorizer)
     test(test_fn_25_search_wiki)
 
