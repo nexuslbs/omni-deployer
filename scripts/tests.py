@@ -8024,6 +8024,14 @@ import psycopg2
 conn = psycopg2.connect()
 conn.autocommit = True
 cur = conn.cursor()
+# Force the planner OFF seq scans so the GROUP 25 plan guard is deterministic:
+# on a fresh/small messages table PostgreSQL legitimately chooses a Seq Scan
+# instead of the partial index, which made the "plan uses
+# idx_messages_embedding_vec_null" assertion flaky (CI fresh DB vs hybrid
+# populated DB, run 38115848022). With enable_seqscan=off the partial index is
+# the only cheap path for the probe; if the index were missing the plan would
+# fall back to Seq Scan and the assertion below still fails (guard preserved).
+cur.execute("SET enable_seqscan = off")
 cur.execute(os.environ["G25_SQL"])
 rows = cur.fetchall() if cur.description else []
 print(json.dumps(rows, default=str))
